@@ -51,13 +51,16 @@ export declare function previewPersonas(config: ResolvedConfig): Promise<readonl
  */
 export declare function testModel(runtime: Runtime, config: ResolvedConfig): Promise<ModelProbe>;
 /**
- * Probe the Tieba login state through the adapter.
+ * Probe the bound account's login state through the adapter.
  *
  * The adapter owns the cookie jar, so this is the only honest way to answer
  * "am I logged in": it makes the same request a real publish would, and reports
  * the account the platform says is logged in. A `ok: false` here is not a
  * failure of the *plugin* — an unauthenticated state still allows public reads —
  * so the message says what still works.
+ *
+ * Wording is platform-neutral since v0.2.0: it used to say "贴吧" and "Cookie",
+ * which was correct for one platform and wrong for the next one.
  */
 export declare function checkLogin(runtime: Runtime): Promise<LoginProbe>;
 /**

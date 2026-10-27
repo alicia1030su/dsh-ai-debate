@@ -2,6 +2,115 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.0] — 2026-10-27
+
+平台无关的 Agent 核心。这一轮**没有新增任何功能**，它做的是把一个单平台插件
+拆成「通用核心 + 可插拔平台」，并把这件事实用测试固定下来。
+
+**核心验收标准**（写成了测试，不是写在文档里）：新增一个只读模拟平台，
+不需要修改 Runtime / Publisher / Generator / Analyzer。`test/platform-contract.test.ts`
+会直接读编译产物，断言这六个文件里既没有贴吧 import、也没有 `platform: 'tieba'`
+字面量、也没有 `id === 'tieba'` 特判。
+
+### 一、平台注册中心
+
+新增 `src/platforms/contracts.ts` 与 `src/platforms/registry.ts`。
+
+- **Provider 与 Adapter 分离**。Provider 是平台的静态描述（这个链接归不归我、
+  我支持什么、怎么造适配器）；Adapter 是有状态的实例（cookie jar、缓存）。
+  这样注册中心回答「这个链接属于哪个平台」不需要构任何东西、不联网。
+- **注册中心负责五件事**：注册 / 注销 / 按 id 查 / 按链接解析 / 能力断言与诊断。
+  第一个认领链接的 provider 胜出，顺序是显式且有文档的。
+- **重复注册同一个 id 直接抛错**，不静默替换——静默替换等于让错误的平台处理链接，
+  从外部完全看不出来。
+- **一个坏 provider 不能拖垮其它**：`canHandleUrl` 抛错会被跳过，`buildRegistry`
+  把注册失败的记录进 `rejected`，其余照常注册。
+
+### 二、能力从布尔变成状态
+
+旧模型只有一句 `publish: true`，它同时可能意味着「代码写了」「对未登录页面验证过」
+「真实账号发表成功过」。这三件事完全不同，而混为一谈正是插件会谎称支持某平台的原因。
+
+新模型五个状态：
+
+| 状态 | 含义 |
+| --- | --- |
+| `supported` | 在真实平台上验证过，带 `lastVerifiedAt` |
+| `unverified` | 代码存在，但没有真实验证——**旧布尔 `true` 一律转换到这里** |
+| `permission_required` | 平台能做，应用/账号没权限；必须写明 `requiredPermissions` |
+| `degraded` | 能用，但拿到的比平台实际有的少 |
+| `unavailable` | 平台不提供，写代码也没用 |
+
+12 项能力（读帖 / 评论列表 / 分页 / 子评论 / 定位 / 身份验证 / 艾特 / 发表 /
+回复 / 回读 / 图片内容 / 用户资料）各自独立声明，每项都带状态、原因和限制。
+
+**贴吧的能力矩阵是手写的，不是从布尔转换的**——因为贴吧是唯一真正测过的平台，
+而测试结果并不好看：`comment.publish` 是 `unverified`（只验证了未登录拒绝），
+`event.mentions` 与 `media.read`、`user.profile` 是 `unavailable`，
+`comment.nested` 是 `degraded`（限流时降级为内联副本）。
+
+`assertCapability` 对 `unverified` 也 fail-closed：写路径全部过这道闸，
+「代码存在」不足以成为向陌生人发送字节的理由。
+
+### 三、核心不再认识贴吧
+
+- `types.ts` 的 `PlatformId` 从 `'tieba'` 联合类型改为 `string`。这正是注册中心
+  的意义：新增平台不需要编辑这个文件。
+- `target.ts` 的 `TargetResolver` 与 `TargetExpectation` 去掉贴吧字面量；
+  平台从调用方 → expectation → adapter 自己的 id 依次推断，不再硬编码。
+- `publisher.ts` 的 `PublisherDeps.adapter` 从 `TiebaAdapter` 改为 `PlatformAdapter`。
+- `runtime.ts` 的 `Runtime.adapter` 同样改为接口类型，并新增可选的 `runtime.platforms`
+  （`resolveUrl` / `diagnostics` / `capabilitiesOf`）。
+- 新增 `src/platforms/tieba/provider.ts`：贴吧的链接判定、能力矩阵、适配器构造
+  全部收在这一个文件里。`TiebaAdapter` 类本身**一行没改**。
+- `makeAdapter` 改为通过注册中心构造，并新增 `adapterContextOf()`：
+  适配器只拿到平台作用域的平面配置副本，拿不到整个 config 对象——
+  这样未来的微博适配器不可能读到贴吧的 cookie。
+
+**`PlatformAdapter` 契约补了两处**（都是发布路径本来就依赖的行为，之前只是没法从接口上表达）：
+
+- `getReplyContext` 的 `options.forceFresh`——发布与回读都传 `true`，
+  返回缓存内容会让「审核时的目标」和「发表时的目标」变成两回事。
+- 可选的 `parseUrl`，让没有注册中心的裸适配器也能把链接转成 thread id。
+
+### 四、未来平台的清单
+
+新增 `src/platforms/manifests.ts`：微博、知乎、小红书、抖音各一份 manifest。
+
+manifest **不是适配器**。它写清楚链接形状、对话结构、认证模型、研究到哪一步、
+需要什么权限、已知什么约束，并且**不声明任何 `supported` 能力**。
+`test/platform-manifest.test.ts` 会逐条检查这一点，包括「不能有
+`lastVerifiedAt`，因为从来没验证过」。
+
+四份清单都到了「读文档」阶段，没有一行评论 API 代码。小红书与抖音停得更早——
+官方是否提供评论读写能力尚不明确，凭空编一个接口比什么都不写更糟。
+
+### 五、设置页新增平台状态区
+
+`viewOfSettings` 多了一个 `platforms` 字段（`SettingsRouteDeps.platforms?`），
+把注册的适配器与未来的 manifest 分成两组下发，用 `implemented` 区分：
+
+- 已实现的：显示 12 项能力的真实状态与原因；
+- 未实现的：显示研究阶段、前置条件、约束、认证模型与链接形状。
+
+**页面不可能把计划渲染成功能**，因为区别在数据里，不在文案里。
+旧的路由测试不受影响（该字段是可选的）。
+
+### 六、测试
+
+新增两个文件，合计 26 项：
+
+| 文件 | 数量 | 内容 |
+| --- | --- | --- |
+| `test/platform-contract.test.ts` | 17 | 两个假平台（不同分页、不同 id 方案、不同 URL 语法）各走完读→分析→生成→审核→发表→回读；相同帖子 id 不冲突；只读平台被拒绝而不是假装成功；核心代码静态检查 |
+| `test/platform-manifest.test.ts` | 9 | 未实现的平台不得声明 supported；权限不足要写明要什么；微博转发放独立边；知乎问题作者不是答主 |
+
+**436 项全部通过**（原 410 项全部保留且未修改语义）。
+
+回归过程中修掉了一个自己引入的缺陷：`resolveThreadRef` 在没有注册中心时
+把整个 URL 当成 thread id，导致 27 项旧测试失败。正确做法是回落到
+adapter 自己的 `parseUrl`——这正是接口需要这个可选方法的原因。
+
 ## [0.1.13] — 2026-10-27
 
 只改了两件事，都不碰运行逻辑。

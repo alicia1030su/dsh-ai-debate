@@ -133,17 +133,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.1.13
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.0
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.1.13.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.0.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.1.13.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.0.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -440,11 +440,15 @@ src/
   types.ts              平台无关数据模型 + PlatformAdapter 接口
   host.ts               只声明实际用到的 Host 接口，避免绑定具体 DSH 版本
   platforms/
+    contracts.ts        平台契约：能力状态、Provider/Adapter 接口、能力错误
+    registry.ts         平台注册中心：注册 / 解析链接 / 能力断言 / 诊断
+    manifests.ts        微博、知乎、小红书、抖音的清单（只有计划，没有适配器）
     http.ts             cookie jar、有界重试、错误分类、编码探测
     tieba/
+      provider.ts       贴吧接入注册中心：链接判定、能力矩阵、适配器构造
       url.ts            各种贴吧链接形状的解析
       parse.ts          纯函数解析器（WAP 页面 / 楼中楼 / totalComment）
-      adapter.ts        TiebaAdapter：唯一知道贴吧存在的模块
+      adapter.ts        TiebaAdapter：唯一知道贴吧页面结构的模块
   collector.ts          分页采集、去重、部分成功、时间线
   analyzer.ts           主人识别、对手识别、争论链、未答问题
   compressor.ts         按优先级花预算的上下文压缩
@@ -463,6 +467,12 @@ src/
 client/
   client.cjs            浏览器半：注册「插件 → 配置」页面（手写纯 JS）
 ```
+
+**平台边界**（v0.2.0 的核心）：`runtime.ts`、`publisher.ts`、`generator.ts`、
+`analyzer.ts`、`collector.ts`、`target.ts` **都不 import `platforms/tieba/`**。
+它们只认 `PlatformRegistry` 与 `PlatformAdapter` 接口。这条规则不是靠自觉维持的——
+`test/platform-contract.test.ts` 会直接读编译产物断言这几个文件里既没有贴吧 import，
+也没有 `platform: 'tieba'` 字面量、没有 `id === 'tieba'` 特判。
 
 **配置面的分层**（v0.1.6 新增，与发帖那条线完全分开）：
 
@@ -495,6 +505,165 @@ client.cjs  ──HTTP──▶   settings-routes.ts  ──▶  settings 服务
 
 ---
 
+## 如何开发新的平台适配器
+
+这一章写给要在**不修改 Agent 核心**的前提下接入一个平台的人。
+v0.2.0 的验收标准就是这一句：新增一个只读模拟平台，不需要在 Runtime / Publisher /
+Generator / Analyzer 里加任何平台专用分支。`test/platform-contract.test.ts` 里的
+`FakePlatformA` / `FakePlatformB` 就是按这一章写出来的，可以直接照着抄。
+
+### 你要写的文件
+
+只写一个新的目录，三样东西：
+
+```
+src/platforms/<你的平台>/
+  url.ts        链接解析：canHandleUrl + parseUrl（纯函数，不联网）
+  adapter.ts    实现 PlatformAdapter：读帖子、读评论、发表
+  provider.ts   把上面两个包成 PlatformProvider，并声明能力矩阵
+```
+
+**不要动**这些文件：`runtime.ts`、`publisher.ts`、`generator.ts`、`analyzer.ts`、
+`collector.ts`、`target.ts`。如果你发现自己需要改它们，说明适配器没写对，
+或者契约缺了个能力——后者应该改 `contracts.ts`（一次，对所有平台生效），
+而不是在核心加 `if (platform === 'xxx')`。
+
+### 第 1 步：解析链接
+
+```ts
+// src/platforms/example/url.ts
+import type { ThreadRef } from '../../types.js'
+
+/** 只判定，不抛错：注册中心会挨个问每个平台，一个坏链接不能把别人带崩。 */
+export function exampleCanHandleUrl(url: string): boolean {
+  if (typeof url !== 'string' || url.trim() === '') return false
+  try {
+    const parsed = new URL(url.includes('://') ? url : `https://${url}`)
+    return parsed.hostname === 'example.com' || parsed.hostname.endsWith('.example.com')
+  } catch {
+    return false
+  }
+}
+
+/** 解析不出来就抛错，绝不返回一个猜的 id：读错帖子最后会把回复发进错帖子。 */
+export function parseExampleUrl(input: string): ThreadRef {
+  const parsed = new URL(input.includes('://') ? input : `https://${input}`)
+  const found = /^\/topic\/(\w+)/.exec(parsed.pathname)
+  if (!found) throw new Error(`不是可以识别的 example 链接：${input}`)
+  const postId = parsed.searchParams.get('comment') ?? undefined
+  return {
+    platform: 'example',
+    threadId: found[1]!,
+    url: `https://example.com/topic/${found[1]}`,
+    ...(postId === undefined ? {} : { postId }),
+  }
+}
+```
+
+`ThreadRef.platform` 必须等于你注册的 id。注册中心会用这个字段建去重账本、
+分会话，所以它对不上会同时污染两件事。
+
+### 第 2 步：实现广告牌上的能力
+
+先想清楚**你到底证明了什么**，再写 `describeCapabilities()`。五个状态的区别是这一版的重点：
+
+| 状态 | 什么时候用 |
+| --- | --- |
+| `supported` | 在真实平台上跑通过一次，并且有日期可写 |
+| `unverified` | 代码写了，但没有真实账号验证过——**这是最常见的诚实地步** |
+| `permission_required` | 平台能做，但这个应用/账号没拿到权限，`requiredPermissions` 写清要什么 |
+| `degraded` | 能用，但拿到的比平台实际有的少（分页被限流、只拿到内联副本…） |
+| `unavailable` | 平台压根不提供，写代码也没用 |
+
+**最容易犯的错**：把「能登录」当成「能发评论」。这两件事是两个能力
+（`identity.verify` / `comment.publish`），必须分开声明。参考
+`src/platforms/tieba/provider.ts`——贴吧的 `comment.publish` 是 `unverified`，
+因为只验证了未登录时的拒绝响应，登录态下的真实发表从未验证过。
+
+### 第 3 步：实现 adapter
+
+实现 `PlatformAdapter`（`src/types.ts`）。核心真正会调用的只有这五个：
+
+```ts
+getCapabilities()                                   // 供健康检查显示
+checkAuthentication(signal?)                        // 身份验证，无副作用
+getThread(ref, signal?)                             // 帖子正文
+getReplies(ref, page, signal?)                      // 一页评论，必须真的分页
+getReplyContext(ref, postId, signal?, {forceFresh}) // 按 id 定位一条评论及其上下文
+publishReply(ref, target, content, signal?)         // 发表，并自己判定结果
+```
+
+三条硬要求，都是踩过坑才写下来的：
+
+1. **`getReplies` 必须真的分页。** 返回 `hasMore` / `declaredTotalPages`。
+   分页循环在 `collector.ts` 里，你只要如实回答「还有没有下一页」。
+   返回「只有第一页但 hasMore=false」会让一次不完整读取看起来像完整结果。
+2. **`getReplyContext` 要尊重 `forceFresh`。** 发布和回读都会传 `true`。
+   返回缓存内容会让「审核时的目标」和「发表时的目标」悄悄变成两回事。
+3. **`publishReply` 不能只看 HTTP 200。** 平台返回成功但没给评论 id、
+   或者给了 id 但回读不到，都必须返回 `uncertain`，不能返回 `confirmed`。
+   `{ status: 'confirmed' }` 的含义是「有证据证明发出去了」。
+
+### 第 4 步：包成 provider 并注册
+
+```ts
+// src/platforms/example/provider.ts
+import type { PlatformProvider } from '../contracts.js'
+import { Matrix } from '../contracts.js'
+import { ExampleAdapter } from './adapter.js'
+import { exampleCanHandleUrl, parseExampleUrl } from './url.js'
+
+export const exampleProvider: PlatformProvider = {
+  id: 'example',
+  displayName: '示例平台',
+  shape: 'microblog',
+  canHandleUrl: exampleCanHandleUrl,
+  parseUrl: parseExampleUrl,
+  describeCapabilities: () => ({
+    platform: 'example',
+    declaredAt: new Date().toISOString(),
+    capabilities: {
+      'thread.read': { state: 'supported', reason: '……', lastVerifiedAt: '2026-10-27' },
+      'comment.list': { state: 'unverified', reason: '代码已写，未在真实账号上验证' },
+      'comment.publish': { state: 'permission_required', reason: '……', requiredPermissions: ['write_scope'] },
+      // 其余能力同样要写明；漏写的会按 unavailable 处理
+    },
+  }),
+  createAdapter: () => new ExampleAdapter(),
+}
+```
+
+然后在 `src/index.ts` 里加一行：
+
+```ts
+platforms.register(exampleProvider)
+```
+
+**完事。** 链接判定、能力展示、去重隔离、会话记录、发布安全策略、上下文压缩、
+人格引擎、人工审核全部自动生效——它们都在核心，不在适配器里。
+
+### 平台能力状态的边界
+
+- `createAdapter(context)` 拿到的 `context.settings` 是**平台作用域的配置副本**，
+  不含别的平台的凭据。凭据通过 `context.resolveCredential(name)` 按名字取，
+  名字统一是 `DSH_AI_DEBATE_<PLATFORM>_<WHAT>`。
+- 适配器**不能**访问 store、模型客户端或 publisher。它没有发表权，只有被调用时才动网。
+- 想加一个所有平台都该有的能力，改 `contracts.ts` 的 `CapabilityName`——
+  一次改动，`test/platform-manifest.test.ts` 会强制每个平台都给它一行。
+
+### 自测清单
+
+在新平台提交前，确认：
+
+- [ ] `canHandleUrl` 对垃圾输入返回 `false` 而不是抛错
+- [ ] `parseUrl` 解析失败时抛错，不返回猜的 id
+- [ ] 每个 `CapabilityName` 都有一行，`supported` 的那几行有 `lastVerifiedAt`
+- [ ] `publishReply` 在没有证据时返回 `uncertain`
+- [ ] 核心六个文件里没有你的平台名（跑一遍 `test/platform-contract.test.ts`）
+- [ ] 用两个假平台各跑一遍「读 → 分析 → 生成 → 审核 → 发表 → 回读」
+
+---
+
 ## 开发、测试与打包
 
 ```bash
@@ -516,7 +685,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**410 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**436 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -538,6 +707,8 @@ node scripts/pack.mjs
 | `test/parse.test.ts` | 21 | WAP 页面解析、楼中楼、真实 fixture 回归 |
 | `test/persona-compressor.test.ts` | 17 | 人格压缩与提示词预算 |
 | `test/pipeline.test.ts` | 31 | 分析→生成→审核→发表主流程 |
+| `test/platform-contract.test.ts` | 17 | **跨平台契约**：两个假平台各自走完主流程；核心不含贴吧分支；能力状态与幂等按平台隔离 |
+| `test/platform-manifest.test.ts` | 9 | 未来平台清单：未实现的平台不得声明任何 supported 能力 |
 | `test/publish-credential-gate.test.ts` | 9 | 凭据未证实时不发帖：拒绝在任何网络调用与幂等账之前 |
 | `test/publisher-safety.test.ts` | 58 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
 | `test/route-lifecycle.test.ts` | 4 | 路由注册与卸载生命周期 |
@@ -546,7 +717,7 @@ node scripts/pack.mjs
 | `test/target.test.ts` | 12 | 目标快照与漂移检测 |
 | `test/trigger-identity.test.ts` | 23 | 召唤定位与主人身份 |
 | `test/verification-and-auth.test.ts` | 9 | 发表后回读与登录态核对 |
-| **合计** | **410** | |
+| **合计** | **436** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

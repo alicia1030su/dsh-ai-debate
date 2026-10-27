@@ -15,7 +15,7 @@
  *   post id is looked up again; a reply that the platform claimed but that
  *   cannot be read back is reported as unverified rather than assumed.
  */
-import type { TiebaAdapter } from './platforms/tieba/adapter.js';
+import { type PlatformAdapter } from './types.js';
 import { DebateStore } from './store.js';
 import { type InteractionPolicy } from './safety.js';
 /** What a caller must supply to publish. */
@@ -42,7 +42,14 @@ export interface PublishReport {
 }
 /** Inputs the publisher needs from the surrounding plugin. */
 export interface PublisherDeps {
-    readonly adapter: TiebaAdapter;
+    /**
+     * The platform adapter.
+     *
+     * Typed as the generic interface since v0.2.0: the publisher must work for any
+     * platform, and naming `TiebaAdapter` here is what made it impossible. Everything
+     * this module calls is part of the contract.
+     */
+    readonly adapter: PlatformAdapter;
     readonly store: DebateStore;
     readonly policy: InteractionPolicy;
     /**

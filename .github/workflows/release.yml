@@ -88,6 +88,19 @@ jobs:
           echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
           echo "打包完成：$TARBALL（$SHA256）"
 
+          # The source archive is a release asset too: it is what a reader needs to
+          # audit or rebuild, and it is produced by the same script a developer runs.
+          node scripts/source-zip.mjs
+          SOURCE_ZIP="../dsh-ai-debate-source-${PKG_VERSION}.zip"
+          if [ ! -f "$SOURCE_ZIP" ]; then
+            echo "::error::没有生成 $SOURCE_ZIP"
+            exit 1
+          fi
+          SOURCE_SHA256="$(sha256sum "$SOURCE_ZIP" | cut -d' ' -f1)"
+          echo "source_zip=$SOURCE_ZIP" >> "$GITHUB_OUTPUT"
+          echo "source_sha256=$SOURCE_SHA256" >> "$GITHUB_OUTPUT"
+          echo "源码包完成：$SOURCE_ZIP（$SOURCE_SHA256）"
+
       - name: 校验安装包内容
         run: |
           set -e
@@ -112,7 +125,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: dsh-ai-debate-${{ steps.pack.outputs.version }}
-          path: ${{ steps.pack.outputs.tarball }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.source_zip }}
           retention-days: 30
 
       - name: 创建 GitHub Release
@@ -123,6 +138,8 @@ jobs:
           set -e
           TARBALL="${{ steps.pack.outputs.tarball }}"
           SHA256="${{ steps.pack.outputs.sha256 }}"
+          SOURCE_ZIP="${{ steps.pack.outputs.source_zip }}"
+          SOURCE_SHA256="${{ steps.pack.outputs.source_sha256 }}"
           VERSION="${{ steps.pack.outputs.version }}"
 
           # 从 CHANGELOG.md 里截取当前版本的段落作为发布说明。
@@ -150,10 +167,11 @@ jobs:
             echo "dsh plugin --profile <profile> add ./${TARBALL}"
             echo '```'
             echo ""
-            echo "SHA-256：\`${SHA256}\`"
+            echo "- 安装包 \`${TARBALL}\` SHA-256：\`${SHA256}\`"
+            echo "- 源码包 \`$(basename "${SOURCE_ZIP}")\` SHA-256：\`${SOURCE_SHA256}\`"
           } >> /tmp/notes.md
 
-          gh release create "v${VERSION}" "$TARBALL" \
+          gh release create "v${VERSION}" "$TARBALL" "$SOURCE_ZIP" \
             --title "AI代吵架 v${VERSION}" \
             --notes-file /tmp/notes.md \
             --verify-tag

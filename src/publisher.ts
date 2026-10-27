@@ -16,9 +16,7 @@
  *   cannot be read back is reported as unverified rather than assumed.
  */
 
-import { PlatformError, type PublishOutcome } from './types.js'
-import type { TiebaAdapter } from './platforms/tieba/adapter.js'
-import type { TiebaThreadRef } from './platforms/tieba/url.js'
+import { PlatformError, type PlatformAdapter, type PublishOutcome, type ThreadRef } from './types.js'
 import { DebateStore, dedupeKey, upsertDedupe, type DedupeRecord, type StoredSession } from './store.js'
 import {
   describeTargetProblem,
@@ -62,7 +60,14 @@ export interface PublishReport {
 
 /** Inputs the publisher needs from the surrounding plugin. */
 export interface PublisherDeps {
-  readonly adapter: TiebaAdapter
+  /**
+   * The platform adapter.
+   *
+   * Typed as the generic interface since v0.2.0: the publisher must work for any
+   * platform, and naming `TiebaAdapter` here is what made it impossible. Everything
+   * this module calls is part of the contract.
+   */
+  readonly adapter: PlatformAdapter
   readonly store: DebateStore
   readonly policy: InteractionPolicy
   /**
@@ -581,8 +586,8 @@ async function sendOnce(
     }
   }
 
-  const ref: TiebaThreadRef = {
-    platform: 'tieba',
+  const ref: ThreadRef = {
+    platform: session.platform,
     threadId: session.threadId,
     url: session.threadUrl,
   }
@@ -936,8 +941,8 @@ export interface PublishVerification {
  * @returns what was proven, what was not, and what contradicted the publish
  */
 async function verifyPublished(
-  adapter: TiebaAdapter,
-  ref: TiebaThreadRef,
+  adapter: PlatformAdapter,
+  ref: ThreadRef,
   postId: string,
   expectation: {
     readonly text: string

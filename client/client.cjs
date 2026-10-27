@@ -123,6 +123,7 @@ window.__ModuleLoader__.load({
       tabModel: 'AI 模型',
       tabPersona: '人格',
       tabPublish: '发表与安全',
+      tabPlatforms: '平台',
       tabStatus: '诊断与状态',
 
       ownerUserId: '主人贴吧数字 ID',
@@ -253,6 +254,45 @@ window.__ModuleLoader__.load({
       refresh: '刷新状态',
       refreshing: '刷新中…',
 
+      platformsTitle: '平台',
+      platformsIntro:
+        '「已接入」是代码真的在跑的平台；「计划中」只有一份清单，没有任何适配器，也没有取得平台授权。',
+      platformsImplemented: '已接入',
+      platformsPlanned: '计划中',
+      platformsActive: '当前使用',
+      platformsResearch: '研究阶段',
+      platformsAuth: '认证方式',
+      platformsUrls: '支持的链接',
+      platformsPrereq: '实现前需要',
+      platformsConstraints: '已知约束',
+      platformsNoManifest: '本版本没有接入任何其他平台。',
+      platformsCapsTitle: '能力状态',
+      researchSurvey: '初步调研',
+      researchDocumented: '已读官方文档',
+      researchCredentialed: '已有开发者账号',
+      researchRead: '读取已验证',
+      researchWrite: '写入已验证',
+      capSupported: '已验证可用',
+      capUnverified: '未验证',
+      capPermission: '需授权',
+      capDegraded: '降级可用',
+      capUnavailable: '不可用',
+      capVerifiedAt: '最后验证',
+      capLimits: '限制',
+      capNeeds: '需要权限',
+      capabilityName_thread_read: '读取帖子',
+      capabilityName_comment_list: '评论列表',
+      capabilityName_comment_paginate: '评论分页',
+      capabilityName_comment_nested: '子评论',
+      capabilityName_comment_locate: '定位评论',
+      capabilityName_identity_verify: '身份验证',
+      capabilityName_event_mentions: '艾特通知',
+      capabilityName_comment_publish: '发表评论',
+      capabilityName_comment_reply: '回复评论',
+      capabilityName_publish_verify: '发表后核验',
+      capabilityName_media_read: '图片内容',
+      capabilityName_user_profile: '用户资料',
+
       required: '必填',
       invalidNumber: '请填数字。',
       unsavedLeave: '还有未保存的修改，确定离开这一页吗？',
@@ -280,6 +320,7 @@ window.__ModuleLoader__.load({
       tabModel: 'AI model',
       tabPersona: 'Persona',
       tabPublish: 'Publishing',
+      tabPlatforms: 'Platforms',
       tabStatus: 'Status',
 
       ownerUserId: 'Owner Tieba numeric id',
@@ -408,6 +449,45 @@ window.__ModuleLoader__.load({
       refresh: 'Refresh status',
       refreshing: 'Refreshing…',
 
+      platformsTitle: 'Platforms',
+      platformsIntro:
+        '“Implemented” means code that actually runs. “Planned” is a manifest only — no adapter, and no platform authorisation.',
+      platformsImplemented: 'Implemented',
+      platformsPlanned: 'Planned',
+      platformsActive: 'In use',
+      platformsResearch: 'Research stage',
+      platformsAuth: 'Authentication',
+      platformsUrls: 'Supported links',
+      platformsPrereq: 'Before implementing',
+      platformsConstraints: 'Known constraints',
+      platformsNoManifest: 'No other platform is integrated in this version.',
+      platformsCapsTitle: 'Capabilities',
+      researchSurvey: 'Survey only',
+      researchDocumented: 'Documented',
+      researchCredentialed: 'Developer account',
+      researchRead: 'Read verified',
+      researchWrite: 'Write verified',
+      capSupported: 'Verified',
+      capUnverified: 'Unverified',
+      capPermission: 'Needs permission',
+      capDegraded: 'Degraded',
+      capUnavailable: 'Unavailable',
+      capVerifiedAt: 'Last verified',
+      capLimits: 'Limits',
+      capNeeds: 'Requires',
+      capabilityName_thread_read: 'Read thread',
+      capabilityName_comment_list: 'Comment list',
+      capabilityName_comment_paginate: 'Comment paging',
+      capabilityName_comment_nested: 'Nested comments',
+      capabilityName_comment_locate: 'Locate comment',
+      capabilityName_identity_verify: 'Identity check',
+      capabilityName_event_mentions: 'Mentions',
+      capabilityName_comment_publish: 'Publish comment',
+      capabilityName_comment_reply: 'Reply to comment',
+      capabilityName_publish_verify: 'Verify publish',
+      capabilityName_media_read: 'Media content',
+      capabilityName_user_profile: 'User profile',
+
       required: 'required',
       invalidNumber: 'Enter a number.',
       unsavedLeave: 'You have unsaved changes; leave this page?',
@@ -422,12 +502,13 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** The five page sections. */
+    /** The six page sections. */
     const TABS = [
       { id: 'account', label: 'tabAccount' },
       { id: 'model', label: 'tabModel' },
       { id: 'persona', label: 'tabPersona' },
       { id: 'publish', label: 'tabPublish' },
+      { id: 'platforms', label: 'tabPlatforms' },
       { id: 'status', label: 'tabStatus' },
     ]
 
@@ -487,6 +568,10 @@ window.__ModuleLoader__.load({
         secrets: Array.isArray(raw.secrets) ? raw.secrets : [],
         credentials:
           raw.credentials && typeof raw.credentials === 'object' ? raw.credentials : undefined,
+        // Platform state. Passed through as-is: a Host that does not send it leaves
+        // the field undefined so the section can say "this deployment does not
+        // report platforms" rather than drawing an empty list.
+        platforms: Array.isArray(raw.platforms) ? raw.platforms : undefined,
         capabilities: raw.capabilities || { settingsService: false, credentialService: false },
       }
     }
@@ -887,8 +972,10 @@ window.__ModuleLoader__.load({
       '.dsd-badge{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));' +
       'background:var(--dsw-alias-bg-module-platform,var(--dsw-alias-bg-layer-1));border-radius:999px;padding:1px 8px;font-size:11px;line-height:17px}' +
       '.dsd-badge-on{color:var(--dsw-alias-brand-primary)}' +
+      '.dsd-badge-ok{color:var(--dsw-alias-state-success-primary,var(--dsw-alias-brand-primary))}' +
       '.dsd-badge-warn{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-secondary))}' +
       '.dsd-badge-bad{color:var(--dsw-alias-state-error-primary,var(--dsw-alias-label-secondary))}' +
+      '.dsd-block{margin:0 0 16px;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px}' +
       '.dsd-reset{appearance:none;font:inherit;cursor:pointer;background:transparent;border:0;padding:0;' +
       'color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px;text-decoration:underline}' +
       '.dsd-input,.dsd-select{width:100%;box-sizing:border-box;font:inherit;font-size:13px;line-height:1.5;padding:6px 10px;' +
@@ -963,7 +1050,12 @@ window.__ModuleLoader__.load({
       '.dsd-kv dd{color:var(--dsw-alias-label-primary);margin:0;word-break:break-all}' +
       '.dsd-errors{list-style:none;margin:6px 0 0;padding:0;font-size:12px;line-height:1.6}' +
       '.dsd-errors li{color:var(--dsw-alias-state-error-primary);padding:3px 0;border-top:1px solid var(--dsw-alias-border-l2)}' +
-      '.dsd-errors time{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));margin-right:6px}'
+      '.dsd-errors time{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));margin-right:6px}' +
+      // Notes are informational, not failures. Reusing `dsd-errors` for them painted
+      // every prerequisite red, which reads as "something is broken" when it is
+      // actually "here is what has to happen first".
+      '.dsd-notes{list-style:none;margin:6px 0 0;padding:0;font-size:12px;line-height:1.6}' +
+      '.dsd-notes li{color:var(--dsw-alias-label-secondary);padding:3px 0;border-top:1px solid var(--dsw-alias-border-l2)}'
 
     /** Insert this card's stylesheet once, tagged so a reload can find it. */
     function ensureStyles() {
@@ -1913,6 +2005,162 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Strip the light Markdown the manifests use, since this page renders text.
+     *
+     * The manifests are written as prose with `**emphasis**` because they are also
+     * read as source. Rendering them raw put literal asterisks on screen, which
+     * looks like a bug rather than emphasis — so the markers are removed and the
+     * sentence is shown plainly. Only `**`/`__` are handled: no attempt is made to
+     * parse links, lists or code, because none of the manifests use them.
+     */
+    function plainText(value) {
+      return String(value)
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/__(.+?)__/g, '$1')
+    }
+
+    /**
+     * The platforms section.
+     *
+     * Renders whatever `view.platforms` carries. The page makes no judgement of
+     * its own: whether a platform is implemented is a field the Host sends, and a
+     * plan is drawn under a heading that says "planned". A section that decided
+     * for itself which platforms are real would be the exact failure this version
+     * is meant to prevent.
+     */
+    function PlatformsSection(props) {
+      const { t, state } = props
+      const rows = state.view.platforms
+
+      if (!Array.isArray(rows)) {
+        // An older Host that does not send the field. Say so instead of drawing an
+        // empty list, which would read as "there are no platforms".
+        return h('p', { className: 'dsd-hint' }, t('platformsNoManifest'))
+      }
+      if (rows.length === 0) {
+        return h('p', { className: 'dsd-hint' }, t('platformsNoManifest'))
+      }
+
+      const stateLabel = (value) => {
+        const table = {
+          supported: 'capSupported',
+          unverified: 'capUnverified',
+          permission_required: 'capPermission',
+          degraded: 'capDegraded',
+          unavailable: 'capUnavailable',
+        }
+        return t(table[value] || 'capUnavailable')
+      }
+      const researchLabel = (value) => {
+        const table = {
+          survey: 'researchSurvey',
+          documented: 'researchDocumented',
+          credentialed: 'researchCredentialed',
+          'read-verified': 'researchRead',
+          'write-verified': 'researchWrite',
+        }
+        return table[value] ? t(table[value]) : value
+      }
+      const capLabel = (name) => {
+        const key = `capabilityName_${String(name).replace(/\./g, '_')}`
+        const translated = t(key)
+        // The translator returns the key itself when it has no entry, so a new
+        // capability shows its raw name rather than an empty cell.
+        return translated === key ? name : translated
+      }
+      const toneOf = (value) => {
+        if (value === 'supported') return 'dsd-badge-ok'
+        if (value === 'unavailable') return 'dsd-badge-bad'
+        return 'dsd-badge-warn'
+      }
+
+      return h(
+        Fragment,
+        null,
+        h('p', { className: 'dsd-hint', style: { marginBottom: 12 } }, t('platformsIntro')),
+        rows.map((row) =>
+          h(
+            'div',
+            { key: row.id, className: 'dsd-block' },
+            h(
+              'div',
+              { className: 'dsd-inline', style: { alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+              h('span', { className: 'dsd-sect-title', style: { margin: 0 } }, row.displayName),
+              h(
+                'span',
+                {
+                  className:
+                    'dsd-badge ' + (row.implemented ? 'dsd-badge-ok' : 'dsd-badge-warn'),
+                },
+                t(row.implemented ? 'platformsImplemented' : 'platformsPlanned'),
+              ),
+              row.active
+                ? h('span', { className: 'dsd-badge dsd-badge-ok' }, t('platformsActive'))
+                : null,
+              row.research
+                ? h('span', { className: 'dsd-badge' }, `${t('platformsResearch')}：${researchLabel(row.research)}`)
+                : null,
+            ),
+            row.authModel
+              ? h('p', { className: 'dsd-hint' }, `${t('platformsAuth')}：${row.authModel}`)
+              : null,
+            row.urlShapes && row.urlShapes.length > 0
+              ? h(
+                  'p',
+                  { className: 'dsd-hint' },
+                  `${t('platformsUrls')}：` + row.urlShapes.join(' · '),
+                )
+              : null,
+            h('p', { className: 'dsd-sect-title', style: { marginTop: 10 } }, t('platformsCapsTitle')),
+            h(
+              'dl',
+              { className: 'dsd-kv' },
+              row.capabilities.map((cap) => [
+                h('dt', { key: `${cap.name}-t` }, `${cap.mark} ${capLabel(cap.name)}`),
+                h(
+                  'dd',
+                  { key: `${cap.name}-d` },
+                  h('span', { className: `dsd-badge ${toneOf(cap.state)}` }, stateLabel(cap.state)),
+                  ' ',
+                  plainText(cap.reason),
+                  cap.limits && cap.limits.length > 0
+                    ? h('span', { className: 'dsd-hint' }, ` ${t('capLimits')}：${cap.limits.map(plainText).join('；')}`)
+                    : null,
+                  cap.requiredPermissions && cap.requiredPermissions.length > 0
+                    ? h(
+                        'span',
+                        { className: 'dsd-hint' },
+                        ` ${t('capNeeds')}：${cap.requiredPermissions.join(', ')}`,
+                      )
+                    : null,
+                  cap.lastVerifiedAt
+                    ? h('span', { className: 'dsd-hint' }, ` ${t('capVerifiedAt')}：${cap.lastVerifiedAt}`)
+                    : null,
+                ),
+              ]),
+            ),
+            row.prerequisites && row.prerequisites.length > 0
+              ? h(
+                  'div',
+                  null,
+                  h('p', { className: 'dsd-sect-title', style: { marginTop: 10 } }, t('platformsPrereq')),
+                  h('ul', { className: 'dsd-notes' }, row.prerequisites.map((line, index) => h('li', { key: index }, plainText(line)))),
+                )
+              : null,
+            row.constraints && row.constraints.length > 0
+              ? h(
+                  'div',
+                  null,
+                  h('p', { className: 'dsd-sect-title', style: { marginTop: 10 } }, t('platformsConstraints')),
+                  h('ul', { className: 'dsd-notes' }, row.constraints.map((line, index) => h('li', { key: index }, plainText(line)))),
+                )
+              : null,
+          ),
+        ),
+      )
+    }
+
     function StatusSection(props) {
       const { t, state } = props
       const status = state.status
@@ -2023,6 +2271,7 @@ window.__ModuleLoader__.load({
         if (state.tab === 'model') return h(ModelSection, shared)
         if (state.tab === 'persona') return h(PersonaSection, shared)
         if (state.tab === 'publish') return h(PublishSection, shared)
+        if (state.tab === 'platforms') return h(PlatformsSection, shared)
         if (state.tab === 'status') return h(StatusSection, shared)
         return h(AccountSection, shared)
       })()

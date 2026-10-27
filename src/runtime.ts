@@ -5,12 +5,16 @@
  * pipeline is testable without a Host, a network or a model. Every stage
  * records its state in the store, so a failure halfway through leaves a
  * session a human can inspect rather than a stack trace and nothing else.
+ *
+ * Since v0.2.0 this module speaks to the platform **only** through
+ * `PlatformRegistry`. There is no `import ... from './platforms/tieba/...'`
+ * here, and adding one is the regression the contract tests guard against: the
+ * registry answers "whose URL is this?" and hands back an adapter, so a second
+ * platform needs no edit to this file.
  */
 
-import { PlatformError, type PlatformCapabilities } from './types.js'
-import type { TiebaThreadRef } from './platforms/tieba/url.js'
-import { TiebaAdapter } from './platforms/tieba/adapter.js'
-import { parseTiebaUrl } from './platforms/tieba/url.js'
+import { PlatformError, type PlatformAdapter, type PlatformCapabilities, type ThreadRef } from './types.js'
+import type { RegistryDiagnostics } from './platforms/registry.js'
 import {
   analyzeDispute,
   buildHandleDirectory,
@@ -51,13 +55,29 @@ import { splitIds } from './config.js'
 
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
-  readonly adapter: TiebaAdapter
+  readonly adapter: PlatformAdapter
   readonly store: DebateStore
   readonly policy: InteractionPolicy
   readonly config: () => ResolvedConfig
   /** Model client factory, replaceable in tests. */
   readonly llm: () => LlmClient
   readonly log: (level: 'debug' | 'info' | 'warn' | 'error', message: string) => void
+  /**
+   * The platform registry, when the shell has one.
+   *
+   * Optional so the many v0.1.x tests that build a `Runtime` from a bare adapter
+   * keep compiling. When present, URL resolution and capability checks go
+   * through it; when absent, {@link resolveThreadRef} falls back to the adapter's
+   * own id, which is enough for a single-platform deployment.
+   */
+  readonly platforms?: {
+    /** Find the platform that owns a URL and parse it. Throws when unknown. */
+    resolveUrl(url: string): ThreadRef
+    /** The registry's diagnostics, for the health report. */
+    diagnostics(): RegistryDiagnostics
+    /** The rich capability matrix for one platform. */
+    capabilitiesOf(platform: string): import('./platforms/contracts.js').PlatformCapabilityMatrix
+  }
   /**
    * The credential state, when this deployment can report one.
    *
@@ -70,6 +90,30 @@ export interface Runtime {
     readonly canPublish: boolean
     readonly error?: string
   }
+}
+
+/**
+ * Resolve a user-supplied URL into a thread reference.
+ *
+ * This is the single place the pipeline discovers *which* platform it is talking
+ * to. Three sources, in order:
+ *
+ * 1. the registry, which owns each platform's URL syntax;
+ * 2. the adapter's own `parseUrl`, for a bare single-platform deployment;
+ * 3. the raw string as a thread id — the last resort, and only correct when the
+ *    caller already passed an id rather than a link.
+ */
+export function resolveThreadRef(runtime: Runtime, url: string): ThreadRef {
+  if (runtime.platforms !== undefined) return runtime.platforms.resolveUrl(url)
+  const adapterId = runtime.adapter.id
+  const parse = (runtime.adapter as { parseUrl?: (input: string) => ThreadRef }).parseUrl
+  if (typeof parse === 'function') {
+    const parsed = parse.call(runtime.adapter, url)
+    // A parser that disagrees with the adapter's own id would make the ledger
+    // column and the session disagree; trust the adapter for the column.
+    return { ...parsed, platform: adapterId }
+  }
+  return { platform: adapterId, threadId: url, url }
 }
 
 /** A progress callback the tools pass through to the UI. */
@@ -144,18 +188,54 @@ export function policyFromConfig(config: ResolvedConfig): InteractionPolicy {
 /**
  * Build a platform adapter for one configuration snapshot.
  *
- * The adapter owns a cookie jar and a cache of forum metadata, so it cannot be
- * reused across a config change: a new `tiebaCookie` would be ignored and paging
- * would keep the old timeouts. Callers rebuild on every config version instead.
+ * The adapter owns a cookie jar and a cache of platform metadata, so it cannot be
+ * reused across a config change: a new cookie would be ignored and paging would
+ * keep the old timeouts. Callers rebuild on every config version instead.
+ *
+ * Since v0.2.0 the concrete class is never named here: the registry is asked to
+ * build whichever adapter belongs to `platformId`. When no registry is supplied
+ * (a bare test Runtime) the caller's `fallback` factory is used, which keeps
+ * every single-platform test working without a registry.
  */
-export function makeAdapter(config: ResolvedConfig): TiebaAdapter {
-  return new TiebaAdapter({
-    cookie: config.tiebaCookie || undefined,
-    timeoutMs: config.requestTimeoutMs,
-    retries: config.requestRetries,
-    pageDelayMs: config.pageDelayMs,
-    maxPages: config.maxFloorPages,
-  })
+export function makeAdapter(
+  config: ResolvedConfig,
+  options: {
+    registry?: import('./platforms/registry.js').PlatformRegistry
+    platformId?: string
+    /** Used only when no registry is supplied. */
+    fallback?: (context: { settings: Readonly<Record<string, unknown>> }) => PlatformAdapter
+  } = {},
+): PlatformAdapter {
+  const context = adapterContextOf(config)
+  const platformId = options.platformId ?? 'tieba'
+  if (options.registry !== undefined) {
+    return options.registry.createAdapter(platformId, context)
+  }
+  if (options.fallback !== undefined) return options.fallback(context)
+  throw new Error(
+    `没有平台注册中心，也没有为「${platformId}」提供回退构造器；无法创建平台适配器`,
+  )
+}
+
+/**
+ * The platform-scoped settings an adapter is allowed to see.
+ *
+ * Deliberately a flat, secret-free copy: an adapter receives its cookie through
+ * this object and must not be handed the whole config, which would let a future
+ * Weibo adapter read a Tieba cookie.
+ */
+export function adapterContextOf(config: ResolvedConfig): {
+  settings: Readonly<Record<string, unknown>>
+} {
+  return {
+    settings: {
+      cookie: config.tiebaCookie || undefined,
+      timeoutMs: config.requestTimeoutMs,
+      retries: config.requestRetries,
+      pageDelayMs: config.pageDelayMs,
+      maxPages: config.maxFloorPages,
+    },
+  }
 }
 
 /**
@@ -176,7 +256,7 @@ export async function runAnalysis(
   },
 ): Promise<AnalysisOutput> {
   const config = runtime.config()
-  const ref = parseTiebaUrl(input.url)
+  const ref = resolveThreadRef(runtime, input.url)
   const config_ = config
   const owner = ownerIdentity(config_)
   if (!owner.userId && !owner.userName) {
@@ -317,7 +397,7 @@ export class SessionCapacityError extends Error {
 /** Persist the analysis as a session, reusing one for the same trigger. */
 async function persistAnalysis(
   runtime: Runtime,
-  ref: TiebaThreadRef,
+  ref: ThreadRef,
   collected: CollectedThread,
   dispute: Dispute,
   triggerPostId: string,
@@ -325,7 +405,7 @@ async function persistAnalysis(
 ): Promise<StoredSession> {
   const now = new Date().toISOString()
   const key = dedupeKey({
-    platform: 'tieba',
+    platform: ref.platform,
     threadId: ref.threadId,
     ownerKey: dispute.owner.key,
     triggerPostId,
@@ -335,7 +415,7 @@ async function persistAnalysis(
   // do — whether a session may exist at all, and under which id — are decided inside
   // the single `mutate` below.
   const fields = {
-    platform: 'tieba' as const,
+    platform: ref.platform,
     threadId: ref.threadId,
     threadUrl: collected.thread.url,
     threadTitle: collected.thread.title,
@@ -382,7 +462,7 @@ async function persistAnalysis(
     // facts, so missing them is exactly how a nickname change resurrected an already
     // answered summon. `findTriggerRecords` matches on the explicit columns instead,
     // which every version has always written correctly.
-    const identity = { platform: 'tieba' as const, threadId: ref.threadId, triggerPostId }
+    const identity = { platform: ref.platform, threadId: ref.threadId, triggerPostId }
     const rows = findTriggerRecords(data.dedupe, identity)
     const merged = mergeTriggerRecords(rows)
 
@@ -455,7 +535,7 @@ async function persistAnalysis(
       .find((value: string) => value.length > 0 && value !== dispute.owner.key)
     const canonical: DedupeRecord = {
       key,
-      platform: 'tieba',
+      platform: ref.platform,
       threadId: ref.threadId,
       // The owner is recorded for display; it is no longer part of the key.
       ownerKey: dispute.owner.key,
@@ -632,7 +712,11 @@ export async function runGeneration(
   assertSessionCanGenerate(session)
 
   progress('正在重新读取帖子，确认目标仍然存在…')
-  const ref: TiebaThreadRef = { platform: 'tieba', threadId: session.threadId, url: session.threadUrl }
+  const ref: ThreadRef = {
+    platform: session.platform,
+    threadId: session.threadId,
+    url: session.threadUrl,
+  }
   const collected = await collectThread(runtime.adapter, ref, {
     maxPages: config.maxFloorPages,
     signal: input.signal,

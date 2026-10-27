@@ -7,10 +7,25 @@
  * speaks, so a second platform can be added without touching it.
  */
 
-/** A platform identifier. New adapters extend this union. */
-export type PlatformId = 'tieba'
+/**
+ * A platform identifier.
+ *
+ * A plain `string` since v0.2.0, not a closed union: the whole point of the
+ * platform registry is that a new platform can be added without editing this
+ * file. Concrete ids are still constants, declared next to their adapter, and the
+ * registry refuses duplicates.
+ */
+export type PlatformId = string
 
-/** Capability flags a platform may or may not support. */
+/**
+ * Capability flags a platform may or may not support.
+ *
+ * @deprecated Superseded by `PlatformCapabilityMatrix` in
+ *   `src/platforms/contracts.ts`, which carries a state, a reason and a
+ *   verification date per capability instead of one boolean. Kept because
+ *   `PlatformAdapter.getCapabilities` still returns it and the health report
+ *   still shows it; the registry's richer matrix is derived from it.
+ */
 export interface PlatformCapabilities {
   /** Can read the thread body (title, content, author, time). */
   readonly thread: boolean
@@ -297,11 +312,22 @@ export interface PlatformAdapter {
   readonly id: PlatformId
   readonly displayName: string
 
+  /**
+   * Parse one of this platform's URLs into a thread reference.
+   *
+   * Optional, and only a fallback: when the plugin has a `PlatformRegistry` the
+   * registry's provider does the parsing (it owns the URL syntax). This exists so
+   * a bare adapter — a test double, or a deployment assembled without a registry —
+   * can still turn a pasted link into a thread id instead of handing the raw URL
+   * to `getThread` as if it were an id.
+   */
+  parseUrl?(url: string): ThreadRef
+
   /** Declare what this platform actually supports right now. */
   getCapabilities(): PlatformCapabilities
 
   /** Check the bound account's login state without side effects. */
-  checkAuthentication(signal?: AbortSignal): Promise<AuthState>
+  checkAuthentication(signal?: AbortSignal, probeThreadId?: string): Promise<AuthState>
 
   /** Read the thread body. */
   getThread(ref: ThreadRef, signal?: AbortSignal): Promise<Thread>
@@ -323,11 +349,19 @@ export interface PlatformAdapter {
   /** List @-mentions for the bound account. Must throw `permission_denied` if unsupported. */
   getMentions(since: string | undefined, signal?: AbortSignal): Promise<readonly Mention[]>
 
-  /** Resolve the context (floor + ancestors + thread) of one post id. */
+  /**
+   * Resolve the context (floor + ancestors + thread) of one post id.
+   *
+   * `options.forceFresh` asks the adapter to bypass any structural cache. Every
+   * publish and every verification sets it: a cached body returned as if it were
+   * current would defeat the snapshot comparison entirely, so the parameter is
+   * part of the contract rather than a Tieba convenience.
+   */
   getReplyContext(
     ref: ThreadRef,
     postId: string,
     signal?: AbortSignal,
+    options?: { forceFresh?: boolean },
   ): Promise<ReplyContext>
 
   /** Publish a reply. Must verify the outcome, not just the HTTP status. */

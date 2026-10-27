@@ -16,6 +16,7 @@
 import { Config, DEFAULT_CONFIG, resolveConfig } from './config.js';
 import { loggerOf, type PluginContext } from './host.js';
 import { type Runtime } from './runtime.js';
+import { PlatformRegistry } from './platforms/registry.js';
 /** Stable Loader identity; matches the row id in `cordis.patch.yml`. */
 export declare const name = "dsh-ai-debate";
 /** Services required before the tools can mount. */
@@ -26,8 +27,13 @@ export { Config, DEFAULT_CONFIG, resolveConfig };
 export declare const DEBATE_GUIDANCE: string;
 /** Resolve the state directory from config, creating it. */
 export declare function resolveStoreDir(config: ReturnType<typeof resolveConfig>): string;
-/** Build the runtime synchronously; disk reads happen on first use. */
-export declare function buildRuntime(resolve: () => ReturnType<typeof resolveConfig>, log: ReturnType<typeof loggerOf>): Runtime;
+/**
+ * Build the runtime synchronously; disk reads happen on first use.
+ *
+ * @param registry the platform registry. Every adapter is built through it, so
+ *   this function no longer names a concrete platform class.
+ */
+export declare function buildRuntime(resolve: () => ReturnType<typeof resolveConfig>, log: ReturnType<typeof loggerOf>, registry: PlatformRegistry): Runtime;
 /**
  * Mount the plugin.
  *

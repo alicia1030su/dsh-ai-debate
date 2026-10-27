@@ -28,6 +28,7 @@ import type {
   UserProfile,
 } from '../lib/types.js'
 import { parseWapFloors, parseWapPageMeta, parseWapThreadMeta } from '../lib/platforms/tieba/parse.js'
+import { parseTiebaUrl } from '../lib/platforms/tieba/url.js'
 
 /** Root of the captured fixtures. */
 export const FIXTURES = join(import.meta.dirname, 'fixtures')
@@ -177,6 +178,18 @@ export class FakeAdapter implements PlatformAdapter {
       publish: true,
       authCheck: true,
     }
+  }
+
+  /**
+   * Parse a Tieba link, so a test that builds a Runtime *without* a registry can
+   * still pass a pasted URL.
+   *
+   * The real plugin resolves URLs through the registry; this fake declares the
+   * same capability so the no-registry fallback is exercised rather than being a
+   * path nothing tests.
+   */
+  parseUrl(url: string): ThreadRef {
+    return parseTiebaUrl(url)
   }
 
   async checkAuthentication(): Promise<AuthState> {

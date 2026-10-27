@@ -14,13 +14,22 @@
  * never assembled from ids that came out of the model.
  */
 import { type PublishTarget, type ReplyContext, type TargetSnapshot } from './types.js';
+/**
+ * The reference shape this module passes to the adapter.
+ *
+ * Platform-neutral since v0.2.0: it used to be spelled
+ * `{ platform: 'tieba'; threadId: string; url?: string }`, which made the whole
+ * target resolver unusable for any second platform. `url` is optional because
+ * some platforms can be addressed by id alone.
+ */
+export interface TargetThreadRef {
+    readonly platform: string;
+    readonly threadId: string;
+    readonly url?: string;
+}
 /** The slice of a platform adapter this module needs. */
 export interface TargetResolver {
-    getReplyContext(ref: {
-        platform: 'tieba';
-        threadId: string;
-        url?: string;
-    }, postId: string, signal?: AbortSignal, 
+    getReplyContext(ref: TargetThreadRef, postId: string, signal?: AbortSignal, 
     /**
      * `forceFresh` asks the adapter to bypass any structural cache.
      *
@@ -45,6 +54,14 @@ export type TargetResolution = {
 };
 /** What the caller believes the target is, from the analysis stage. */
 export interface TargetExpectation {
+    /**
+     * The platform this target lives on.
+     *
+     * Optional only so the v0.1.x call sites and tests that predate the platform
+     * registry keep compiling; when absent it is taken from the adapter, which is
+     * the object that actually knows.
+     */
+    readonly platform?: string;
     readonly threadId: string;
     /** The floor the whole dispute lives under. */
     readonly floorPostId: string;
@@ -72,6 +89,13 @@ export declare function resolveTarget(resolver: TargetResolver, expected: Target
     signal?: AbortSignal;
     now?: () => number;
     forceFresh?: boolean;
+    /**
+     * Which platform the target belongs to.
+     *
+     * Taken from the adapter when not supplied, which is the honest source: the
+     * adapter is the thing being asked to read the post back.
+     */
+    platform?: string;
 }): Promise<TargetResolution>;
 /**
  * Turn a verified snapshot into the request the adapter sends.

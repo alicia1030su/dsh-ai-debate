@@ -1,0 +1,33 @@
+新会话
+Ctrl
++
+Alt
++
+N
+插件
+自动化任务
+工作区
+默认工作区
+新会话
+更多
+dsh-ai-debate
+dsh-ai-debate
+
+dsh-ai-debate
+
+AI代吵架 — read a Tieba thread, reconstruct the argument, inherit the owner's position, and draft a persona-styled reply with human review before publishing.
+
+AI代吵架
+
+贴吧账号、模型、人格、发表策略与运行状态。
+
+贴吧账号
+AI 模型
+人格
+发表与安全
+平台
+诊断与状态
+刷新状态
+
+放弃修改
+保存

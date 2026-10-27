@@ -109,8 +109,19 @@ export interface SettingsRouteDeps {
     namespace(): string;
     /** Run the model-connection probe. */
     testModel(): Promise<ModelProbe>;
-    /** Probe the Tieba login state. */
+    /** Probe the bound account's login state. */
     checkLogin(): Promise<LoginProbe>;
+    /**
+     * What platforms this build knows about, in the state they are actually in.
+     *
+     * Optional so every existing route test keeps compiling. When present the page
+     * renders a platform section: the registered adapters with their capability
+     * matrix, plus the future platforms that exist only as manifests. Those two
+     * groups are shown differently on purpose — one is code, the other is a plan,
+     * and a settings page that blurs them is the thing this version exists to
+     * prevent.
+     */
+    platforms?(): readonly PlatformView[];
     /** Preview all four personas against a fixed exchange. */
     previewPersonas(): Promise<readonly PersonaPreview[]>;
     /**
@@ -125,8 +136,40 @@ export interface SettingsRouteDeps {
     /** Read the publish ledger and session counters. */
     diagnostics(): Promise<Diagnostics>;
 }
-/** What a real "stop everything now" call actually managed to do. */
-export interface PauseOutcome {
+/**
+ * One platform, as the settings page shows it.
+ *
+ * `implemented` is the field that keeps the page honest: a registered platform
+ * with a real adapter is a different object from a manifest describing a plan,
+ * and the two must never render identically.
+ */
+export interface PlatformView {
+    readonly id: string;
+    readonly displayName: string;
+    readonly shape: string;
+    /** True when an adapter exists and is registered right now. */
+    readonly implemented: boolean;
+    /** True when this is the platform the plugin currently talks to. */
+    readonly active: boolean;
+    /** Research stage, for the not-yet-implemented ones. */
+    readonly research?: string;
+    /** Capability rows, already flattened for the page. */
+    readonly capabilities: readonly {
+        readonly name: string;
+        readonly state: string;
+        readonly mark: string;
+        readonly reason: string;
+        readonly limits?: readonly string[];
+        readonly requiredPermissions?: readonly string[];
+        readonly lastVerifiedAt?: string;
+    }[];
+    /** What would have to happen before this becomes implemented. */
+    readonly prerequisites?: readonly string[];
+    readonly constraints?: readonly string[];
+    readonly authModel?: string;
+    readonly urlShapes?: readonly string[];
+}
+/** What a real "stop everything now" call actually managed to do. */ export interface PauseOutcome {
     /** Sessions moved to CANCELLED by this call. */
     readonly stopped: readonly string[];
     /** Sessions that refused to stop, with the reason the state machine gave. */

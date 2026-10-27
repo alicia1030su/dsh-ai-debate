@@ -18,10 +18,24 @@ import { createHash } from 'node:crypto'
 
 import { PlatformError, type PublishTarget, type ReplyContext, type TargetSnapshot } from './types.js'
 
+/**
+ * The reference shape this module passes to the adapter.
+ *
+ * Platform-neutral since v0.2.0: it used to be spelled
+ * `{ platform: 'tieba'; threadId: string; url?: string }`, which made the whole
+ * target resolver unusable for any second platform. `url` is optional because
+ * some platforms can be addressed by id alone.
+ */
+export interface TargetThreadRef {
+  readonly platform: string
+  readonly threadId: string
+  readonly url?: string
+}
+
 /** The slice of a platform adapter this module needs. */
 export interface TargetResolver {
   getReplyContext(
-    ref: { platform: 'tieba'; threadId: string; url?: string },
+    ref: TargetThreadRef,
     postId: string,
     signal?: AbortSignal,
     /**
@@ -54,6 +68,14 @@ export type TargetResolution =
 
 /** What the caller believes the target is, from the analysis stage. */
 export interface TargetExpectation {
+  /**
+   * The platform this target lives on.
+   *
+   * Optional only so the v0.1.x call sites and tests that predate the platform
+   * registry keep compiling; when absent it is taken from the adapter, which is
+   * the object that actually knows.
+   */
+  readonly platform?: string
   readonly threadId: string
   /** The floor the whole dispute lives under. */
   readonly floorPostId: string
@@ -84,14 +106,33 @@ export function contentHash(text: string): string {
 export async function resolveTarget(
   resolver: TargetResolver,
   expected: TargetExpectation,
-  options: { signal?: AbortSignal; now?: () => number; forceFresh?: boolean } = {},
+  options: {
+    signal?: AbortSignal
+    now?: () => number
+    forceFresh?: boolean
+    /**
+     * Which platform the target belongs to.
+     *
+     * Taken from the adapter when not supplied, which is the honest source: the
+     * adapter is the thing being asked to read the post back.
+     */
+    platform?: string
+  } = {},
 ): Promise<TargetResolution> {
   const now = options.now ?? (() => Date.now())
+  // The platform comes from the caller, then from the expectation, then from the
+  // adapter's own id. Never defaulted to a concrete platform name.
+  const adapterId = (resolver as { id?: unknown }).id
+  const platform =
+    options.platform ??
+    expected.platform ??
+    (typeof adapterId === 'string' ? adapterId : undefined) ??
+    'unknown'
 
   let context: ReplyContext
   try {
     context = await resolver.getReplyContext(
-      { platform: 'tieba', threadId: expected.threadId },
+      { platform, threadId: expected.threadId },
       expected.targetPostId,
       options.signal,
       // Default true: this function exists to answer "what is there *now*", so a
@@ -186,7 +227,7 @@ export async function resolveTarget(
 
   const content = isNested ? context.nested!.content : context.floor.content
   const snapshot: TargetSnapshot = {
-    platform: 'tieba',
+    platform,
     threadId: expected.threadId,
     floorPostId: context.floor.postId,
     floorNumber: context.floor.floorNumber,

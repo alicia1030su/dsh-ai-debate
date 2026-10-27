@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { Config, DEFAULT_CONFIG, resolveConfig } from './config.js'
 import { loggerOf, type PluginContext } from './host.js'
 import { DebateStore } from './store.js'
+import type { ThreadRef } from './types.js'
 import {
   buildLlm,
   makeAdapter,
@@ -31,11 +32,43 @@ import {
   type Runtime,
 } from './runtime.js'
 import { buildTools } from './tools.js'
+import { PlatformRegistry } from './platforms/registry.js'
+import { tiebaProvider } from './platforms/tieba/provider.js'
+import { PLATFORM_MANIFESTS } from './platforms/manifests.js'
+import { CAPABILITY_NAMES, markOf, stateOf } from './platforms/contracts.js'
+import type { PlatformCapabilityMatrix } from './platforms/contracts.js'
+
+/**
+ * Flatten a capability matrix into the row shape the settings page renders.
+ *
+ * Iterating {@link CAPABILITY_NAMES} rather than the matrix's own keys means a
+ * platform that forgot to declare a capability still shows a row — with the
+ * honest `unavailable` state — instead of silently omitting it.
+ */
+function flattenCapabilities(matrix: PlatformCapabilityMatrix): PlatformView['capabilities'] {
+  return CAPABILITY_NAMES.map((name) => {
+    const declaration = stateOf(matrix, name)
+    return {
+      name,
+      state: declaration.state,
+      mark: markOf(declaration.state),
+      reason: declaration.reason,
+      ...(declaration.limits === undefined ? {} : { limits: declaration.limits }),
+      ...(declaration.requiredPermissions === undefined
+        ? {}
+        : { requiredPermissions: declaration.requiredPermissions }),
+      ...(declaration.lastVerifiedAt === undefined
+        ? {}
+        : { lastVerifiedAt: declaration.lastVerifiedAt }),
+    }
+  })
+}
 import { collectDiagnostics, checkLogin, previewPersonas, testModel, PLUGIN_VERSION } from './diagnostics.js'
 import { TERMINAL_STATES } from './store.js'
 import {
   makeSettingsRoutes,
   type PauseOutcome,
+  type PlatformView,
   type RequestAuthorizer,
   type SettingsRouteDeps,
   type WebRoute,
@@ -89,18 +122,29 @@ export function resolveStoreDir(config: ReturnType<typeof resolveConfig>): strin
   return dir
 }
 
-/** Build the runtime synchronously; disk reads happen on first use. */
+/**
+ * Build the runtime synchronously; disk reads happen on first use.
+ *
+ * @param registry the platform registry. Every adapter is built through it, so
+ *   this function no longer names a concrete platform class.
+ */
 export function buildRuntime(
   resolve: () => ReturnType<typeof resolveConfig>,
   log: ReturnType<typeof loggerOf>,
+  registry: PlatformRegistry,
 ): Runtime {
   const config = resolve()
   const store = new DebateStore({
     dir: resolveStoreDir(config),
     sessionTtlMs: config.sessionTtlDays * 24 * 60 * 60 * 1000,
   })
+  // The adapter is built through the registry: it answers which platform this
+  // deployment talks to (currently always Tieba), and returns the matching
+  // adapter. Nothing below this line knows the concrete class.
+  const platformId = DEFAULT_PLATFORM_ID
+  const adapter = makeAdapter(config, { registry, platformId })
   return {
-    adapter: makeAdapter(config),
+    adapter,
     store,
     policy: policyFromConfig(config),
     config: resolve,
@@ -108,8 +152,33 @@ export function buildRuntime(
     log: (level, message) => {
       log[level](message)
     },
+    platforms: {
+      resolveUrl: (url) => resolveThreadRefFromRegistry(registry, url),
+      diagnostics: () => registry.diagnostics(),
+      capabilitiesOf: (platform) => registry.getCapabilities(platform),
+    },
   }
 }
+
+/**
+ * Resolve a URL through the registry.
+ *
+ * Kept as a free function so `buildRuntime` can hand it to the runtime object
+ * without the runtime holding a registry reference it could misuse.
+ */
+function resolveThreadRefFromRegistry(registry: PlatformRegistry, url: string): ThreadRef {
+  return registry.parseUrl(url)
+}
+
+/**
+ * The platform this deployment talks to.
+ *
+ * Still a constant in v0.2.0: the architecture is multi-platform, the shipped
+ * integration set is not. Keeping it named (rather than scattering `'tieba'`
+ * literals) means adding a second platform is changing this line plus registering
+ * a provider.
+ */
+const DEFAULT_PLATFORM_ID = tiebaProvider.id
 
 /**
  * Fields whose change invalidates the built adapter.
@@ -215,8 +284,7 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
   })
 
   /** The resolved config with credential-store values folded in. */
-  const effectiveConfig = (): ReturnType<typeof resolveConfig> => {
-    const resolved = resolveConfig(config)
+  const effectiveConfig = (): ReturnType<typeof resolveConfig> => {    const resolved = resolveConfig(config)
     // With no credential service the legacy config fields are the whole story;
     // teach the mirror that so `canPublish()` reasons about a real cookie rather
     // than about a store that does not exist.
@@ -230,9 +298,59 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     return applyOverlay(resolved, credentialMirror.overlay)
   }
 
+  // The platform registry, built once per mount.
+  //
+  // One provider today (Tieba). A second platform is `registry.register(...)`
+  // here plus a new file under `src/platforms/`, with no change to runtime,
+  // publisher, generator or analyzer — that is the v0.2.0 acceptance criterion.
+  const platforms = new PlatformRegistry()
+  platforms.register(tiebaProvider)
+
+  /**
+   * What the settings page shows in its platform section.
+   *
+   * Registered adapters come first (they are code that exists), then manifests
+   * (they are a plan). The two are told apart by `implemented`, never by wording,
+   * so the page cannot present a research note as a shipped feature.
+   */
+  const describePlatforms = (): readonly PlatformView[] => {
+    const activeId = runtime.adapter.id
+    const rows: PlatformView[] = []
+    for (const provider of platforms.list()) {
+      const matrix = provider.describeCapabilities()
+      rows.push({
+        id: provider.id,
+        displayName: provider.displayName,
+        shape: provider.shape,
+        implemented: true,
+        active: provider.id === activeId,
+        capabilities: flattenCapabilities(matrix),
+      })
+    }
+    for (const manifest of PLATFORM_MANIFESTS) {
+      // A manifest whose platform is also registered (not true today) would be
+      // rendered twice; the registered row wins because it is the real one.
+      if (platforms.get(manifest.id) !== undefined) continue
+      rows.push({
+        id: manifest.id,
+        displayName: manifest.displayName,
+        shape: manifest.shape,
+        implemented: false,
+        active: false,
+        research: manifest.research,
+        capabilities: flattenCapabilities(manifest.capabilities),
+        prerequisites: manifest.prerequisites,
+        constraints: manifest.constraints,
+        authModel: manifest.authModel,
+        urlShapes: manifest.urlShapes,
+      })
+    }
+    return rows
+  }
+
   // Rebuilt on every read so a live settings edit takes effect without a
   // remount — that is what `.volatile()` fields are for.
-  let runtime = buildRuntime(effectiveConfig, log)
+  let runtime = buildRuntime(effectiveConfig, log, platforms)
   let currentKey = adapterKey(effectiveConfig())
   let disposed = false
 
@@ -248,8 +366,8 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     const next = effectiveConfig()
     const key = adapterKey(next)
     if (key !== currentKey) {
-      log.info('配置或凭据中的贴吧请求参数已变化，正在重建平台适配器')
-      runtime = buildRuntime(effectiveConfig, log)
+      log.info('配置或凭据中的平台请求参数已变化，正在重建平台适配器')
+      runtime = buildRuntime(effectiveConfig, log, platforms)
       currentKey = key
     }
     return runtime
@@ -267,8 +385,8 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     effectiveConfig()
     const key = adapterKey(effectiveConfig())
     if (key === currentKey) return
-    log.info('配置或凭据中的贴吧请求参数已变化，正在重建平台适配器')
-    runtime = buildRuntime(effectiveConfig, log)
+    log.info('配置或凭据中的平台请求参数已变化，正在重建平台适配器')
+    runtime = buildRuntime(effectiveConfig, log, platforms)
     currentKey = key
   }
 
@@ -450,6 +568,12 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
 
   const settingsRouteDeps: SettingsRouteDeps = {
     authorize: authorizer,
+    // Platform state, for the page's platform section.
+    //
+    // Two groups, deliberately kept apart: registered adapters (code that exists)
+    // and manifests (a plan). A page that renders them identically is exactly how
+    // "we support Weibo" starts being read as true.
+    platforms: () => describePlatforms(),
     // The page must not be told "unconfigured" because the mirror loaded too
     // early. This is the visible half of the v0.1.9 bug: after a restart the
     // badge said the cookie was missing while the store had it all along.
