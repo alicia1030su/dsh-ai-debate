@@ -1,0 +1,74 @@
+{
+  "name": "dsh-ai-debate",
+  "version": "0.1.11",
+  "description": "AI代吵架 — read a Tieba thread, reconstruct the argument, inherit the owner's position, and draft a persona-styled reply with human review before publishing.",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": "./client/client.cjs",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "client/client.cjs",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "cordis.patch.yml"
+  ],
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "~22.10.2",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "jsdom": "25.0.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "~5.7.2"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-store",
+        "@deepseek-ai/dsh-client-locale"
+      ]
+    }
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "test": "node --experimental-transform-types --test \"test/**/*.test.ts\"",
+    "verify": "node scripts/verify.mjs",
+    "pack": "node scripts/pack.mjs",
+    "release:prepare": "node scripts/release-prepare.mjs",
+    "test:count": "node scripts/test-count.mjs"
+  },
+  "engines": {
+    "node": ">=22.18.0",
+    "dsh": ">=0.2.1-0"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "tieba",
+    "ai-debate"
+  ]
+}

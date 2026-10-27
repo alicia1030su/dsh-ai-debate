@@ -1,0 +1,86 @@
+name: CI
+
+# 每一次推送和 PR 都跑：编译、类型检查、全部测试。
+# 任何一步失败都会让这个检查变红，从而阻止合并。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: 编译与测试（Node ${{ matrix.node }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The test command uses `--experimental-transform-types`, which landed in
+        # Node 22.7.0 — 22.6 (the previous entry here) cannot run it at all. 22.18 is
+        # used as the oldest *maintained* 22.x, so the job tests a version people are
+        # actually told to install rather than a long-dead one.
+        #
+        # 24 is the DSH runtime, so a break there would hit every real user first.
+        node: ['22.18', '24']
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 编译（严格模式）
+        run: node_modules/.bin/tsc -p tsconfig.json
+
+      - name: 类型检查（含测试与脚本）
+        run: node_modules/.bin/tsc -p tsconfig.test.json
+
+      - name: 自动化测试
+        run: |
+          # Globbed so a new test file cannot be silently skipped by a stale list.
+          node --experimental-transform-types --test "test/**/*.test.ts"
+
+      - name: 打包自检
+        run: node scripts/pack.mjs
+
+      - name: 确认没有把凭据提交进仓库
+        run: |
+          set -e
+          # 贴吧 Cookie 与常见 key 形态；命中即失败。
+          if grep -rInE '(BAIDUID|BDUSS)\s*=\s*[A-Za-z0-9]{10,}' \
+               --include='*.ts' --include='*.js' --include='*.json' \
+               --include='*.yml' --include='*.yaml' --include='*.md' . ; then
+            echo "::error::仓库里出现了疑似贴吧 Cookie"
+            exit 1
+          fi
+          if grep -rInE 'sk-[A-Za-z0-9]{20,}' \
+               --include='*.ts' --include='*.js' --include='*.json' \
+               --include='*.yml' --include='*.yaml' --include='*.md' . ; then
+            echo "::error::仓库里出现了疑似 API key"
+            exit 1
+          fi
+          echo "未发现凭据痕迹"
+
+      - name: 确认构建产物已提交（供 GitHub 直接安装）
+        run: |
+          if [ ! -f lib/index.js ]; then
+            echo "::error::lib/index.js 不存在。用户从 GitHub 安装时需要它，请不要在提交里排除 lib/。"
+            exit 1
+          fi
+          git diff --exit-code --stat lib/ || {
+            echo "::error::提交里的 lib/ 与源码不一致，请本地重新运行构建并提交产物。"
+            exit 1
+          }

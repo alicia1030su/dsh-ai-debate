@@ -1,0 +1,159 @@
+name: Release
+
+# 推送 v* 标签时：重新跑一遍全部检查 → 打包 → 校验 → 创建 GitHub Release 并附上 .tgz。
+# 检查或打包失败时**不会**发布，避免发出一个装不上或没测过的版本。
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 只构建和打包，不创建 Release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: 构建并发布
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验标签与 package.json 版本一致
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -e
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "标签版本：$TAG_VERSION"
+          echo "包版本：  $PKG_VERSION"
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::标签 $GITHUB_REF_NAME 与 package.json 里的 $PKG_VERSION 不一致"
+            exit 1
+          fi
+
+      - name: 编译（严格模式）
+        run: node_modules/.bin/tsc -p tsconfig.json
+
+      - name: 类型检查（含测试与脚本）
+        run: node_modules/.bin/tsc -p tsconfig.test.json
+
+      - name: 自动化测试
+        run: |
+          # Globbed so a new test file cannot be silently skipped by a stale list.
+          node --experimental-transform-types --test "test/**/*.test.ts"
+
+      - name: 确认 lib/ 与源码一致
+        run: |
+          git diff --exit-code --stat lib/ || {
+            echo "::error::lib/ 与源码不一致，请先本地构建并提交产物"
+            exit 1
+          }
+
+      - name: 打包并校验
+        id: pack
+        run: |
+          set -e
+          node scripts/pack.mjs
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          TARBALL="dsh-ai-debate-${PKG_VERSION}.tgz"
+          if [ ! -f "$TARBALL" ]; then
+            echo "::error::没有生成 $TARBALL"
+            exit 1
+          fi
+          SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+          echo "打包完成：$TARBALL（$SHA256）"
+
+      - name: 校验安装包内容
+        run: |
+          set -e
+          TARBALL="${{ steps.pack.outputs.tarball }}"
+          # 用 tar 独立确认一次，不依赖打包脚本自己的自检。
+          tar -tzf "$TARBALL" > /tmp/contents.txt
+          echo "--- 包内容 ---"
+          cat /tmp/contents.txt
+          for required in package/lib/index.js package/cordis.patch.yml package/README.md package/LICENSE; do
+            if ! grep -qx "$required" /tmp/contents.txt; then
+              echo "::error::安装包里缺少 $required"
+              exit 1
+            fi
+          done
+          if grep -qE 'package/(src|test|scripts|node_modules)/' /tmp/contents.txt; then
+            echo "::error::安装包里混进了源码或依赖目录"
+            exit 1
+          fi
+          echo "安装包内容校验通过"
+
+      - name: 上传构建产物（所有触发方式都保存）
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-ai-debate-${{ steps.pack.outputs.version }}
+          path: ${{ steps.pack.outputs.tarball }}
+          retention-days: 30
+
+      - name: 创建 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TARBALL="${{ steps.pack.outputs.tarball }}"
+          SHA256="${{ steps.pack.outputs.sha256 }}"
+          VERSION="${{ steps.pack.outputs.version }}"
+
+          # 从 CHANGELOG.md 里截取当前版本的段落作为发布说明。
+          awk -v ver="## [$VERSION]" '
+            index($0, ver) == 1 { capture = 1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > /tmp/notes.md
+
+          if [ ! -s /tmp/notes.md ]; then
+            echo "CHANGELOG.md 里没有 $VERSION 的条目，使用默认说明"
+            printf 'AI代吵架 v%s\n\n安装：\n```bash\ndsh plugin --profile <profile> add github:%s/dsh-ai-debate#v%s\n```\n' \
+              "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" > /tmp/notes.md
+          fi
+
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "### 安装"
+            echo ""
+            echo '```bash'
+            echo "dsh plugin --profile <profile> add github:${GITHUB_REPOSITORY}#v${VERSION}"
+            echo "# 或使用下方附件"
+            echo "dsh plugin --profile <profile> add ./${TARBALL}"
+            echo '```'
+            echo ""
+            echo "SHA-256：\`${SHA256}\`"
+          } >> /tmp/notes.md
+
+          gh release create "v${VERSION}" "$TARBALL" \
+            --title "AI代吵架 v${VERSION}" \
+            --notes-file /tmp/notes.md \
+            --verify-tag

@@ -1,0 +1,53 @@
+# dsh-ai-debate bundle patch: inserts the host-side plugin row into the
+# profile roster.
+#
+# The row `id` is `dsh-ai-debate`, which must equal the settings namespace
+# (src/index.ts `name`) and half of the browser half's `plugins.row.config` key
+# (`<package name>#<row id>` = `dsh-ai-debate#dsh-ai-debate`). All three must
+# agree, or the Plugins page never grows the 「配置」 control and the
+# configuration page silently never appears.
+#
+# The `dsh.client` declaration in package.json makes the browser half
+# (exports "./client", served at /plugins/dsh-ai-debate/client.js) load in the
+# Web GUI — the five-section configuration page.
+#
+# This file carries NO credentials. The Cookie and the model API key live in
+# the Host credential store (ctx.credentials), reached through the page's
+# credential fields. The two legacy secret fields below are here only so a
+# v0.1.5 profile that already has them keeps working; leave them empty for a
+# fresh install.
+- insert:
+    - id: dsh-ai-debate
+      name: 'dsh-ai-debate'
+      config:
+        enabled: true
+        ownerUserId: ''
+        ownerUserName: ''
+        aiAccountName: ''
+        aiAccountUserId: ''
+        allowedOwnerIds: ''
+        personaStyle: tieba_veteran
+        intensity: 3
+        maxLength: 150
+        emojiLevel: 0
+        sarcasmLevel: 2
+        directness: 4
+        llmBaseUrl: ''
+        llmModel: ''
+        llmTimeoutMs: 120000
+        llmTemperature: 0.4
+        llmMaxOutputTokens: 0
+        contextPreset: small
+        contextTokens: 0
+        interactionMode: manual
+        maxAutoPerSession: 0
+        cooldownSeconds: 60
+        maxPerThread: 10
+        maxFloorPages: 60
+        pageDelayMs: 400
+        requestTimeoutMs: 20000
+        requestRetries: 2
+        storeDir: ''
+        sessionTtlDays: 7
+        announceToAgent: true
+        logLevel: info
