@@ -2,6 +2,84 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.1] — 2026-10-28
+
+跨平台架构加固。0.2.0 把插件拆成了「通用核心 + 可插拔平台」，但拆完才发现
+**接口是通用的、行为还是贴吧的**：链接能解析、凭据能分清、发帖闸门却绕得过，
+楼层号这种贴吧专有的东西还卡在核心的必经路径上。这一轮把这四处补齐，
+不是新增功能，是让 0.2.0 那句「平台无关」真的成立。
+
+### 一、能力闸门接在真实发布路径上
+
+0.2.0 引入了 `assertCapability`，规定 `unverified` 也 fail-closed（代码存在
+不等于发得出去）。但它当时只是被导出，**没有任何生产路径调用它** ——
+所有测试都是直接调 `assertCapability` 断言它抛错，于是「闸门存在」和
+「闸门拦住了一次真实发表」被混为一谈。
+
+现在 `publisher.ts` 在真正发送前调用它，并且判断用的是**候选自己的快照**
+（`candidate.targetSnapshot.targetKind`），不是会话上那个可选字段：
+
+```ts
+function capabilityForSession(
+  session: StoredSession,
+  candidate: StoredCandidate,
+): 'comment.publish' | 'comment.reply' {
+  const kind = candidate.targetSnapshot?.targetKind ?? session.targetKind ?? 'nested'
+  return kind === 'nested' ? 'comment.reply' : 'comment.publish'
+}
+```
+
+此前两者分开读，出现过「按 `comment.publish` 获批、实际按回复发出去」的情况 ——
+检查的能力和真正执行的动作不是同一件事。回退顺序与发送路径逐字一致，
+两边不会再漂移。
+
+`test/platform-routing.test.ts` 的「只读平台在真实发表路径上被拒绝，且平台适配器
+一次都没被调用」是这条的判据：它不走 `assertCapability`，走的是真实
+`publishReply`，并断言替身适配器的 `publishes` 数组仍是空的。
+
+### 二、核心不再依赖贴吧式楼层
+
+`TimelineEntry` 原来靠 `floorNumber` 分组，`analyzer` 用
+`entry.floorNumber === container.floor.floorNumber` 圈定「这层楼里谁在跟谁吵」。
+微没有楼层号，于是接入方只能**编一个数字**，否则分析器认不出任何发言属于同一层。
+
+改用楼层帖的稳定 id 分组，`floorNumber` 降级为纯展示字段并变成可选：
+
+- `TimelineEntry` 新增必填 `floorPostId`，`floorNumber` 改为可选。
+- `Floor.floorNumber`、`Statement.floorNumber`、`Dispute.floorNumber`、
+  `TargetSnapshot.floorNumber` 全部改为可选 —— 平台不给就不给。
+- `describeParticipants` / `nestedOf` 同时接受 id 和数字，老调用不会静默失效。
+
+**顺带修掉一个会喂给模型的真缺陷**：`compressor.ts` 无条件拼
+`第 ${dispute.floorNumber} 楼`，没有楼层号时会把字面量「第 undefined 楼」
+写进提示词，模型会当成真实位置去描述。新增 `floorLabel()`（collector）与
+`renderLocation()`（compressor）统一处理，`collector` 的进度与 issues 文案、
+`runtime` 的可疑指令告警、`target` 的目标漂移提示、`tools` 的三处界面文案
+一并改用，不再有占位符漏出去。
+
+`test/no-floor-number.test.ts` 是这条的判据：整个线程里**一个楼层号都没有**，
+从建时间线、认对手、列参与者、压上下文、还原发表目标一路走通，并断言
+输出里不含 `undefined` / `NaN`。
+
+### 三、分页完整性
+
+`collectThread` 与 `tieba/adapter` 在按楼层号排序时假定它是数字，改成
+`(a.floorNumber ?? 0) - (b.floorNumber ?? 0)`，没有号时保持原顺序而不崩。
+
+### 四、测试
+
+453 项全绿（0.2.0 的 445 项 + 新增 8 项楼层无关验收）。
+新增 `test/platform-routing.test.ts`（9 项：双平台同 Runtime 各读自己的帖子、
+未知链接被拒、`adapterFor` 不为别家服务、每平台只拿到自己的配置与凭据、
+命名空间不能跨读、同帖 id 额度互不影响、只读平台与 unverified 平台在真实
+发表路径上被拒）与 `test/no-floor-number.test.ts`（8 项）。
+
+### 未验证
+
+贴吧真实帖子的完整流程仍未验证：本机对 `tieba.baidu.com` 持续返回 403
+（拦截页标题「百度安全验证」，`server: bfe`），同时 `www.baidu.com` 与
+`example.com` 均正常返回 200，说明是本机 IP 被标记而非代码问题，未绕过。
+
 ## [0.2.0] — 2026-10-27
 
 平台无关的 Agent 核心。这一轮**没有新增任何功能**，它做的是把一个单平台插件

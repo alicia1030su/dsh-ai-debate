@@ -9,6 +9,7 @@
 
 import type { JsonSchemaNode, PluginContext, ToolDefinition, ToolRunContext } from './host.js'
 import { loggerOf, type Logger } from './host.js'
+import { floorLabel } from './collector.js'
 import { ellipsis, jsonSafe, renderError, renderSummary } from './render.js'
 import {
   describeFailure,
@@ -316,7 +317,7 @@ function analyzeThreadTool(runtime: Runtime, log: Logger): ToolDefinition {
             ? `争论对象：${dispute.opponent.displayName}（发言 ${dispute.opponent.postCount} 条，往来 ${dispute.opponentEvidence?.exchanges ?? 0} 次）`
             : '争论对象：未确定',
         )
-        lines.push(`争论位置：第 ${dispute.floorNumber} 楼`)
+        lines.push(`争论位置：${floorLabel(dispute.floorNumber, dispute.floorPostId)}`)
         if (dispute.notes.length > 0) lines.push(`备注：${dispute.notes.join('；')}`)
         if (dispute.openQuestions.length > 0) {
           lines.push(`对方尚未被回应的问题：${dispute.openQuestions.length} 条`)
@@ -424,7 +425,7 @@ function analyzeReplyTool(runtime: Runtime, log: Logger): ToolDefinition {
         })
         const { dispute } = analysis
         const lines: string[] = []
-        lines.push(`已锁定回复 ${postId}（第 ${dispute.floorNumber} 楼）`)
+        lines.push(`已锁定回复 ${postId}（${floorLabel(dispute.floorNumber, dispute.floorPostId)}）`)
         lines.push(`主人：${dispute.owner.displayName}`)
         lines.push(`争论对象：${dispute.opponent?.displayName ?? '未确定'}`)
         if (dispute.needsConfirmation) lines.push(`⚠️ 需要确认：${dispute.notes.join('；')}`)
@@ -668,7 +669,7 @@ function getSessionTool(runtime: Runtime, log: Logger): ToolDefinition {
         lines.push(`帖子：${session.threadTitle || '（无标题）'} · ${session.forumName}吧`)
         lines.push(`主人：${session.ownerName ?? session.ownerKey}`)
         lines.push(`对手：${session.opponentName ?? '未确定'}`)
-        lines.push(`争论位置：第 ${session.disputeFloorNumber} 楼 / 召唤回复 ${session.triggerPostId}`)
+        lines.push(`争论位置：${floorLabel(session.disputeFloorNumber, session.disputeFloorPostId ?? session.triggerPostId)} / 召唤回复 ${session.triggerPostId}`)
         lines.push(
           `人格：${session.persona.style}（强度 ${session.persona.intensity}，上限 ${session.persona.maxLength} 字）`,
         )

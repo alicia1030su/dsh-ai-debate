@@ -27,9 +27,35 @@
  * superseded rather than silently ignoring it.
  */
 
-/** Credential reference names. POSIX-identifier shaped, as the seam requires. */
+/**
+ * Credential reference names. POSIX-identifier shaped, as the seam requires.
+ *
+ * The platform-scoped one is *derived* from the platform id rather than written
+ * out, so the namespace rule (`DSH_AI_DEBATE_<PLATFORM>_<WHAT>`) is a fact about
+ * the code rather than a convention in a comment. `COOKIE_REF` keeps its literal
+ * for backward compatibility with profiles that already have that exact name
+ * stored; the derivation is asserted to agree with it in the tests.
+ */
 export const COOKIE_REF = 'DSH_AI_DEBATE_TIEBA_COOKIE'
 export const LLM_KEY_REF = 'DSH_AI_DEBATE_LLM_API_KEY'
+
+/**
+ * Build the credential reference for one platform's secret.
+ *
+ * Any platform may ask for `credentialRefFor('weibo', 'TOKEN')`; the adapter
+ * manager refuses to resolve a reference outside the asking platform's prefix, so
+ * the derivation is what puts the boundary in reach of an actual check.
+ */
+export function credentialRefFor(platform: string, what: string): string {
+  const normalised = platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')
+  return `DSH_AI_DEBATE_${normalised}_${what.toUpperCase()}`
+}
+
+/** True when a reference belongs to the given platform's namespace. */
+export function refBelongsToPlatform(ref: string, platform: string): boolean {
+  const prefix = `DSH_AI_DEBATE_${platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_`
+  return ref.startsWith(prefix)
+}
 
 /** Every reference this plugin owns, in display order. */
 export const SECRET_REFS: readonly SecretRefName[] = [COOKIE_REF, LLM_KEY_REF]

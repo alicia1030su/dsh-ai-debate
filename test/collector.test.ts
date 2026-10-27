@@ -263,7 +263,10 @@ test('hitting the page cap is reported as an incomplete read, not as the last pa
 
   // The control: the same thread read to the end is complete and says why.
   const full = await walkFloors(adapter, { platform: 'tieba', threadId: data.thread.tid }, { maxPages: 60 })
-  assert.equal(full.stopReason, 'last_page')
+  // `confirmed_end` not `last_page`: v0.2.1 renamed the reason so that only a read
+  // the platform actually corroborated can claim completion. The wording changed;
+  // the meaning (this is the good case) did not.
+  assert.equal(full.stopReason, 'confirmed_end')
   assert.equal(full.truncated, false)
   assert.equal(full.complete, true)
 })

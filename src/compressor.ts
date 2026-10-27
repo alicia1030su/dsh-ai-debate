@@ -172,19 +172,33 @@ export function clampText(text: string, limit: number): string {
   return `${flat.slice(0, Math.max(1, limit - 1))}…`
 }
 
+/**
+ * Where a statement sits, for the model's benefit.
+ *
+ * v0.2.1: platforms are no longer required to number their posts. Rendering
+ * `${floorNumber}楼` unconditionally used to hand the model the literal string
+ * "undefined楼", which reads as a real place and invites the model to describe
+ * it. When there is no number, locate the post by id instead — never print a
+ * placeholder.
+ */
+function renderLocation(floorNumber: number | undefined, postId: string, nested = false): string {
+  if (floorNumber === undefined) return nested ? `${postId}（该楼下的回复）` : postId
+  return nested ? `${floorNumber}楼楼中楼 ${postId}` : `${floorNumber}楼 ${postId}`
+}
+
 /** Render one statement as an attributed line. */
 function renderStatement(statement: Statement, quoteLimit: number): string {
   const speaker = statement.authorName ?? statement.authorKey
   const target = statement.replyToName ? ` → ${statement.replyToName}` : ''
-  return `[${statement.floorNumber}楼 ${statement.postId}] ${speaker}${target}：${clampText(statement.content, quoteLimit)}`
+  return `[${renderLocation(statement.floorNumber, statement.postId)}] ${speaker}${target}：${clampText(statement.content, quoteLimit)}`
 }
 
 /** Render one timeline entry as an attributed line. */
 function renderEntry(entry: TimelineEntry, quoteLimit: number): string {
   const speaker = entry.authorName ?? entry.authorId ?? '未知'
   const target = entry.replyToName ? ` → ${entry.replyToName}` : ''
-  const where = entry.kind === 'floor' ? `${entry.floorNumber}楼` : `${entry.floorNumber}楼楼中楼`
-  return `[${where} ${entry.postId}] ${speaker}${target}：${clampText(entry.content, quoteLimit)}`
+  const where = renderLocation(entry.floorNumber, entry.postId, entry.kind === 'nested')
+  return `[${where}] ${speaker}${target}：${clampText(entry.content, quoteLimit)}`
 }
 
 /**
@@ -268,7 +282,7 @@ export function compressContext(input: {
     `帖子标题：${collected.thread.title || '（该帖没有标题）'}`,
     `所在贴吧：${collected.thread.forum.name}`,
     `楼主：${collected.thread.authorName ?? '未知'}（${collected.thread.authorId ?? '无 id'}）`,
-    `争论位置：第 ${dispute.floorNumber} 楼`,
+    `争论位置：${dispute.floorNumber === undefined ? `楼层 ${dispute.floorPostId}` : `第 ${dispute.floorNumber} 楼`}`,
     collected.thread.content
       ? `主帖开头：${clampText(collected.thread.content, quoteLimit)}`
       : '主帖正文：空',

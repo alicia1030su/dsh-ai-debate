@@ -40,7 +40,7 @@ export interface Participant {
 /** One statement attributed to a participant. */
 export interface Statement {
     readonly postId: string;
-    readonly floorNumber: number;
+    readonly floorNumber?: number;
     readonly authorKey: string;
     readonly authorName?: string;
     readonly content: string;
@@ -63,7 +63,7 @@ export interface OpponentEvidence {
 }
 /** The reconstructed dispute. */
 export interface Dispute {
-    readonly floorNumber: number;
+    readonly floorNumber?: number;
     readonly floorPostId: string;
     readonly owner: Participant;
     readonly opponent?: Participant;
@@ -138,7 +138,7 @@ export declare function isSubstantive(content: string): boolean;
  */
 export declare function extractClaims(statements: readonly Statement[], limit?: number): readonly string[];
 /** Summarize a floor's participants, for the UI and the compressor. */
-export declare function describeParticipants(collected: CollectedThread, floorNumber: number): readonly Participant[];
-/** All nested replies under a floor, in order. */
-export declare function nestedOf(collected: CollectedThread, floorNumber: number): readonly NestedReply[];
+export declare function describeParticipants(collected: CollectedThread, floor: string | number): readonly Participant[];
+/** All nested replies under a floor, addressed by post id or displayed number. */
+export declare function nestedOf(collected: CollectedThread, floor: string | number): readonly NestedReply[];
 //# sourceMappingURL=analyzer.d.ts.map

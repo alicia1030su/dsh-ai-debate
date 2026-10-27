@@ -78,18 +78,33 @@ export interface FloorWithNested {
  * These are deliberately distinct: "the platform says that was the last page" and
  * "I hit my own page cap" produce the same short floor list but mean opposite
  * things about trustworthiness, and the UI has to be able to say which happened.
+ *
+ * **Only `confirmed_end` is positive evidence that the read is complete.** Every
+ * other value means the walk ended without proving there was nothing more —
+ * including `empty_page` and `repeated_page`, which v0.2.0 treated as a normal
+ * end. That was the bug: a platform that returned nothing on page 1, or repeated
+ * the same rows until the walk gave up, produced `complete: true` on the strength
+ * of having read no data at all.
  */
 export type StopReason =
-  /** Every declared page was read. */
-  | 'last_page'
+  /** The platform stated this was the last page, or the declared total was reached. */
+  | 'confirmed_end'
+  /** A page came back empty, with no declared total to corroborate it. */
+  | 'empty_page'
+  /** A page contained only rows already seen, with no declared total to corroborate it. */
+  | 'repeated_page'
   /** The walk's own `maxPages` was reached while more pages existed. */
   | 'page_cap'
-  /** A request failed. */
-  | 'error'
-  /** A page was empty or contained only already-seen rows. */
-  | 'exhausted'
+  /** A request failed outright. */
+  | 'request_error'
+  /** The platform rate-limited the channel. */
+  | 'rate_limited'
   /** A degraded source returned fewer rows than it claimed. */
   | 'degraded'
+  /** The platform reports the content as deleted or unavailable. */
+  | 'deleted_or_unavailable'
+  /** The walk ended for a reason this module cannot classify. */
+  | 'unknown'
 
 /** The outcome of walking every floor page. */
 export interface FloorWalk {
@@ -127,7 +142,7 @@ export async function walkFloors(
   let failed: string | undefined
   // Tracked separately from `page` because the loop can end for several reasons
   // at the same page number, and only some of them mean "nothing left to read".
-  let stopped: StopReason = 'exhausted'
+  let stopped: StopReason = 'unknown'
   let truncated = false
 
   while (page <= maxPages) {
@@ -136,7 +151,15 @@ export async function walkFloors(
       result = await adapter.getReplies(ref, page, options.signal)
     } catch (error) {
       failed = (error as Error).message
-      stopped = 'error'
+      // A rate-limit is not the same fact as a transport error: one says "slow
+      // down and the data is still there", the other says "the read failed".
+      const code = (error as { code?: unknown }).code
+      stopped =
+        code === 'rate_limited'
+          ? 'rate_limited'
+          : code === 'not_found' || code === 'forbidden'
+            ? 'deleted_or_unavailable'
+            : 'request_error'
       break
     }
     pagesRead += 1
@@ -154,16 +177,37 @@ export async function walkFloors(
     }
     options.onPage?.(page, seen.size)
 
-    if (result.floors.length === 0 || added === 0) {
-      stopped = 'exhausted'
+    // A declared total is corroboration: when the platform tells us how many
+    // floors exist, reaching that number is proof, and falling short is evidence
+    // of a gap. Without one, an empty or repeating page proves only that the walk
+    // has stopped producing new data — not that there is none.
+    const reachedDeclaredTotal =
+      declaredTotal !== undefined && declaredTotal > 0 && seen.size >= declaredTotal
+
+    if (result.floors.length === 0) {
+      stopped = reachedDeclaredTotal ? 'confirmed_end' : 'empty_page'
+      break
+    }
+    if (added === 0) {
+      // The page held rows, but every one was already seen. That is the "platform
+      // repeats the last page forever" case.
+      stopped = reachedDeclaredTotal ? 'confirmed_end' : 'repeated_page'
+      break
+    }
+    if (reachedDeclaredTotal) {
+      stopped = 'confirmed_end'
       break
     }
     if (totalPages !== undefined && page >= totalPages) {
-      stopped = 'last_page'
+      stopped = 'confirmed_end'
       break
     }
     if (!result.hasMore) {
-      stopped = 'last_page'
+      // `hasMore: false` is the platform's own word that this was the last page.
+      // It is weaker evidence than a declared total (the platform could be wrong,
+      // or the field could be a default), but it *is* the platform stating an end
+      // rather than the walk inferring one from silence.
+      stopped = 'confirmed_end'
       break
     }
     // The page cap is a self-imposed limit. Hitting it while the platform still
@@ -177,19 +221,32 @@ export async function walkFloors(
     page += 1
   }
 
-  const floors = [...seen.values()].sort((a, b) => a.floorNumber - b.floorNumber)
+  const floors = [...seen.values()].sort((a, b) => (a.floorNumber ?? 0) - (b.floorNumber ?? 0))
   const missingCount =
     declaredTotal !== undefined && declaredTotal > floors.length ? declaredTotal - floors.length : undefined
+
+  // Completeness requires positive evidence, not merely the absence of an error.
+  //
+  // Three independent things must hold:
+  // 1. the walk ended because the platform said so (`confirmed_end`);
+  // 2. nothing failed on the way (`failed === undefined`);
+  // 3. where a total was declared, every declared floor is actually here.
+  //
+  // The v0.2.0 rule was `failed === undefined && missingCount === undefined &&
+  // !truncated`, which is satisfied by "read one empty page and stopped" — the
+  // platform had said nothing, and the plugin still claimed a complete read.
+  const complete =
+    failed === undefined &&
+    stopped === 'confirmed_end' &&
+    missingCount === undefined &&
+    !truncated
 
   return {
     floors,
     declaredTotal,
     totalPages,
     pagesRead,
-    // Completion means every declared floor is present. Deleted floors leave
-    // permanent gaps, and a page cap leaves unread pages, so both are reported as
-    // incomplete rather than hidden.
-    complete: failed === undefined && missingCount === undefined && !truncated && stopped !== 'page_cap',
+    complete,
     missingCount,
     error: failed,
     stopReason: stopped,
@@ -330,14 +387,14 @@ export async function collectThread(
     }
     options.onProgress?.({
       stage: 'nested',
-      message: `正在读取第 ${floor.floorNumber} 楼的楼中楼…`,
+      message: `正在读取 ${floorLabel(floor.floorNumber, floor.postId)} 的楼中楼…`,
       current: nestedDone,
       total: Math.min(nestedTargets.length, nestedLimit),
     })
     const nested = await walkNested(adapter, ref, floor, { signal: options.signal })
     if (nested.error) {
       nestedIncomplete = true
-      issues.push(`第 ${floor.floorNumber} 楼楼中楼读取失败：${nested.error}`)
+      issues.push(`${floorLabel(floor.floorNumber, floor.postId)} 楼中楼读取失败：${nested.error}`)
     } else if (!nested.complete) {
       nestedIncomplete = true
       // Say which way it is incomplete: a degraded source read fewer replies from
@@ -346,7 +403,7 @@ export async function collectThread(
         ? '楼中楼分页接口被限流，使用了帖子页内联的不完整副本'
         : '读取到的条数少于平台声明'
       issues.push(
-        `第 ${floor.floorNumber} 楼楼中楼不完整（${reason}）：平台声明 ${floor.nestedCount ?? '?'} 条，` +
+        `${floorLabel(floor.floorNumber, floor.postId)} 楼中楼不完整（${reason}）：平台声明 ${floor.nestedCount ?? '?'} 条，` +
           `读取到 ${nested.replies.length} 条`,
       )
     }
@@ -388,7 +445,18 @@ export async function locateReply(
 export interface TimelineEntry {
   readonly kind: 'floor' | 'nested'
   readonly postId: string
-  readonly floorNumber: number
+  /**
+   * The floor this entry belongs to, by the floor post's stable id.
+   *
+   * v0.2.1: this is the grouping key. It used to be `floorNumber`, which forced
+   * any non-forum platform to invent a number so that a microblog post and its
+   * comments could be told apart from the next one. The post id already
+   * identifies the floor uniquely on every platform and needs no invention, so
+   * the core groups on it and `floorNumber` is left for display only.
+   */
+  readonly floorPostId: string
+  /** The number the platform displays for the floor, when it displays one. */
+  readonly floorNumber?: number
   readonly authorId?: string
   readonly authorName?: string
   /** Display order within the floor; floors use 0. */
@@ -406,6 +474,7 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
     out.push({
       kind: 'floor',
       postId: entry.floor.postId,
+      floorPostId: entry.floor.postId,
       floorNumber: entry.floor.floorNumber,
       authorId: entry.floor.authorId,
       authorName: entry.floor.authorName,
@@ -417,6 +486,7 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
       out.push({
         kind: 'nested',
         postId: reply.postId,
+        floorPostId: entry.floor.postId,
         floorNumber: entry.floor.floorNumber,
         authorId: reply.authorId,
         authorName: reply.authorName,
@@ -429,6 +499,18 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
     })
   }
   return out
+}
+
+/**
+ * How to name a floor in human-facing text.
+ *
+ * v0.2.1: `floorNumber` is optional — a microblog has no 楼层 — so every message
+ * that used to interpolate `${floorNumber} 楼` could print "第 undefined 楼".
+ * One helper keeps that from coming back: the label is a number when the
+ * platform gives one, and the post id when it does not.
+ */
+export function floorLabel(floorNumber: number | undefined, postId: string): string {
+  return floorNumber === undefined ? postId : `第 ${floorNumber} 楼`
 }
 
 /** Find an entry in a timeline by post id. */

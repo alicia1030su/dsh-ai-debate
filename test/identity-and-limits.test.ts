@@ -211,7 +211,14 @@ test('the per-thread cap is counted from the ledger, so expiry cannot reset it',
     const second = makeRig({ dir, maxPublishesPerThread: 1, sessionTtlMs: 1 })
     await second.store.ready()
     assert.equal(second.store.getSession(analysis.sessionId), undefined, '旧会话应已被清理')
-    assert.equal(second.store.threadPublishActivity(data.thread.id).confirmed, 1, '流水账应记住这次发表')
+    // The signature takes (platform, threadId) since v0.2.1: thread ids are only
+    // unique within a platform, so counting activity without one was a
+    // cross-platform bug waiting for a second platform to exist.
+    assert.equal(
+      second.store.threadPublishActivity(data.thread.platform, data.thread.id).confirmed,
+      1,
+      '流水账应记住这次发表',
+    )
 
     // A different trigger on the same thread, which has already used its quota.
     const other = await runAnalysis(second.runtime, { url: data.thread.url, postId: 'n4' })

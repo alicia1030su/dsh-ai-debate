@@ -64,18 +64,33 @@ export interface FloorWithNested {
  * These are deliberately distinct: "the platform says that was the last page" and
  * "I hit my own page cap" produce the same short floor list but mean opposite
  * things about trustworthiness, and the UI has to be able to say which happened.
+ *
+ * **Only `confirmed_end` is positive evidence that the read is complete.** Every
+ * other value means the walk ended without proving there was nothing more —
+ * including `empty_page` and `repeated_page`, which v0.2.0 treated as a normal
+ * end. That was the bug: a platform that returned nothing on page 1, or repeated
+ * the same rows until the walk gave up, produced `complete: true` on the strength
+ * of having read no data at all.
  */
 export type StopReason = 
-/** Every declared page was read. */
-'last_page'
+/** The platform stated this was the last page, or the declared total was reached. */
+'confirmed_end'
+/** A page came back empty, with no declared total to corroborate it. */
+ | 'empty_page'
+/** A page contained only rows already seen, with no declared total to corroborate it. */
+ | 'repeated_page'
 /** The walk's own `maxPages` was reached while more pages existed. */
  | 'page_cap'
-/** A request failed. */
- | 'error'
-/** A page was empty or contained only already-seen rows. */
- | 'exhausted'
+/** A request failed outright. */
+ | 'request_error'
+/** The platform rate-limited the channel. */
+ | 'rate_limited'
 /** A degraded source returned fewer rows than it claimed. */
- | 'degraded';
+ | 'degraded'
+/** The platform reports the content as deleted or unavailable. */
+ | 'deleted_or_unavailable'
+/** The walk ended for a reason this module cannot classify. */
+ | 'unknown';
 /** The outcome of walking every floor page. */
 export interface FloorWalk {
     readonly floors: readonly Floor[];
@@ -134,7 +149,18 @@ export declare function locateReply(adapter: PlatformAdapter, ref: ThreadRef, po
 export interface TimelineEntry {
     readonly kind: 'floor' | 'nested';
     readonly postId: string;
-    readonly floorNumber: number;
+    /**
+     * The floor this entry belongs to, by the floor post's stable id.
+     *
+     * v0.2.1: this is the grouping key. It used to be `floorNumber`, which forced
+     * any non-forum platform to invent a number so that a microblog post and its
+     * comments could be told apart from the next one. The post id already
+     * identifies the floor uniquely on every platform and needs no invention, so
+     * the core groups on it and `floorNumber` is left for display only.
+     */
+    readonly floorPostId: string;
+    /** The number the platform displays for the floor, when it displays one. */
+    readonly floorNumber?: number;
     readonly authorId?: string;
     readonly authorName?: string;
     /** Display order within the floor; floors use 0. */
@@ -146,6 +172,15 @@ export interface TimelineEntry {
 }
 /** Build the ordered timeline the analyzer reads. */
 export declare function buildTimeline(collected: CollectedThread): readonly TimelineEntry[];
+/**
+ * How to name a floor in human-facing text.
+ *
+ * v0.2.1: `floorNumber` is optional — a microblog has no 楼层 — so every message
+ * that used to interpolate `${floorNumber} 楼` could print "第 undefined 楼".
+ * One helper keeps that from coming back: the label is a number when the
+ * platform gives one, and the post id when it does not.
+ */
+export declare function floorLabel(floorNumber: number | undefined, postId: string): string;
 /** Find an entry in a timeline by post id. */
 export declare function findInTimeline(timeline: readonly TimelineEntry[], postId: string): TimelineEntry | undefined;
 /** The floor that contains a timeline entry. */

@@ -16,6 +16,7 @@
 
 import { createHash } from 'node:crypto'
 
+import { floorLabel } from './collector.js'
 import { PlatformError, type PublishTarget, type ReplyContext, type TargetSnapshot } from './types.js'
 
 /**
@@ -171,7 +172,7 @@ export async function resolveTarget(
       ok: false,
       problem: 'wrong_floor',
       message:
-        `目标回复现在挂在第 ${context.floor.floorNumber} 楼（${context.floor.postId}）下，` +
+        `目标回复现在挂在 ${floorLabel(context.floor.floorNumber, context.floor.postId)}（${context.floor.postId}）下，` +
         `与分析的楼层 ${expected.floorPostId} 不一致，回复位置可能已变化`,
     }
   }

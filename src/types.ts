@@ -77,8 +77,14 @@ export interface Thread {
 /** One first-level floor (楼层). */
 export interface Floor {
   readonly platform: PlatformId
-  /** The floor number as displayed (1-based). Not the post id. */
-  readonly floorNumber: number
+  /**
+   * The floor number as displayed (1-based), when the platform displays one.
+   *
+   * v0.2.1 made this optional. It is a *label*: a microblog post has no 楼层, and
+   * requiring a number here only made such platforms invent one. Nothing in the
+   * core groups or addresses by this value any more — `postId` does that.
+   */
+  readonly floorNumber?: number
   /** Stable post id of this floor. */
   readonly postId: string
   readonly authorId?: string
@@ -240,7 +246,7 @@ export interface TargetSnapshot {
   readonly platform: PlatformId
   readonly threadId: string
   readonly floorPostId: string
-  readonly floorNumber: number
+  readonly floorNumber?: number
   /** Absent when the target is the floor itself. */
   readonly nestedReplyId?: string
   readonly targetPostId: string

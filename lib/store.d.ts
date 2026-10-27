@@ -337,7 +337,22 @@ export declare class DebateStore {
      * of a sent reply, but it is not evidence of a free slot either; the caller decides
      * how conservative to be with it.
      */
-    threadPublishActivity(threadId: string): {
+    /**
+     * Publish activity for one thread **on one platform**.
+     *
+     * The platform is part of the scope because thread ids are not globally unique:
+     * `tieba/12345` and `weibo/12345` are different conversations, and counting
+     * them together would let activity on one platform exhaust the other's quota —
+     * or, worse, let one platform's cooldown silently suppress a publish on another.
+     *
+     * The old signature took only `threadId` and matched every row with that id. It
+     * was correct while there was one platform and became a cross-platform bug the
+     * moment a second one existed.
+     *
+     * @param platform the platform id; must be passed explicitly
+     * @param threadId the thread id, unique only within the platform
+     */
+    threadPublishActivity(platform: string, threadId: string): {
         readonly confirmed: number;
         readonly unresolved: number;
         readonly lastConfirmedAt: number | undefined;

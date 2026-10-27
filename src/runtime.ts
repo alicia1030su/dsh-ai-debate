@@ -28,6 +28,7 @@ import {
   assertCollected,
   buildTimeline,
   collectThread,
+  floorLabel,
   type CollectedThread,
   type TimelineEntry,
 } from './collector.js'
@@ -55,6 +56,18 @@ import { splitIds } from './config.js'
 
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
+  /**
+   * The adapter for the platform this call is about.
+   *
+   * Kept as a getter, not a stored instance: in a multi-platform deployment the
+   * adapter depends on which platform the URL belongs to, and a single field read
+   * once at mount is what made "the registry says Weibo but every request went to
+   * Tieba" possible.
+   *
+   * When {@link Runtime.platforms} can build adapters, prefer {@link adapterFor}
+   * — this getter answers "the default platform", which is only correct for a
+   * single-platform deployment and for callers that have already resolved one.
+   */
   readonly adapter: PlatformAdapter
   readonly store: DebateStore
   readonly policy: InteractionPolicy
@@ -66,18 +79,11 @@ export interface Runtime {
    * The platform registry, when the shell has one.
    *
    * Optional so the many v0.1.x tests that build a `Runtime` from a bare adapter
-   * keep compiling. When present, URL resolution and capability checks go
-   * through it; when absent, {@link resolveThreadRef} falls back to the adapter's
-   * own id, which is enough for a single-platform deployment.
+   * keep compiling. When present, URL resolution, adapter selection and capability
+   * checks all go through it; when absent, {@link resolveThreadRef} falls back to
+   * the adapter's own id, which is enough for a single-platform deployment.
    */
-  readonly platforms?: {
-    /** Find the platform that owns a URL and parse it. Throws when unknown. */
-    resolveUrl(url: string): ThreadRef
-    /** The registry's diagnostics, for the health report. */
-    diagnostics(): RegistryDiagnostics
-    /** The rich capability matrix for one platform. */
-    capabilitiesOf(platform: string): import('./platforms/contracts.js').PlatformCapabilityMatrix
-  }
+  readonly platforms?: PlatformRuntime
   /**
    * The credential state, when this deployment can report one.
    *
@@ -90,6 +96,38 @@ export interface Runtime {
     readonly canPublish: boolean
     readonly error?: string
   }
+}
+
+/**
+ * The platform services the pipeline needs.
+ *
+ * Deliberately an interface rather than the concrete `PlatformRegistry`: the
+ * runtime must not be able to register or unregister platforms, and a test can
+ * supply its own implementation without building a real registry.
+ */
+export interface PlatformRuntime {
+  /** Find the platform that owns a URL and parse it. Throws when unknown. */
+  resolveUrl(url: string): ThreadRef
+  /** The registry's diagnostics, for the health report. */
+  diagnostics(): RegistryDiagnostics
+  /** The rich capability matrix for one platform. */
+  capabilitiesOf(platform: string): import('./platforms/contracts.js').PlatformCapabilityMatrix
+  /**
+   * Build (or reuse) the adapter for one platform.
+   *
+   * This is the method that makes multi-platform operation real: the adapter is
+   * chosen by platform id and created from *that platform's* configuration and
+   * credentials, so two platforms in one process cannot share an identity.
+   */
+  adapterFor(platform: string): PlatformAdapter
+  /**
+   * Check a capability before a write, throwing when it is not proven.
+   *
+   * Present here so the publish path has one mandatory gate rather than relying
+   * on each caller to remember. `supported` is required; `unverified`,
+   * `degraded`, `permission_required` and `unavailable` all refuse.
+   */
+  assertCapability(platform: string, capability: import('./platforms/contracts.js').CapabilityName): void
 }
 
 /**
@@ -113,7 +151,63 @@ export function resolveThreadRef(runtime: Runtime, url: string): ThreadRef {
     // column and the session disagree; trust the adapter for the column.
     return { ...parsed, platform: adapterId }
   }
-  return { platform: adapterId, threadId: url, url }
+  // Last resort: an id-shaped input is a thread id.
+  //
+  // Anything else is refused. The previous version returned the raw string as the
+  // thread id, so a pasted link became `kz=https://tieba.baidu.com/p/123` and the
+  // platform answered 404 — a confusing failure a long way from its cause.
+  if (/^[A-Za-z0-9_-]{4,}$/.test(url.trim())) {
+    return { platform: adapterId, threadId: url.trim(), url: url.trim() }
+  }
+  throw new Error(
+    `无法把「${url}」识别成帖子：它既不是已注册平台的链接，也不像帖子 ID。` +
+      '请粘贴完整的帖子链接，或直接提供帖子 ID。',
+  )
+}
+
+/**
+ * The adapter for one platform.
+ *
+ * The single point every stage calls. With a registry it asks for the platform's
+ * own adapter (built from that platform's config and credentials); without one it
+ * returns the single adapter the Runtime was constructed with, which is exactly
+ * right for a one-platform test double.
+ *
+ * Anything that reads, analyses, generates or publishes must call this rather
+ * than touching `runtime.adapter`, or the "resolved platform" and "adapter used"
+ * can drift apart.
+ */
+export function adapterFor(runtime: Runtime, platform: string): PlatformAdapter {
+  if (runtime.platforms === undefined) {
+    // A bare Runtime has exactly one adapter. Returning it for a *different*
+    // platform id would be the bug this function exists to prevent, so refuse.
+    if (platform !== runtime.adapter.id) {
+      throw new Error(
+        `这个 Runtime 只带了一个「${runtime.adapter.id}」适配器，` +
+          `无法处理「${platform}」的请求。请通过平台注册中心构造 Runtime。`,
+      )
+    }
+    return runtime.adapter
+  }
+  return runtime.platforms.adapterFor(platform)
+}
+
+/**
+ * Check that a platform may perform a write, before anything irreversible.
+ *
+ * Runs the registry's capability gate when there is a registry. A bare Runtime
+ * (a test double) has no declarations to check against, so it passes — that is
+ * not a bypass for production: production always has a registry, and the
+ * publisher's other checks (identity, target snapshot, idempotency, credential
+ * phase) all still run.
+ */
+export function assertPlatformCapability(
+  runtime: Runtime,
+  platform: string,
+  capability: import('./platforms/contracts.js').CapabilityName,
+): void {
+  if (runtime.platforms === undefined) return
+  runtime.platforms.assertCapability(platform, capability)
 }
 
 /** A progress callback the tools pass through to the UI. */
@@ -186,56 +280,48 @@ export function policyFromConfig(config: ResolvedConfig): InteractionPolicy {
 }
 
 /**
- * Build a platform adapter for one configuration snapshot.
+ * The settings one platform's adapter is allowed to see.
  *
- * The adapter owns a cookie jar and a cache of platform metadata, so it cannot be
- * reused across a config change: a new cookie would be ignored and paging would
- * keep the old timeouts. Callers rebuild on every config version instead.
+ * This used to put `config.tiebaCookie` into a generic `cookie` field for every
+ * platform, which quietly defeated the whole point of platform scoping: the
+ * field was named neutrally, so a future Weibo adapter reading `settings.cookie`
+ * would have received a Tieba session and nothing in the code said that was
+ * wrong.
  *
- * Since v0.2.0 the concrete class is never named here: the registry is asked to
- * build whichever adapter belongs to `platformId`. When no registry is supplied
- * (a bare test Runtime) the caller's `fallback` factory is used, which keeps
- * every single-platform test working without a registry.
+ * Now the function is **per platform**, and a platform it knows nothing about
+ * receives only the neutral request parameters — no cookie at all. Credentials
+ * come through `PlatformContext.resolveCredential`, which the adapter manager
+ * namespaces; they never travel in this object.
+ *
+ * @param config the resolved configuration
+ * @param platform the platform id the settings are for
  */
-export function makeAdapter(
+export function platformSettingsOf(
   config: ResolvedConfig,
-  options: {
-    registry?: import('./platforms/registry.js').PlatformRegistry
-    platformId?: string
-    /** Used only when no registry is supplied. */
-    fallback?: (context: { settings: Readonly<Record<string, unknown>> }) => PlatformAdapter
-  } = {},
-): PlatformAdapter {
-  const context = adapterContextOf(config)
-  const platformId = options.platformId ?? 'tieba'
-  if (options.registry !== undefined) {
-    return options.registry.createAdapter(platformId, context)
+  platform: string,
+): Readonly<Record<string, unknown>> {
+  // Shared request tuning. None of these are secrets, and every platform needs
+  // the same polite defaults.
+  const neutral = {
+    timeoutMs: config.requestTimeoutMs,
+    retries: config.requestRetries,
+    pageDelayMs: config.pageDelayMs,
+    maxPages: config.maxFloorPages,
   }
-  if (options.fallback !== undefined) return options.fallback(context)
-  throw new Error(
-    `没有平台注册中心，也没有为「${platformId}」提供回退构造器；无法创建平台适配器`,
-  )
-}
 
-/**
- * The platform-scoped settings an adapter is allowed to see.
- *
- * Deliberately a flat, secret-free copy: an adapter receives its cookie through
- * this object and must not be handed the whole config, which would let a future
- * Weibo adapter read a Tieba cookie.
- */
-export function adapterContextOf(config: ResolvedConfig): {
-  settings: Readonly<Record<string, unknown>>
-} {
-  return {
-    settings: {
-      cookie: config.tiebaCookie || undefined,
-      timeoutMs: config.requestTimeoutMs,
-      retries: config.requestRetries,
-      pageDelayMs: config.pageDelayMs,
-      maxPages: config.maxFloorPages,
-    },
+  // Platform-specific extras. A platform not listed here gets no extra fields —
+  // in particular it gets no cookie, which is the whole point.
+  if (platform === 'tieba') {
+    return {
+      ...neutral,
+      // The legacy config field. Kept because a v0.1.5 profile has its cookie
+      // here and must keep working; the credential store overrides it when the
+      // overlay holds a value (see `applyOverlay` in index.ts).
+      cookie: config.tiebaCookie.trim() || undefined,
+    }
   }
+
+  return neutral
 }
 
 /**
@@ -266,7 +352,10 @@ export async function runAnalysis(
   const progress = input.progress ?? (() => undefined)
   progress(`正在读取帖子 ${ref.threadId}…`)
 
-  const collected = await collectThread(runtime.adapter, ref, {
+  // The adapter is chosen *by the platform the URL resolved to*. Reading it from
+  // `runtime.adapter` here is what made a correctly-identified Weibo link get
+  // read by the Tieba adapter.
+  const collected = await collectThread(adapterFor(runtime, ref.platform), ref, {
     maxPages: config.maxFloorPages,
     signal: input.signal,
     onProgress: (update) => progress(update.message),
@@ -333,7 +422,7 @@ export async function runAnalysis(
     )
   }
 
-  const participants = describeParticipants(collected, dispute.floorNumber).map((participant) => ({
+  const participants = describeParticipants(collected, dispute.floorPostId).map((participant) => ({
     displayName: participant.displayName,
     postCount: participant.postCount,
     isOwner: participant.key === dispute.owner.key,
@@ -346,7 +435,7 @@ export async function runAnalysis(
     const hits = detectInjection(entry.content)
     if (hits.length > 0) {
       securityNotes.push(
-        `第 ${entry.floorNumber} 楼 ${entry.authorName ?? entry.postId} 的发言里出现可疑指令性文本（${hits.join('、')}），已按普通用户发言处理，不会作为系统指令执行`,
+        `${floorLabel(entry.floorNumber, entry.postId)} ${entry.authorName ?? entry.postId} 的发言里出现可疑指令性文本（${hits.join('、')}），已按普通用户发言处理，不会作为系统指令执行`,
       )
     }
   }
@@ -717,7 +806,9 @@ export async function runGeneration(
     threadId: session.threadId,
     url: session.threadUrl,
   }
-  const collected = await collectThread(runtime.adapter, ref, {
+  // The session's stored platform decides which adapter re-reads the thread, so a
+  // resumed Weibo session cannot be served by the Tieba adapter.
+  const collected = await collectThread(adapterFor(runtime, session.platform), ref, {
     maxPages: config.maxFloorPages,
     signal: input.signal,
     onProgress: (update) => progress(update.message),
@@ -791,7 +882,10 @@ export async function runGeneration(
   }
 
   progress('正在核对回复目标…')
-  const resolved = await resolveTarget(runtime.adapter, targetExpectation, { signal: input.signal })
+  const resolved = await resolveTarget(adapterFor(runtime, session.platform), targetExpectation, {
+    signal: input.signal,
+    platform: session.platform,
+  })
   if (!resolved.ok) {
     await runtime.store.mutate((data) => ({
       ...data,
@@ -962,11 +1056,29 @@ export async function runPublish(
   callerSignal?.addEventListener('abort', onCallerAbort, { once: true })
 
   try {
+    const session = runtime.store.getSession(input.sessionId)
+    if (!session) {
+      return {
+        ok: false,
+        status: 'refused',
+        message: `找不到会话 ${input.sessionId}`,
+      }
+    }
     return await publishCandidate(
       {
-        adapter: runtime.adapter,
+        adapter: adapterFor(runtime, session.platform),
         store: runtime.store,
         policy: runtime.policy,
+        // The mandatory capability gate. Wiring it here means every publish path
+        // that goes through `runPublish` is checked, without each caller having to
+        // remember — and `runPublish` is the only path that can reach the platform.
+        ...(runtime.platforms === undefined
+          ? {}
+          : {
+              assertCapability: (platform: string, capability: 'comment.publish' | 'comment.reply') => {
+                runtime.platforms!.assertCapability(platform, capability)
+              },
+            }),
         // Read live so a changed aiAccountUserId applies to this publish.
         config: () => {
           const current = runtime.config()

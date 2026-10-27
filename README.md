@@ -133,17 +133,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.0
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.1
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.0.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.1.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.0.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.1.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -685,7 +685,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**436 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**453 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -709,6 +709,8 @@ node scripts/pack.mjs
 | `test/pipeline.test.ts` | 31 | 分析→生成→审核→发表主流程 |
 | `test/platform-contract.test.ts` | 17 | **跨平台契约**：两个假平台各自走完主流程；核心不含贴吧分支；能力状态与幂等按平台隔离 |
 | `test/platform-manifest.test.ts` | 9 | 未来平台清单：未实现的平台不得声明任何 supported 能力 |
+| `test/platform-routing.test.ts` | 9 | **路由与闸门**：双平台同 Runtime 各读自己的帖子；未知链接被拒；每平台只见自己的配置与凭据；只读与 unverified 平台在真实发表路径上被拒且适配器未被调用 |
+| `test/no-floor-number.test.ts` | 8 | **核心不依赖楼层号**：整帖无楼层号也能建时间线、认对手、列参与者、压上下文、还原目标；输出不含 `undefined`/`NaN` |
 | `test/publish-credential-gate.test.ts` | 9 | 凭据未证实时不发帖：拒绝在任何网络调用与幂等账之前 |
 | `test/publisher-safety.test.ts` | 58 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
 | `test/route-lifecycle.test.ts` | 4 | 路由注册与卸载生命周期 |
@@ -717,7 +719,7 @@ node scripts/pack.mjs
 | `test/target.test.ts` | 12 | 目标快照与漂移检测 |
 | `test/trigger-identity.test.ts` | 23 | 召唤定位与主人身份 |
 | `test/verification-and-auth.test.ts` | 9 | 发表后回读与登录态核对 |
-| **合计** | **436** | |
+| **合计** | **453** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

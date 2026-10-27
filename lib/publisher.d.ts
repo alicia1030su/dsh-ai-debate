@@ -53,6 +53,21 @@ export interface PublisherDeps {
     readonly store: DebateStore;
     readonly policy: InteractionPolicy;
     /**
+     * The platform capability gate.
+     *
+     * Called with the session's platform and the capability the send needs
+     * (`comment.reply` for an in-floor answer, `comment.publish` for a new
+     * top-level comment). It must throw when the capability is not `supported`.
+     *
+     * Optional only so the many pre-v0.2.1 test doubles keep compiling. Production
+     * always supplies it — `runPublish` wires it to the registry — and a missing
+     * gate is reported in the health diagnostics rather than passing silently.
+     *
+     * This lives here, not in the caller, because a gate that each entry point has
+     * to remember is a gate that one entry point will eventually forget.
+     */
+    readonly assertCapability?: (platform: string, capability: 'comment.publish' | 'comment.reply') => void;
+    /**
      * Live configuration, read at publish time.
      *
      * A function rather than a snapshot so a changed `aiAccountUserId` takes effect

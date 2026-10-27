@@ -35,6 +35,7 @@ import {
   matrixFromLegacy,
   stateOf,
   type CapabilityName,
+  type PlatformCapabilityMatrix,
   type PlatformContext,
   type PlatformProvider,
 } from '../lib/platforms/contracts.js'
@@ -253,15 +254,39 @@ function makeFakePlatform(shape: FakePlatformShape, conversation: FakeConversati
       }
     },
     describeCapabilities() {
-      return matrixFromLegacy(shape.id, {
-        thread: true,
-        replies: true,
-        nestedReplies: shape.supportsNested,
-        userProfile: false,
-        mentions: false,
-        publish: shape.canPublish,
-        authCheck: true,
-      })
+      // A *proven* matrix, not the legacy boolean bridge.
+      //
+      // The bridge turns every `true` into `unverified`, which is right for a real
+      // platform nobody has exercised — but wrong for these fakes: the whole point
+      // of the tests below is that they DO perform the read and the publish, so the
+      // platform has in fact been exercised. Declaring `supported` here lets the
+      // publish gate pass for the happy path, and `unavailable` for the read-only
+      // platform lets the refusal test prove the gate actually refuses.
+      const writeState = shape.canPublish ? 'supported' : 'unavailable'
+      const writeReason = shape.canPublish
+        ? '测试平台在同一次运行里完成了读与写，因此按已验证声明'
+        : '测试平台声明自己不提供发表能力'
+      return {
+        platform: shape.id,
+        declaredAt: new Date().toISOString(),
+        capabilities: {
+          'thread.read': { state: 'supported', reason: '测试平台实现了读取' },
+          'comment.list': { state: 'supported', reason: '测试平台实现了评论列表' },
+          'comment.paginate': { state: 'supported', reason: '测试平台实现了分页' },
+          'comment.nested': {
+            state: shape.supportsNested ? 'supported' : 'unavailable',
+            reason: shape.supportsNested ? '测试平台实现了子评论' : '测试平台不提供子评论',
+          },
+          'comment.locate': { state: 'supported', reason: '测试平台实现了按 id 定位' },
+          'identity.verify': { state: 'supported', reason: '测试平台实现了身份检查' },
+          'event.mentions': { state: 'unavailable', reason: '测试平台不提供艾特通知' },
+          'comment.publish': { state: writeState, reason: writeReason },
+          'comment.reply': { state: writeState, reason: writeReason },
+          'publish.verify': { state: writeState, reason: writeReason },
+          'media.read': { state: 'unavailable', reason: '测试平台不读取媒体内容' },
+          'user.profile': { state: 'unavailable', reason: '测试平台不提供用户资料' },
+        },
+      } as PlatformCapabilityMatrix
     },
     createAdapter(_context: PlatformContext): PlatformAdapter {
       return adapter
@@ -379,7 +404,15 @@ const SHAPE_B: FakePlatformShape = {
   account: { userId: 'b-ai-1', userName: 'B小号' },
 }
 
-/** Build a runtime over one registered fake platform. */
+/**
+ * Build a runtime over one or more registered fake platforms.
+ *
+ * `adapterFor` is wired to the *registry*, not to a field: this is what makes the
+ * test exercise real platform selection. The old version assigned
+ * `adapter: input.platform.adapter`, which meant every test would have passed
+ * even if the runtime ignored the resolved platform entirely — the exact defect
+ * v0.2.1 exists to fix.
+ */
 function makeRuntime(input: {
   platform: ReturnType<typeof makeFakePlatform>
   registry: PlatformRegistry
@@ -399,7 +432,11 @@ function makeRuntime(input: {
     llmModel: 'test-model',
   })
   const runtime: Runtime = {
-    adapter: input.platform.adapter,
+    // The default platform's adapter. Only reached by code that has not resolved a
+    // platform; every read and write path calls `adapterFor(runtime, platform)`.
+    get adapter() {
+      return input.registry.createAdapter(input.platform.adapter.id, { settings: {} })
+    },
     store,
     policy: {
       mode: 'manual',
@@ -415,6 +452,11 @@ function makeRuntime(input: {
       resolveUrl: (url) => input.registry.parseUrl(url),
       diagnostics: () => input.registry.diagnostics(),
       capabilitiesOf: (platform) => input.registry.getCapabilities(platform),
+      // Real selection: ask the registry's provider to build this platform's
+      // adapter. A test that passes a URL for platform B and then observes platform
+      // B's adapter being called has proved the routing works.
+      adapterFor: (platform) => input.registry.createAdapter(platform, { settings: {} }),
+      assertCapability: (platform, capability) => input.registry.assertCapability(platform, capability),
     },
   }
   return { runtime, dir }
@@ -548,14 +590,31 @@ test('未声明的能力按 unavailable 处理，而不是当成可用', () => {
 })
 
 test('assertCapability 对 unverified 发帖能力 fail-closed', () => {
-  const platform = makeFakePlatform(SHAPE_A, makeConversation(SHAPE_A, 3))
+  // The fake platform itself declares `supported` (it really does read and write
+  // during the other tests), so this test builds a provider that explicitly
+  // declares publishing `unverified` — the state a platform lands in when the code
+  // exists but nobody has confirmed it against a real account.
+  const base = makeFakePlatform(SHAPE_A, makeConversation(SHAPE_A, 3))
   const registry = new PlatformRegistry()
-  // A provider that declares publish but only as legacy `true` → unverified.
-  registry.register(platform.provider)
+  registry.register({
+    ...base.provider,
+    describeCapabilities: () => ({
+      ...base.provider.describeCapabilities(),
+      capabilities: {
+        ...base.provider.describeCapabilities().capabilities,
+        'comment.publish': {
+          state: 'unverified' as const,
+          reason: '代码写了，但没有在真实账号上验证过',
+        },
+      },
+    }),
+  })
   assert.throws(
     () => registry.assertCapability('fakea', 'comment.publish'),
     (error: Error) => error instanceof UnsupportedCapabilityError && /unverified/.test(error.message),
   )
+  // ...while a proven capability on the same platform still passes.
+  registry.assertCapability('fakea', 'thread.read')
 })
 
 test('声明 permission_required 的能力抛出 PermissionRequiredError 并带上所需权限', () => {
@@ -600,7 +659,11 @@ test('能力矩阵出现在注册中心诊断里，且状态没被抹平成布�
   assert.equal(row.id, 'fakea')
   assert.equal(row.order, 0)
   assert.ok(row.capabilities.capabilities['thread.read'], '每一项能力都要有状态与原因')
-  assert.equal(row.capabilities.capabilities['thread.read'].state, 'unverified')
+  // The fake declares `supported` for its read path (it really does perform the
+  // read in the pipeline tests below), and the diagnostics must carry that through
+  // rather than flattening it back to a boolean.
+  assert.equal(row.capabilities.capabilities['thread.read'].state, 'supported')
+  assert.equal(typeof row.capabilities.capabilities['thread.read'].reason, 'string')
 })
 
 test('坏掉的 provider 不会阻止其它平台注册', () => {

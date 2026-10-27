@@ -14,7 +14,7 @@
  * can check that the reply target exists.
  */
 
-import type { Floor, NestedReply } from './types.js'
+import type { NestedReply } from './types.js'
 import type { CollectedThread, TimelineEntry } from './collector.js'
 import { buildTimeline, floorOf } from './collector.js'
 
@@ -45,7 +45,7 @@ export interface Participant {
 /** One statement attributed to a participant. */
 export interface Statement {
   readonly postId: string
-  readonly floorNumber: number
+  readonly floorNumber?: number
   readonly authorKey: string
   readonly authorName?: string
   readonly content: string
@@ -70,7 +70,7 @@ export interface OpponentEvidence {
 
 /** The reconstructed dispute. */
 export interface Dispute {
-  readonly floorNumber: number
+  readonly floorNumber?: number
   readonly floorPostId: string
   readonly owner: Participant
   readonly opponent?: Participant
@@ -148,7 +148,7 @@ export function analyzeDispute(
     .filter((entry) => keyOf(entry) === ownerKey)
     .map((entry) => toStatement(entry, nameByHandle, keyOf))
 
-  const floorTimeline = timeline.filter((entry) => entry.floorNumber === container.floor.floorNumber)
+  const floorTimeline = timeline.filter((entry) => entry.floorPostId === container.floor.postId)
   const opponentPick = pickOpponent(floorTimeline, ownerKey, target, participants, notes, keyOf)
 
   const exchange = opponentPick.opponentKey
@@ -610,19 +610,40 @@ export function extractClaims(statements: readonly Statement[], limit = 8): read
   return claims
 }
 
+/**
+ * Resolve a floor address to the floor post's stable id.
+ *
+ * v0.2.1 moved floor addressing from the displayed number to the post id,
+ * because a microblog has no numbers. Existing callers pass a number, so both
+ * are accepted here rather than breaking them — but a number that matches no
+ * floor returns `undefined` instead of silently matching nothing, so a caller
+ * that passed a stale number sees an empty result it can explain, not a
+ * mysterious one.
+ */
+function floorPostIdOf(collected: CollectedThread, address: string | number): string | undefined {
+  if (typeof address === 'string') {
+    return collected.floors.some((entry) => entry.floor.postId === address) ? address : undefined
+  }
+  return collected.floors.find((entry) => entry.floor.floorNumber === address)?.floor.postId
+}
+
 /** Summarize a floor's participants, for the UI and the compressor. */
 export function describeParticipants(
   collected: CollectedThread,
-  floorNumber: number,
+  floor: string | number,
 ): readonly Participant[] {
-  const timeline = buildTimeline(collected).filter((entry) => entry.floorNumber === floorNumber)
+  const floorPostId = floorPostIdOf(collected, floor)
+  if (floorPostId === undefined) return []
+  const timeline = buildTimeline(collected).filter((entry) => entry.floorPostId === floorPostId)
   return [...indexParticipants(timeline, buildHandleDirectory(timeline)).values()]
 }
 
-/** All nested replies under a floor, in order. */
-export function nestedOf(collected: CollectedThread, floorNumber: number): readonly NestedReply[] {
-  const found: Floor | undefined = collected.floors.find(
-    (entry) => entry.floor.floorNumber === floorNumber,
-  )?.floor
-  return found ? collected.floors.find((entry) => entry.floor === found)?.nested ?? [] : []
+/** All nested replies under a floor, addressed by post id or displayed number. */
+export function nestedOf(
+  collected: CollectedThread,
+  floor: string | number,
+): readonly NestedReply[] {
+  const floorPostId = floorPostIdOf(collected, floor)
+  if (floorPostId === undefined) return []
+  return collected.floors.find((entry) => entry.floor.postId === floorPostId)?.nested ?? []
 }

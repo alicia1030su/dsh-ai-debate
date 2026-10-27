@@ -30,10 +30,24 @@ export declare function resolveStoreDir(config: ReturnType<typeof resolveConfig>
 /**
  * Build the runtime synchronously; disk reads happen on first use.
  *
- * @param registry the platform registry. Every adapter is built through it, so
- *   this function no longer names a concrete platform class.
+ * Multi-platform: no adapter is constructed here. `PlatformRuntime.adapterFor`
+ * builds one per platform on demand, from that platform's own settings and
+ * credentials, so the platform a URL resolves to is the platform whose adapter
+ * actually reads and publishes.
+ *
+ * @param registry the platform registry
+ * @param resolveSettings per-platform settings (may default to the whole config)
  */
-export declare function buildRuntime(resolve: () => ReturnType<typeof resolveConfig>, log: ReturnType<typeof loggerOf>, registry: PlatformRegistry): Runtime;
+export declare function buildRuntime(resolve: () => ReturnType<typeof resolveConfig>, log: ReturnType<typeof loggerOf>, registry: PlatformRegistry, resolveSettings?: (config: ReturnType<typeof resolveConfig>, platform: string) => Readonly<Record<string, unknown>>, options?: {
+    /**
+     * Platform-scoped credential lookup.
+     *
+     * Passed in rather than read here because the credential mirror belongs to the
+     * mounted plugin instance. The manager wraps it so a provider can only reach
+     * its own namespace.
+     */
+    resolveCredential?: (platform: string, ref: string) => Promise<string | undefined>;
+}): Runtime;
 /**
  * Mount the plugin.
  *

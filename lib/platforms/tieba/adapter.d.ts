@@ -110,6 +110,15 @@ export declare class TiebaAdapter implements PlatformAdapter {
     private seedCookie;
     /** Report which cookie names are held, never their values. */
     describeCookieNames(): readonly string[];
+    /**
+     * Parse one of this platform's URLs into a thread reference.
+     *
+     * Part of the adapter contract since v0.2.1. Without it, a Runtime assembled
+     * without a registry had no way to turn a pasted link into a thread id and fell
+     * back to treating the whole URL as the id — which reached the platform as
+     * `kz=https://tieba.baidu.com/p/123`.
+     */
+    parseUrl(url: string): ThreadRef;
     /** What this adapter can actually do right now. */
     getCapabilities(): PlatformCapabilities;
     /**

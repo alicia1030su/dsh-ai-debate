@@ -24,6 +24,18 @@ import { DebateStore, type StoredCandidate, type StoredSession } from './store.j
 import type { ResolvedConfig } from './config.js';
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
+    /**
+     * The adapter for the platform this call is about.
+     *
+     * Kept as a getter, not a stored instance: in a multi-platform deployment the
+     * adapter depends on which platform the URL belongs to, and a single field read
+     * once at mount is what made "the registry says Weibo but every request went to
+     * Tieba" possible.
+     *
+     * When {@link Runtime.platforms} can build adapters, prefer {@link adapterFor}
+     * — this getter answers "the default platform", which is only correct for a
+     * single-platform deployment and for callers that have already resolved one.
+     */
     readonly adapter: PlatformAdapter;
     readonly store: DebateStore;
     readonly policy: InteractionPolicy;
@@ -35,18 +47,11 @@ export interface Runtime {
      * The platform registry, when the shell has one.
      *
      * Optional so the many v0.1.x tests that build a `Runtime` from a bare adapter
-     * keep compiling. When present, URL resolution and capability checks go
-     * through it; when absent, {@link resolveThreadRef} falls back to the adapter's
-     * own id, which is enough for a single-platform deployment.
+     * keep compiling. When present, URL resolution, adapter selection and capability
+     * checks all go through it; when absent, {@link resolveThreadRef} falls back to
+     * the adapter's own id, which is enough for a single-platform deployment.
      */
-    readonly platforms?: {
-        /** Find the platform that owns a URL and parse it. Throws when unknown. */
-        resolveUrl(url: string): ThreadRef;
-        /** The registry's diagnostics, for the health report. */
-        diagnostics(): RegistryDiagnostics;
-        /** The rich capability matrix for one platform. */
-        capabilitiesOf(platform: string): import('./platforms/contracts.js').PlatformCapabilityMatrix;
-    };
+    readonly platforms?: PlatformRuntime;
     /**
      * The credential state, when this deployment can report one.
      *
@@ -61,6 +66,37 @@ export interface Runtime {
     };
 }
 /**
+ * The platform services the pipeline needs.
+ *
+ * Deliberately an interface rather than the concrete `PlatformRegistry`: the
+ * runtime must not be able to register or unregister platforms, and a test can
+ * supply its own implementation without building a real registry.
+ */
+export interface PlatformRuntime {
+    /** Find the platform that owns a URL and parse it. Throws when unknown. */
+    resolveUrl(url: string): ThreadRef;
+    /** The registry's diagnostics, for the health report. */
+    diagnostics(): RegistryDiagnostics;
+    /** The rich capability matrix for one platform. */
+    capabilitiesOf(platform: string): import('./platforms/contracts.js').PlatformCapabilityMatrix;
+    /**
+     * Build (or reuse) the adapter for one platform.
+     *
+     * This is the method that makes multi-platform operation real: the adapter is
+     * chosen by platform id and created from *that platform's* configuration and
+     * credentials, so two platforms in one process cannot share an identity.
+     */
+    adapterFor(platform: string): PlatformAdapter;
+    /**
+     * Check a capability before a write, throwing when it is not proven.
+     *
+     * Present here so the publish path has one mandatory gate rather than relying
+     * on each caller to remember. `supported` is required; `unverified`,
+     * `degraded`, `permission_required` and `unavailable` all refuse.
+     */
+    assertCapability(platform: string, capability: import('./platforms/contracts.js').CapabilityName): void;
+}
+/**
  * Resolve a user-supplied URL into a thread reference.
  *
  * This is the single place the pipeline discovers *which* platform it is talking
@@ -72,6 +108,29 @@ export interface Runtime {
  *    caller already passed an id rather than a link.
  */
 export declare function resolveThreadRef(runtime: Runtime, url: string): ThreadRef;
+/**
+ * The adapter for one platform.
+ *
+ * The single point every stage calls. With a registry it asks for the platform's
+ * own adapter (built from that platform's config and credentials); without one it
+ * returns the single adapter the Runtime was constructed with, which is exactly
+ * right for a one-platform test double.
+ *
+ * Anything that reads, analyses, generates or publishes must call this rather
+ * than touching `runtime.adapter`, or the "resolved platform" and "adapter used"
+ * can drift apart.
+ */
+export declare function adapterFor(runtime: Runtime, platform: string): PlatformAdapter;
+/**
+ * Check that a platform may perform a write, before anything irreversible.
+ *
+ * Runs the registry's capability gate when there is a registry. A bare Runtime
+ * (a test double) has no declarations to check against, so it passes — that is
+ * not a bypass for production: production always has a registry, and the
+ * publisher's other checks (identity, target snapshot, idempotency, credential
+ * phase) all still run.
+ */
+export declare function assertPlatformCapability(runtime: Runtime, platform: string, capability: import('./platforms/contracts.js').CapabilityName): void;
 /** A progress callback the tools pass through to the UI. */
 export type Progress = (message: string) => void;
 /** Result of an analyze run. */
@@ -106,35 +165,23 @@ export declare function personaFromConfig(config: ResolvedConfig): PersonaConfig
 /** The interaction policy from configuration. */
 export declare function policyFromConfig(config: ResolvedConfig): InteractionPolicy;
 /**
- * Build a platform adapter for one configuration snapshot.
+ * The settings one platform's adapter is allowed to see.
  *
- * The adapter owns a cookie jar and a cache of platform metadata, so it cannot be
- * reused across a config change: a new cookie would be ignored and paging would
- * keep the old timeouts. Callers rebuild on every config version instead.
+ * This used to put `config.tiebaCookie` into a generic `cookie` field for every
+ * platform, which quietly defeated the whole point of platform scoping: the
+ * field was named neutrally, so a future Weibo adapter reading `settings.cookie`
+ * would have received a Tieba session and nothing in the code said that was
+ * wrong.
  *
- * Since v0.2.0 the concrete class is never named here: the registry is asked to
- * build whichever adapter belongs to `platformId`. When no registry is supplied
- * (a bare test Runtime) the caller's `fallback` factory is used, which keeps
- * every single-platform test working without a registry.
+ * Now the function is **per platform**, and a platform it knows nothing about
+ * receives only the neutral request parameters — no cookie at all. Credentials
+ * come through `PlatformContext.resolveCredential`, which the adapter manager
+ * namespaces; they never travel in this object.
+ *
+ * @param config the resolved configuration
+ * @param platform the platform id the settings are for
  */
-export declare function makeAdapter(config: ResolvedConfig, options?: {
-    registry?: import('./platforms/registry.js').PlatformRegistry;
-    platformId?: string;
-    /** Used only when no registry is supplied. */
-    fallback?: (context: {
-        settings: Readonly<Record<string, unknown>>;
-    }) => PlatformAdapter;
-}): PlatformAdapter;
-/**
- * The platform-scoped settings an adapter is allowed to see.
- *
- * Deliberately a flat, secret-free copy: an adapter receives its cookie through
- * this object and must not be handed the whole config, which would let a future
- * Weibo adapter read a Tieba cookie.
- */
-export declare function adapterContextOf(config: ResolvedConfig): {
-    settings: Readonly<Record<string, unknown>>;
-};
+export declare function platformSettingsOf(config: ResolvedConfig, platform: string): Readonly<Record<string, unknown>>;
 /**
  * Run the full read + analyze stage.
  *
