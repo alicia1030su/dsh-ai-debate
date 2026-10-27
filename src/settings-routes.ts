@@ -28,6 +28,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import { resolveConfig, type ResolvedConfig } from './config.js'
+import type { CredentialPhase } from './credential-mirror.js'
 import {
   clearSecret,
   describeSecrets,
@@ -38,6 +39,22 @@ import {
   type SecretRefName,
   type SecretStatus,
 } from './secrets.js'
+
+/**
+ * The credential phase as the page receives it.
+ *
+ * Structurally typed rather than importing the mirror's class: this module must
+ * stay testable with a hand-written double, and a `CredentialPhase` union is
+ * cheap to restate. The values are checked against the mirror by
+ * `test/credential-states.test.ts`.
+ */
+export interface CredentialStatusView {
+  readonly phase: CredentialPhase
+  readonly settled: boolean
+  readonly unresolved: readonly SecretRefName[]
+  readonly error?: string
+  readonly canPublish: boolean
+}
 
 /** Structural stand-in for the Host webserver's WebRoute (no build-time dep). */
 export interface WebRoute {
@@ -129,6 +146,24 @@ export interface SettingsRouteDeps {
   credentials(): CredentialSeam | undefined
   /** The overlay currently in force. */
   overlay(): SecretOverlay
+  /**
+   * What the plugin currently believes about the credential store.
+   *
+   * The phase is what lets the page say "尚未确认" instead of picking one of two
+   * lies: "未配置" (a fact the plugin does not have) or "已配置 · 长度 0" (the
+   * v0.1.10 defect). Optional so a test double written against the older shape
+   * keeps compiling; absent means the page falls back to the overlay alone.
+   */
+  credentialState?(): CredentialStatusView
+  /**
+   * Install a value the store already confirmed.
+   *
+   * Called after a successful write so the mirror holds the new value before the
+   * next read can race it. Optional for the same reason as `credentialState`.
+   */
+  acceptSecret?(ref: SecretRefName, value: string): void
+  /** Install a deletion the store already confirmed. */
+  acceptSecretClear?(ref: SecretRefName): void
   /** Re-read the credential store and install the result. */
   refreshSecrets(): Promise<void>
   /** The settings service, or undefined. */
@@ -324,6 +359,7 @@ export async function viewOfSettings(deps: SettingsRouteDeps): Promise<Record<st
   const secrets = await describeSecrets(deps.credentials(), overlay, (ref) =>
     ref === 'DSH_AI_DEBATE_TIEBA_COOKIE' ? config.tiebaCookie : config.llmApiKey,
   )
+  const credential = deps.credentialState?.()
   return {
     status: 'ready',
     writable: settings?.writable ?? false,
@@ -332,12 +368,27 @@ export async function viewOfSettings(deps: SettingsRouteDeps): Promise<Record<st
     // user their old config value is still in effect without echoing it.
     values: publicConfig(config),
     secrets: secrets.map(publicSecret),
+    // What the plugin believes about the store. This is the field that lets the
+    // page distinguish "unconfigured" from "not confirmed yet" instead of
+    // guessing — the two look identical in `secrets` alone.
+    credentials: credential === undefined ? undefined : publicCredentialState(credential),
     capabilities: {
       // The settings RPC is unavailable to third-party namespaces, so the write
       // path is this route; `writable` above mirrors the Host's own flag.
       settingsService: settings !== undefined,
       credentialService: deps.credentials() !== undefined,
     },
+  }
+}
+
+/** The credential phase, with nothing that could carry a value. */
+function publicCredentialState(state: CredentialStatusView): Record<string, unknown> {
+  return {
+    phase: state.phase,
+    settled: state.settled,
+    unresolved: [...state.unresolved],
+    canPublish: state.canPublish,
+    ...(state.error === undefined ? {} : { error: state.error }),
   }
 }
 
@@ -599,7 +650,13 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     const target = ref as SecretRefName
     if (body.clear === true) {
       const result = await clearSecret(deps.credentials(), target)
-      await deps.refreshSecrets()
+      if (result.cleared) {
+        // Install the deletion the store just confirmed, then discard every read
+        // that was in flight while it happened. Doing this before the re-read is
+        // what keeps a slow pre-clear read from resurrecting the old value.
+        deps.acceptSecretClear?.(target)
+        await deps.refreshSecrets()
+      }
       writeJson(response, result.cleared ? 200 : 409, {
         cleared: result.cleared,
         ...(result.note === undefined ? {} : { error: result.note }),
@@ -615,9 +672,15 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     try {
       await storeSecret(deps.credentials(), target, value)
     } catch (error) {
+      // The write did not commit, so the mirror keeps whatever it last confirmed.
+      // Nothing is installed here on purpose: a failed save must not overwrite the
+      // last known-good in-memory state with an unconfirmed value.
       writeJson(response, 400, { error: error instanceof Error ? error.message : String(error) })
       return
     }
+    // Confirmed by the store: install it now so the very next operation — and any
+    // read that was already running — uses the new value.
+    deps.acceptSecret?.(target, value.trim())
     await deps.refreshSecrets()
     writeJson(response, 200, { saved: true, view: await viewOfSettings(deps) })
   })

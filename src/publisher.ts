@@ -81,6 +81,18 @@ export interface PublisherDeps {
    * request that already left.
    */
   readonly isCancelled?: (sessionId: string) => boolean
+  /**
+   * The credential state, consulted before anything irreversible.
+   *
+   * Absent means "this caller has no credential seam and takes responsibility
+   * for the cookie" — the shape every pre-v0.1.12 test double already has, and
+   * the shape a deployment without `ctx.credentials` genuinely has.
+   */
+  readonly credentialState?: () => {
+    readonly phase: string
+    readonly canPublish: boolean
+    readonly error?: string
+  }
   /** Suggested wait between publishes; exposed for tests. */
   readonly now?: () => number
 }
@@ -158,6 +170,24 @@ export async function publishCandidate(
       ok: false,
       status: 'refused',
       message: `该候选存在未通过的检查，不能发表：${violations.join('；')}`,
+    }
+  }
+
+  // The credential state must be proven before anything irreversible happens.
+  //
+  // Publishing logs in with the configured cookie and verifies the account. If
+  // the plugin cannot tell "no cookie saved" from "the store has not finished
+  // loading", it would either send as the wrong identity or claim the cookie is
+  // missing when it is not. So an unproven state is refused here — before the
+  // in-flight claim, before the dedupe record, before any network call — and the
+  // message names the actual phase so the owner can act on it.
+  const credentials = deps.credentialState?.()
+  if (credentials !== undefined && !credentials.canPublish) {
+    return {
+      ok: false,
+      status: 'refused',
+      message: describeCredentialBlocker(credentials),
+      errorCode: 'credentials_unproven',
     }
   }
 
@@ -1112,4 +1142,55 @@ async function recordPausedFailure(
 /** ISO timestamp from an epoch, for stored rows. */
 function nowIso(epochMs: number): string {
   return new Date(epochMs).toISOString()
+}
+
+/**
+ * Explain, in the owner's terms, why a publish was refused on credentials.
+ *
+ * Each phase gets its own sentence because each wants a different action: a
+ * timeout means "open the settings page once", a failure means "look at the
+ * error", a partial means the store is inconsistent. A single generic message
+ * would leave the owner guessing which of those they are looking at.
+ */
+function describeCredentialBlocker(state: {
+  readonly phase: string
+  readonly error?: string
+}): string {
+  const tail = state.error === undefined ? '' : `（${state.error}）`
+  switch (state.phase) {
+    case 'loading':
+      return (
+        '凭据库还在初始化，尚未确认登录状态，本次发表已拒绝。' +
+        '这不代表 Cookie 丢了——请等一两秒重试，或打开一次插件设置页让它读完。'
+      )
+    case 'timeout':
+      return (
+        '凭据库没有在等待窗口内返回内容，无法确认 Cookie 是否已配置，本次发表已拒绝。' +
+        `请打开一次插件设置页重试${tail}。`
+      )
+    case 'partial':
+      return (
+        '凭据库报告有值但没有返回内容，状态不可信，本次发表已拒绝。' +
+        `请打开一次插件设置页重试${tail}。`
+      )
+    case 'failed':
+      return (
+        '读取凭据库失败，无法确认当前登录身份，本次发表已拒绝。' +
+        `这不会删除已保存的 Cookie。请检查后重试${tail}。`
+      )
+    case 'unknown':
+      return '还没有读取过凭据库，无法确认登录身份，本次发表已拒绝。请先调用一次 debate_bind_owner 或打开设置页。'
+    case 'empty':
+    case 'ready':
+      // `canPublish` was false despite a conclusive phase, so the cookie itself
+      // is missing rather than unreadable.
+      return '没有可用的贴吧 Cookie，无法验证登录身份，本次发表已拒绝。请在插件设置页填写 Cookie。'
+    case 'unavailable':
+      return (
+        '本部署没有凭据服务（ctx.credentials），也没有在配置里设置贴吧 Cookie，' +
+        '无法验证登录身份，本次发表已拒绝。'
+      )
+    default:
+      return `凭据状态为「${state.phase}」，无法确认登录身份，本次发表已拒绝。`
+  }
 }

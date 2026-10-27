@@ -143,6 +143,19 @@ window.__ModuleLoader__.load({
       cookieFromConfig: '当前用的是配置文件里的旧值',
       cookieSuperseded: '凭据库里的值已覆盖配置文件的旧值',
       cookieTail: '末四位',
+      // Credential phase: the difference between "not configured" and "not
+      // confirmed yet". Saying the first when the second is true is the v0.1.10
+      // defect; saying neither is worse, so the page names the actual state.
+      credLoading: '正在读取凭据库…',
+      credTimeout: '凭据库尚未确认（等待超时）',
+      credTimeoutHint: '这不代表 Cookie 丢了。点「刷新状态」再试一次，或稍后重新打开本页。',
+      credPartial: '凭据库报告有值但没有返回内容',
+      credPartialHint: '可能仍在初始化。稍后重试；已保存的凭据没有被改动。',
+      credFailed: '读取凭据库失败',
+      credFailedHint: '这不代表 Cookie 丢了，已保存的值不会被删除。',
+      credUnavailable: '本部署没有凭据服务',
+      credBlocked: '凭据状态未确认，发表会被拒绝',
+      credReady: '凭据已确认',
       newCookie: '粘贴新的贴吧 Cookie',
       newCookieHint: '留空表示不改动。保存后只显示末四位；保存失败会保留你粘贴的内容，可以直接重试。',
       newLlmKey: '粘贴新的模型 API Key',
@@ -288,6 +301,16 @@ window.__ModuleLoader__.load({
       cookieFromConfig: 'Using the legacy config value',
       cookieSuperseded: 'Credential store value supersedes the config value',
       cookieTail: 'last four',
+      credLoading: 'Reading the credential store…',
+      credTimeout: 'Credential store not confirmed (timed out)',
+      credTimeoutHint: 'This does not mean the cookie is gone. Retry from the status tab, or reopen this page.',
+      credPartial: 'The store claims a value it did not return',
+      credPartialHint: 'It may still be initializing. Retry shortly; saved credentials are untouched.',
+      credFailed: 'Reading the credential store failed',
+      credFailedHint: 'This does not mean the cookie is gone; saved values are never deleted.',
+      credUnavailable: 'This deployment has no credential service',
+      credBlocked: 'Credential state unconfirmed — publishing will be refused',
+      credReady: 'Credentials confirmed',
       newCookie: 'Paste a new Tieba cookie',
       newCookieHint:
         'Leave blank to keep it. Only the last four characters are shown afterwards; a failed save keeps what you pasted so you can retry.',
@@ -445,7 +468,16 @@ window.__ModuleLoader__.load({
       }
     }
 
-    /** Normalize one settings response. */
+    /**
+     * Normalize one settings response.
+     *
+     * Everything the renderers may read has to be copied here — this function is a
+     * whitelist, and a field omitted from it is silently dropped between the Host
+     * and the page. `credentials` was exactly that: the Host started sending the
+     * credential phase, the page kept reading `view.credentials`, and the drop
+     * here made the whole feature invisible with no error anywhere. Anything added
+     * to the route's payload must be added here in the same change.
+     */
     function normalizeView(raw) {
       if (!raw || typeof raw !== 'object') return emptyView()
       return {
@@ -453,6 +485,8 @@ window.__ModuleLoader__.load({
         writable: raw.writable === true,
         values: raw.values && typeof raw.values === 'object' ? raw.values : {},
         secrets: Array.isArray(raw.secrets) ? raw.secrets : [],
+        credentials:
+          raw.credentials && typeof raw.credentials === 'object' ? raw.credentials : undefined,
         capabilities: raw.capabilities || { settingsService: false, credentialService: false },
       }
     }
@@ -460,6 +494,65 @@ window.__ModuleLoader__.load({
     /** Read one secret row by reference. */
     function secretOf(view, ref) {
       return view.secrets.find((row) => row.ref === ref) || null
+    }
+
+    /**
+     * What the Host says about the credential store, or null on an older Host.
+     *
+     * The page used to render a badge from `disabled` plus `tail` alone, which
+     * cannot tell "not configured" from "not read yet" — the v0.1.10 defect that
+     * showed "已配置 · 末四位 —" while the store was still parsing. This is the
+     * field that makes the distinction possible; absent means an older Host, and
+     * the badge then falls back to the plain configured/unset wording rather
+     * than inventing a state.
+     */
+    function credentialPhaseOf(view) {
+      const info = view ? view.credentials : null
+      return info && typeof info.phase === 'string' ? info : null
+    }
+
+    /**
+     * One badge describing the credential phase, or null when it says nothing
+     * worth adding to the row.
+     *
+     * `ready` renders nothing: the existing "已配置 · 末四位 …" badge already
+     * says it, and a second green badge would be noise.
+     */
+    function credentialBadge(t, view) {
+      const info = credentialPhaseOf(view)
+      if (!info) return null
+      const table = {
+        loading: { key: 'credLoading', tone: 'dsd-badge-warn' },
+        timeout: { key: 'credTimeout', tone: 'dsd-badge-warn' },
+        partial: { key: 'credPartial', tone: 'dsd-badge-warn' },
+        failed: { key: 'credFailed', tone: 'dsd-badge-bad' },
+        unavailable: { key: 'credUnavailable', tone: 'dsd-badge-warn' },
+      }
+      const entry = table[info.phase]
+      if (!entry) return null
+      const blocked = info.canPublish === false
+      return h(
+        'span',
+        { className: `dsd-badge ${entry.tone}` },
+        blocked ? `${t(entry.key)} · ${t('credBlocked')}` : t(entry.key),
+      )
+    }
+
+    /** The explanatory line under a badge whose phase needs one. */
+    function credentialHint(t, view) {
+      const info = credentialPhaseOf(view)
+      if (!info) return null
+      const table = {
+        loading: null,
+        timeout: 'credTimeoutHint',
+        partial: 'credPartialHint',
+        failed: 'credFailedHint',
+        unavailable: null,
+      }
+      const key = table[info.phase]
+      if (!key) return null
+      const detail = info.error ? ` ${info.error}` : ''
+      return h('p', { className: 'dsd-sect-sub' }, `${t(key)}${detail}`)
     }
 
     /** Format a number for display without inventing precision. */
@@ -500,10 +593,28 @@ window.__ModuleLoader__.load({
         return this.store.subscribe(listener)
       }
 
+      /**
+       * The snapshot the page renders from.
+       *
+       * Every value here must be a plain object, array or primitive. The draft is
+       * held in a `Map`, and a `Map` cannot cross this boundary: the Host's
+       * `createSnapshotStore` runs each snapshot through Immer, which refuses a
+       * bare `Map` unless `enableMapSet()` was called — and it was not. Putting
+       * the Map here made every `store.set()` throw `[Immer] minified error nr: 2`,
+       * so `edit()` never completed: the value reverted, the "unsaved" badge never
+       * appeared and Save stayed disabled. The whole settings form was inert and
+       * nothing logged a reason.
+       *
+       * So the draft is flattened to a count plus a plain field map. Callers that
+       * need the live Map keep using the store's own `field()` / `dirty()`.
+       */
       projection() {
+        const draftFields = {}
+        for (const [name, value] of this.draft) draftFields[name] = value
         return {
           view: this.view,
-          draft: this.draft,
+          draftSize: this.draft.size,
+          draftFields,
           tab: this.tab,
           saving: this.saving,
           failed: this.failed,
@@ -777,6 +888,7 @@ window.__ModuleLoader__.load({
       'background:var(--dsw-alias-bg-module-platform,var(--dsw-alias-bg-layer-1));border-radius:999px;padding:1px 8px;font-size:11px;line-height:17px}' +
       '.dsd-badge-on{color:var(--dsw-alias-brand-primary)}' +
       '.dsd-badge-warn{color:var(--dsw-alias-state-warning-primary,var(--dsw-alias-label-secondary))}' +
+      '.dsd-badge-bad{color:var(--dsw-alias-state-error-primary,var(--dsw-alias-label-secondary))}' +
       '.dsd-reset{appearance:none;font:inherit;cursor:pointer;background:transparent;border:0;padding:0;' +
       'color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));font-size:11px;text-decoration:underline}' +
       '.dsd-input,.dsd-select{width:100%;box-sizing:border-box;font:inherit;font-size:13px;line-height:1.5;padding:6px 10px;' +
@@ -1114,7 +1226,7 @@ window.__ModuleLoader__.load({
       // NB: the prop is `secretRef`, not `ref`. `ref` is reserved by React —
       // handing a function component a string `ref` throws outright, which is
       // what blanked this page. Nothing here needs a DOM ref.
-      const { t, secret, secretRef: refName, label, hint, placeholder, saveLabel, onSave, onClear, enabled } = props
+      const { t, secret, secretRef: refName, label, hint, placeholder, saveLabel, onSave, onClear, enabled, view } = props
       const [text, setText] = useState('')
       const [confirming, setConfirming] = useState(false)
       const [busy, setBusy] = useState(false)
@@ -1144,6 +1256,7 @@ window.__ModuleLoader__.load({
         'div',
         { className: 'dsd-sect' },
         h('p', { className: 'dsd-sect-title' }, label),
+        credentialHint(t, view),
         h('p', { className: 'dsd-sect-sub' }, hint),
         h(
           'div',
@@ -1159,6 +1272,7 @@ window.__ModuleLoader__.load({
           secret && secret.configSuperseded
             ? h('span', { className: 'dsd-badge dsd-badge-warn' }, t('cookieSuperseded'))
             : null,
+          credentialBadge(t, view),
         ),
         h('input', {
           className: 'dsd-input',
@@ -1309,6 +1423,7 @@ window.__ModuleLoader__.load({
           label: t('cookieTitle'),
           hint: t('cookieHint'),
           secret: cookie,
+          view: state.view,
           enabled,
           onSave: (refName, value) => store.saveSecret(refName, value),
           onClear: (refName) => store.clearSecret(refName),
@@ -1394,6 +1509,7 @@ window.__ModuleLoader__.load({
           placeholder: t('newLlmKey'),
           saveLabel: t('saveLlmKey'),
           secret: key,
+          view: state.view,
           enabled,
           onSave: (refName, value) => store.saveSecret(refName, value),
           onClear: (refName) => store.clearSecret(refName),
@@ -1917,7 +2033,7 @@ window.__ModuleLoader__.load({
         if (state.failed) return { text: `${t('saveFailed')}：${state.failed}`, cls: ' dsd-foot-note-error' }
         if (state.notice === 'saved') return { text: t('saved'), cls: ' dsd-foot-note-ok' }
         if (state.notice === 'cleared') return { text: t('cleared'), cls: ' dsd-foot-note-ok' }
-        if (state.draft.size > 0) return { text: t('unsaved'), cls: '' }
+        if (state.draftSize > 0) return { text: t('unsaved'), cls: '' }
         if (!state.view.writable) return { text: t('readOnly'), cls: '' }
         if (!state.view.capabilities.credentialService) return { text: t('noCredentialService'), cls: '' }
         return { text: '', cls: '' }
@@ -1940,7 +2056,7 @@ window.__ModuleLoader__.load({
         if (state.failed) return { text: `${t('saveFailed')}：${state.failed}`, cls: ' dsd-foot-note-error' }
         if (state.notice === 'saved') return { text: t('saved'), cls: ' dsd-foot-note-ok' }
         if (state.notice === 'cleared') return { text: t('cleared'), cls: ' dsd-foot-note-ok' }
-        if (state.draft.size > 0) return { text: t('unsaved'), cls: '' }
+        if (state.draftSize > 0) return { text: t('unsaved'), cls: '' }
         if (!state.view.writable) return { text: t('readOnly'), cls: '' }
         if (!state.view.capabilities.credentialService) return { text: t('noCredentialService'), cls: '' }
         return { text: '', cls: '' }
@@ -1987,7 +2103,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'dsd-btn dsd-btn-ghost',
-              disabled: state.draft.size === 0 || state.saving,
+              disabled: state.draftSize === 0 || state.saving,
               onClick: () => store.discard(),
             },
             t('discard'),
@@ -1997,7 +2113,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'dsd-btn dsd-btn-primary',
-              disabled: state.draft.size === 0 || state.saving || !state.view.writable,
+              disabled: state.draftSize === 0 || state.saving || !state.view.writable,
               onClick: () => store.save(),
             },
             t(state.saving ? 'saving' : 'save'),
@@ -2025,7 +2141,7 @@ window.__ModuleLoader__.load({
       const t = translator()
       const store = storeForSection()
       const state = useSectionState(store)
-      const dirty = state.draft.size > 0
+      const dirty = state.draftSize > 0
       // Mark the tab title while edits are staged. This is the non-blocking half
       // of the "you have unsaved changes" contract; the blocking half belongs to
       // whatever owns navigation, which is the settings shell, so this component
@@ -2115,7 +2231,7 @@ window.__ModuleLoader__.load({
         if (state.failed) return { text: `${t('saveFailed')}：${state.failed}`, cls: ' dsd-foot-note-error' }
         if (state.notice === 'saved') return { text: t('saved'), cls: ' dsd-foot-note-ok' }
         if (state.notice === 'cleared') return { text: t('cleared'), cls: ' dsd-foot-note-ok' }
-        if (state.draft.size > 0) return { text: t('unsaved'), cls: '' }
+        if (state.draftSize > 0) return { text: t('unsaved'), cls: '' }
         if (!state.view.writable) return { text: t('readOnly'), cls: '' }
         if (!state.view.capabilities.credentialService) return { text: t('noCredentialService'), cls: '' }
         return { text: '', cls: '' }
@@ -2140,7 +2256,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'dsd-btn dsd-btn-ghost',
-              disabled: state.draft.size === 0 || state.saving,
+              disabled: state.draftSize === 0 || state.saving,
               onClick: () => store.discard(),
             },
             t('discard'),
@@ -2150,7 +2266,7 @@ window.__ModuleLoader__.load({
             {
               type: 'button',
               className: 'dsd-btn dsd-btn-primary',
-              disabled: state.draft.size === 0 || state.saving || !state.view.writable,
+              disabled: state.draftSize === 0 || state.saving || !state.view.writable,
               onClick: () => store.save(),
             },
             t(state.saving ? 'saving' : 'save'),
@@ -2293,6 +2409,17 @@ window.__ModuleLoader__.load({
     exports.DebateCard = DebateCard
     exports.DebateSection = DebateSection
     exports.DebateSummary = DebateSummary
+    /**
+     * The page model, exposed for tests only.
+     *
+     * `test/client-snapshot-boundary.test.ts` reads this to check that every
+     * snapshot the page produces is one the Host's Immer-backed store accepts.
+     * That boundary cannot be tested through a rendered component without a real
+     * Host, and it is exactly where a completely inert form shipped: a `Map` in
+     * the snapshot made every `store.set()` throw. The Host never calls this
+     * field, and `apply` does not read it.
+     */
+    exports.__createCardStore = () => new CardStore()
     return module.exports
   },
 })

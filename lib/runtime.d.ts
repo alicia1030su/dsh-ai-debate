@@ -25,6 +25,18 @@ export interface Runtime {
     /** Model client factory, replaceable in tests. */
     readonly llm: () => LlmClient;
     readonly log: (level: 'debug' | 'info' | 'warn' | 'error', message: string) => void;
+    /**
+     * The credential state, when this deployment can report one.
+     *
+     * Absent in tests and in a deployment without `ctx.credentials`, where the
+     * cookie comes from config and there is nothing to be uncertain about. When
+     * present, the publisher refuses to send while it is unproven.
+     */
+    readonly credentialState?: () => {
+        readonly phase: string;
+        readonly canPublish: boolean;
+        readonly error?: string;
+    };
 }
 /** A progress callback the tools pass through to the UI. */
 export type Progress = (message: string) => void;

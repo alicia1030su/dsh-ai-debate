@@ -133,17 +133,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.1.9
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.1.13
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.1.9.tgz`：
+从 Release 下载 `dsh-ai-debate-0.1.13.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.1.9.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.1.13.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -516,31 +516,37 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**359 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**410 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
 | `test/analyzer.test.ts` | 15 | 对手锁定、主人识别、数字 ID 冲突拒绝、重名拒绝 |
+| `test/client-credential-badge.test.ts` | 6 | 凭据状态徽章：超时/失败/部分加载各显示自己的状态，不谎报「未配置」 |
+| `test/client-module.test.ts` | 10 | 浏览器半侧的 `apply()` 契约与 slot 注册 |
+| `test/client-placeholders.test.ts` | 2 | 模板占位符与后端 payload 键名一致（防 `{awaiting}` 复活） |
+| `test/client-react-dom.test.ts` | 16 | 真实 React + 真实 DOM：空白页、加载态、真实文本 |
+| `test/client-render.test.ts` | 8 | 组件浅渲染与分支 |
+| `test/client-snapshot-boundary.test.ts` | 5 | 快照边界：Map 不得进快照（防 Immer 抛错让整张表单变哑） |
+| `test/cold-start-credentials.test.ts` | 9 | 冷启动读凭据：模块缺失、窗口重试、恢复 |
 | `test/collector.test.ts` | 13 | 分页、去重、缺失报告、分页上限、降级 |
+| `test/credential-mirror.test.ts` | 20 | 凭据镜像：四态区分、慢初始化 100/500/2000ms、读异常、票号乱序、dispose |
 | `test/dedupe-ledger.test.ts` | 8 | 发表流水账：会话过期/重启/并发下 `confirmed` 与 `pending` 不可丢失 |
 | `test/generator.test.ts` | 21 | 结构化输出、校验、重试 |
 | `test/identity-and-limits.test.ts` | 6 | 昵称作者 fail-closed、帖级限额不随 TTL 归零 |
+| `test/isolation-auth.test.ts` | 22 | 设置 API 的会话授权与信任边界 |
 | `test/json-safety.test.ts` | 11 | 工具返回值 JSON 安全、工具诚实性 |
 | `test/parse.test.ts` | 21 | WAP 页面解析、楼中楼、真实 fixture 回归 |
-| `test/persona-compressor.test.ts` | 17 | 四种人格、预算压缩、固定开销拆分 |
-| `test/pipeline.test.ts` | 31 | 端到端、触发作者校验、按昵称配置的主人、对手漂移停止、候选版本 |
-| `test/publisher-safety.test.ts` | 58 | 快照强制、并发去重、写盘失败、状态校验、账号身份、取消 |
-| `test/settings-page.test.ts` | 36 | 凭据 overlay、遮蔽、配置视图不含密钥、路由闸、白名单写入、人格预览 |
-| `test/settings-auth.test.ts` | 18 | **授权**：无/伪造/错 authority 凭据被拒、缺认证机制时整体关闭、非回环先被挡、缺 Origin 仍需身份、本机进程写不了凭据、被拒请求全无副作用 |
-| `test/isolation-auth.test.ts` | 22 | **隔离认证**：全程只用临时 DSH_HOME；无/伪造/过期凭据被拒、五个接口逐一验证、凭据互不覆盖、轮换/清除/重启/写失败、延迟出现的 connection、错误信息不含凭据 |
-| `test/client-module.test.ts` | 10 | 客户端工厂、两个槽都注册、section 不带 inject 面、注册失败可见 |
-| `test/client-react-dom.test.ts` | 16 | **真实 React + 真实 DOM**：空白页回归、五区域、保存走通、温度精度、凭据失败保留输入、两个暂停入口、HTTPS 告警、密钥不进 DOM |
-| `test/client-render.test.ts` | 8 | 无注入 props 渲染、只请求一次、末四位不泄露、加载/不可用/只读态 |
-| `test/route-lifecycle.test.ts` | 4 | 路由随 webServer 注入注册、晚到补注册、重启重注册、旧契约回退 |
-| `test/target.test.ts` | 12 | 回复位置校验（楼层/楼中楼/删除/作者变更/结构缓存） |
-| `test/trigger-identity.test.ts` | 23 | 召噢幂等身份（改名/并发/重启/迁移/冲突）+ 会话容量策略 |
-| `test/verification-and-auth.test.ts` | 9 | 发表后回读核对（正文/作者/位置）+ 登录身份三态 |
-| **合计** | **359** | |
+| `test/persona-compressor.test.ts` | 17 | 人格压缩与提示词预算 |
+| `test/pipeline.test.ts` | 31 | 分析→生成→审核→发表主流程 |
+| `test/publish-credential-gate.test.ts` | 9 | 凭据未证实时不发帖：拒绝在任何网络调用与幂等账之前 |
+| `test/publisher-safety.test.ts` | 58 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
+| `test/route-lifecycle.test.ts` | 4 | 路由注册与卸载生命周期 |
+| `test/settings-auth.test.ts` | 18 | 设置读写的授权与越权拒绝 |
+| `test/settings-page.test.ts` | 36 | 设置页五个区域的行为 |
+| `test/target.test.ts` | 12 | 目标快照与漂移检测 |
+| `test/trigger-identity.test.ts` | 23 | 召唤定位与主人身份 |
+| `test/verification-and-auth.test.ts` | 9 | 发表后回读与登录态核对 |
+| **合计** | **410** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 
@@ -585,7 +591,7 @@ node --experimental-transform-types --test v013_dedupe_expiry_regression.test.mj
 
 #### 自动化测试（Mock / fixture，可重复运行）
 
-303 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
+410 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
 不需要网络和账号，**证明的是代码逻辑，不是平台能力**。
 
 #### 0.1.5 这一轮修的是什么
@@ -815,6 +821,14 @@ rm -rf ~/.dsh/ai-debate
 
 ## 许可证
 
-[MIT](./LICENSE)
+[AGPL-3.0](./LICENSE)（`AGPL-3.0-only`，锁定 v3）
 
-依赖许可：`@deepseek-ai/schemastery`（MIT）与 `@deepseek-ai/cordis`（MIT）均为宽松许可，与本项目无冲突。
+本项目采用 **GNU Affero General Public License v3.0**。与 MIT 的关键区别只有一条，
+但它很重要：**如果你把这个插件（或改过的版本）放到网络上给他人使用，你必须向使用者提供完整源码。**
+自己本地用、改了不发布，不受影响。
+
+版本范围写作 `AGPL-3.0-only` 而不是 `-or-later`：`LICENSE` 里放的是 v3 全文，
+不额外授权「v3 或更高版本」——将来 FSF 若发布 v4，是否采用由作者另行决定。
+
+依赖许可：`@deepseek-ai/schemastery`（MIT）与 `@deepseek-ai/cordis`（MIT）均为宽松许可，
+MIT 代码可以并入 AGPL 作品，因此本项目可正常分发。

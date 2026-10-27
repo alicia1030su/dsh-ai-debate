@@ -1,8 +1,8 @@
 {
   "name": "dsh-ai-debate",
-  "version": "0.1.11",
+  "version": "0.1.13",
   "description": "AI代吵架 — read a Tieba thread, reconstruct the argument, inherit the owner's position, and draft a persona-styled reply with human review before publishing.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",

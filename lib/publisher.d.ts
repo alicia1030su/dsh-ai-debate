@@ -64,6 +64,18 @@ export interface PublisherDeps {
      * request that already left.
      */
     readonly isCancelled?: (sessionId: string) => boolean;
+    /**
+     * The credential state, consulted before anything irreversible.
+     *
+     * Absent means "this caller has no credential seam and takes responsibility
+     * for the cookie" — the shape every pre-v0.1.12 test double already has, and
+     * the shape a deployment without `ctx.credentials` genuinely has.
+     */
+    readonly credentialState?: () => {
+        readonly phase: string;
+        readonly canPublish: boolean;
+        readonly error?: string;
+    };
     /** Suggested wait between publishes; exposed for tests. */
     readonly now?: () => number;
 }

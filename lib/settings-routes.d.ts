@@ -26,7 +26,23 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { type ResolvedConfig } from './config.js';
-import { maskedTail, type CredentialSeam, type SecretOverlay } from './secrets.js';
+import type { CredentialPhase } from './credential-mirror.js';
+import { maskedTail, type CredentialSeam, type SecretOverlay, type SecretRefName } from './secrets.js';
+/**
+ * The credential phase as the page receives it.
+ *
+ * Structurally typed rather than importing the mirror's class: this module must
+ * stay testable with a hand-written double, and a `CredentialPhase` union is
+ * cheap to restate. The values are checked against the mirror by
+ * `test/credential-states.test.ts`.
+ */
+export interface CredentialStatusView {
+    readonly phase: CredentialPhase;
+    readonly settled: boolean;
+    readonly unresolved: readonly SecretRefName[];
+    readonly error?: string;
+    readonly canPublish: boolean;
+}
 /** Structural stand-in for the Host webserver's WebRoute (no build-time dep). */
 export interface WebRoute {
     kind: 'exact' | 'prefix';
@@ -67,6 +83,24 @@ export interface SettingsRouteDeps {
     credentials(): CredentialSeam | undefined;
     /** The overlay currently in force. */
     overlay(): SecretOverlay;
+    /**
+     * What the plugin currently believes about the credential store.
+     *
+     * The phase is what lets the page say "尚未确认" instead of picking one of two
+     * lies: "未配置" (a fact the plugin does not have) or "已配置 · 长度 0" (the
+     * v0.1.10 defect). Optional so a test double written against the older shape
+     * keeps compiling; absent means the page falls back to the overlay alone.
+     */
+    credentialState?(): CredentialStatusView;
+    /**
+     * Install a value the store already confirmed.
+     *
+     * Called after a successful write so the mirror holds the new value before the
+     * next read can race it. Optional for the same reason as `credentialState`.
+     */
+    acceptSecret?(ref: SecretRefName, value: string): void;
+    /** Install a deletion the store already confirmed. */
+    acceptSecretClear?(ref: SecretRefName): void;
     /** Re-read the credential store and install the result. */
     refreshSecrets(): Promise<void>;
     /** The settings service, or undefined. */

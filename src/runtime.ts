@@ -58,6 +58,18 @@ export interface Runtime {
   /** Model client factory, replaceable in tests. */
   readonly llm: () => LlmClient
   readonly log: (level: 'debug' | 'info' | 'warn' | 'error', message: string) => void
+  /**
+   * The credential state, when this deployment can report one.
+   *
+   * Absent in tests and in a deployment without `ctx.credentials`, where the
+   * cookie comes from config and there is nothing to be uncertain about. When
+   * present, the publisher refuses to send while it is unproven.
+   */
+  readonly credentialState?: () => {
+    readonly phase: string
+    readonly canPublish: boolean
+    readonly error?: string
+  }
 }
 
 /** A progress callback the tools pass through to the UI. */
@@ -878,6 +890,12 @@ export async function runPublish(
         },
         // Consulted immediately before the network call by the publisher.
         isCancelled: (sessionId) => runtime.store.getSession(sessionId)?.state === 'CANCELLED',
+        // Consulted before anything irreversible: an unproven credential state
+        // means the plugin cannot tell an absent cookie from an unread one, and
+        // publishing as a guessed identity cannot be undone.
+        ...(runtime.credentialState === undefined
+          ? {}
+          : { credentialState: () => runtime.credentialState!() }),
       },
       { ...input, signal: controller.signal },
     )
