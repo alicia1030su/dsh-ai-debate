@@ -2,6 +2,141 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.4] — 2026-10-28
+
+修 CI 失败与安全页面缺陷。三处已独立复现的问题，加上一处排查中发现、上一版
+漏挂载的组件。**没有削弱任何安全规则**：PromptInjectionGuard、OwnerIntegrityGuard、
+OutputGuard、PublishGuard 全部保留，确定性规则仍然没有关闭开关。
+
+### 一、安全页面根本不显示（两个独立原因，缺一不可）
+
+用户报告「打开安全与防注入页，只显示"这个 Host 版本没有提供安全状态"」。
+查下去是两个叠加的问题：
+
+**1. `normalizeView()` 是白名单，漏了 `security` 字段。**
+
+Host 侧 `describeSecurity()` 构造了完整状态、`viewOfSettings()` 也放进了 payload，
+但客户端这个函数只复制它点名的字段，没点名的就被静默丢掉：
+
+```js
+// v0.2.3：security 不在这张表里，于是它从不存在
+values: ..., secrets: ..., credentials: ..., platforms: ..., capabilities: ...
+```
+
+后果比"看不见"更糟：面板读不到真相时选择了看起来最安全的答案，而这里是**假的**——
+即使保护实际是关闭的，页面也照旧说"没有提供安全状态"。一个永远不报警的安全面板，
+比没有面板更容易让人放心。
+
+修法：加 `security` 透传，并做形状检查（数组或字符串视为"没提供"），
+免得把 `undefined` 印满整个安全面板。
+
+**2. `DebateSection` 的堆叠布局漏挂载两个组件。**
+
+侧栏设置页不分组页签，而是把各区域依次堆叠。它列了 5 个：
+
+```js
+h(AccountSection), h(ModelSection), h(PersonaSection), h(PublishSection), h(StatusSection)
+```
+
+`SecuritySection` 和 `PlatformsSection` **写了、导出了、从来没被渲染**。
+一个存在但不挂载的组件，和没写是一回事——而且更隐蔽，因为 `grep` 得到结果。
+
+修法：补上两个区域。
+
+### 二、两项 CI 测试失败（真因是跨平台差异，不是测试顺序）
+
+`an unwritable state directory refuses to publish` 和
+`store.mutate rejects when the write cannot happen` 在 CI 上失败、在 Windows 上通过。
+
+原因是同一句 `readFile` 在两个平台报不同的码：
+
+| 平台 | 父目录是普通文件时 `readFile` 的错误码 | `ready()` 的处理 |
+| --- | --- | --- |
+| Linux | `ENOTDIR` | 抛 `read_failed`，测试在 `mutate()` 之前就挂了 |
+| Windows | `ENOENT` | 当成"首次运行"，`ready()` 通过，于是测试"成功" |
+
+**Windows 上的通过是巧合。** 旧写法先制造障碍再建 store，两个平台走的是不同分支。
+
+修法：**先在路径还不存在时完成 `ready()`**（两个平台都走首次运行分支、都成功），
+再制造写障碍，这样两条路都真的到达写盘逻辑。同时新增一项独立测试：
+把 `state.json` 本身做成目录（`EISDIR`，两个平台一致），断言 `read_failed`——
+**证明真正的读取失败仍然被拒绝**，没有为了让测试通过而吞掉 `ENOTDIR`。
+
+### 三、测试统计脚本（顺带挖出一个隐藏问题）
+
+`scripts/test-count.mjs` 只匹配 `ℹ pass N`。Node 的默认 reporter 由环境决定：
+TTY 下输出 `ℹ pass N`，CI/管道下输出 TAP `# pass N`。
+
+后果是最坏的一种：**CI 上每个文件都统计成 0，脚本退出码 0**。一个静默的零比崩溃更难发现。
+
+修法三条：
+
+- 显式 `--test-reporter=tap`，让输出格式由脚本决定，不由调用方终端决定
+- 两种格式都解析，但**无法解析时返回 `undefined` 而不是 0**（"没统计到"和"零个通过"是两件事）
+- 任一文件非零退出、或统计无法解析，**整个脚本失败**，不出具部分结果
+
+**排查中发现的问题**：从测试进程里 `spawnSync` 子进程会继承 `NODE_TEST_CONTEXT`，
+子进程认为自己是嵌套 runner，打印 `run() is being called recursively ... skipping running files`，
+什么都不跑、退出 0、没有统计。加了 `childEnv()` 清掉它，并写了一项测试固定这个行为
+（否则有人会以为这个变量无害而删掉）。
+
+### 四、实测
+
+```
+Node 22.18.0：编译 ✅  类型检查 ✅  612 项测试全绿
+Node 24.22.1：编译 ✅  类型检查 ✅  612 项测试全绿
+```
+
+新增测试 22 项：
+
+| 文件 | 数量 | 覆盖 |
+| --- | --- | --- |
+| `test/client-security-panel.test.ts` | 11 | 走完 Host→fetch→normalizeView→store→React DOM 全链路；两个挂载入口都测；保护关闭必须显示关闭；只有真旧 Host 才能显示缺状态 |
+| `test/test-count.test.ts` | 11 | TAP 与 spec 两种格式解析一致；非零退出与无法解析都让整体失败；继承 `NODE_TEST_CONTEXT` 的子进程被识别为无统计而非 0 |
+| `test/publisher-safety.test.ts` | +1 | 读取失败仍被拒绝（`EISDIR`，跨平台一致） |
+
+### 五、真实环境验收
+
+用全新的隔离 `DSH_HOME` 安装 0.2.4，重启 Host，在真实浏览器里打开插件的
+「安全与防注入」页，两种状态都截了图：
+
+| Host 实际返回 | 页面显示 |
+| --- | --- |
+| `protectionEnabled: true`, `strictness: standard` | 防注入保护已开启 · 语义审核严格度：标准（默认） |
+| `protectionEnabled: false`, `inputScanning: false`, `strictness: relaxed` | **防注入保护已关闭**（红色）· 输入风险检测 已关闭 · 宽松（仅高危才拦） |
+
+同时 `outputGate`/`stanceGuard` 仍为 true → 仍显示运行中，说明各状态独立精确，
+**关闭保护时没有伪造开启**。
+
+### 六、安装路径核实（上一轮在这里出过错）
+
+上一轮我曾把安装包解压到 `profiles/desktop/node_modules/dsh-ai-debate`，把 pnpm 的
+`link:` 替换成了真实目录，于是 DSH 实际加载的是那份残留副本，而我只更新了 link 目标。
+表现为"源码是新的、界面还是旧的"。
+
+这一版交付的核实方法是**用 Node 自己的解析语义**，而不是猜路径：
+
+```js
+createRequire('<profile>/package.json').resolve('dsh-ai-debate/package.json')
+```
+
+结果与源码构建产物逐字节一致：
+
+```
+resolve            : C:\Users\23866\.dsh\plugins\dsh-ai-debate\package\package.json
+version            : 0.2.4
+lib/index.js       : 19D8041EB72A763C86CBF788D77CAC861322BAE22A224B7DAEE9ED0555BC717D
+client/client.cjs  : 29AE25C52489F86089947C1EFBDA06F35D676CC285715A0CB5479F8E51A9E95D
+```
+
+### 七、一个如实说明的限制
+
+`securityProtection` **不在配置页的 `EDITABLE_FIELDS` 里**，所以页面只能**显示**
+保护状态，不能从页面开关它；要改只能改 profile 配置层。
+
+这是有意保留的：放开这个字段等于让任何能写配置的人关掉保护，而这一版的任务前提是
+「不允许为了消除错误而关闭任何保护」。若需要页面上可开关，应作为独立需求评审。
+
 ## [0.2.3] — 2026-10-28
 
 跨平台提示词注入防御与立场完整性。这一版加的**不是过滤器，是一条不可跨越的信任边界**：

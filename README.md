@@ -134,17 +134,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.3
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.4
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.3.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.4.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.3.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.4.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -438,6 +438,8 @@ debate_publish_reply({
 
 > 这一节描述的是 v0.2.3 起的安全层。设计细节与实测数据见
 > [`docs/v0.2.3-security-report.md`](docs/v0.2.3-security-report.md)。
+> v0.2.4 修的是这个面板**显示**上的两个缺陷（客户端白名单漏了字段、侧栏布局漏挂载
+> 两个区域），安全规则本身没有变化，也没有放宽。
 
 ### 它防的是什么
 
@@ -835,7 +837,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**583 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**612 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -866,7 +868,7 @@ node scripts/pack.mjs
 | `test/platform-routing.test.ts` | 9 | **路由与闸门**：双平台同 Runtime 各读自己的帖子；未知链接被拒；每平台只见自己的配置与凭据；只读与 unverified 平台在真实发表路径上被拒且适配器未被调用 |
 | `test/no-floor-number.test.ts` | 8 | **核心不依赖楼层号**：整帖无楼层号也能建时间线、认对手、列参与者、压上下文、还原目标；输出不含 `undefined`/`NaN` |
 | `test/publish-credential-gate.test.ts` | 9 | 凭据未证实时不发帖：拒绝在任何网络调用与幂等账之前 |
-| `test/publisher-safety.test.ts` | 58 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
+| `test/publisher-safety.test.ts` | 59 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
 | `test/route-lifecycle.test.ts` | 4 | 路由注册与卸载生命周期 |
 | `test/settings-auth.test.ts` | 18 | 设置读写的授权与越权拒绝 |
 | `test/settings-page.test.ts` | 36 | 设置页六个区域的行为 |
@@ -878,7 +880,10 @@ node scripts/pack.mjs
 | `test/security/adversarial.test.ts` | 36 | **18 个对抗场景**：直接注入、假冒管理员/主人、立场反转、归因污染、多轮拆分、结构伪装、Unicode 混淆、编码载荷、目标正确但攻击主人、替换已批准正文、跨平台撞车、审核被操纵、审核超时、直改状态文件 |
 | `test/security/security-events.test.ts` | 11 | **安全事件日志**：摘录必须脱敏去凭据、有长度上限、去掉不可见字符；日志本身不能变第二份攻击载荷 |
 | `test/settings-security-view.test.ts` | 8 | 设置页安全区：报告生效状态而非默认值；关闭保护时必须读得到 false；不含任何凭据 |
-| **合计** | **583** | |
+| `test/cordis-integration.test.ts` | 6 | **真实 Cordis 容器**：插件 `apply` 在真 `Context` 上注册出四条设置路由；webServer 晚到时仍注册；dispose 后路由摘干净 |
+| `test/client-security-panel.test.ts` | 11 | **安全面板全链路**：Host→fetch→normalizeView→store→React DOM；两个挂载入口都测；保护关闭必须显示关闭，不伪造开启 |
+| `test/test-count.test.ts` | 11 | **统计脚本自测**：TAP 与 spec 两种格式解析一致；非零退出与无法解析都让整体失败；`NODE_TEST_CONTEXT` 继承陷阱 |
+| **合计** | **612** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 
@@ -923,7 +928,7 @@ node --experimental-transform-types --test v013_dedupe_expiry_regression.test.mj
 
 #### 自动化测试（Mock / fixture，可重复运行）
 
-583 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
+612 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
 不需要网络和账号，**证明的是代码逻辑，不是平台能力**。
 
 #### 0.1.5 这一轮修的是什么
