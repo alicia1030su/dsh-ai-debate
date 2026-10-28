@@ -124,6 +124,37 @@ window.__ModuleLoader__.load({
       tabPersona: '人格',
       tabPublish: '发表与安全',
       tabPlatforms: '平台',
+      tabSecurity: '安全与防注入',
+      securityIntro: '防注入保护默认开启。确定性规则（身份、目标、凭据、立场）没有关闭开关——能关掉的只有语义审核的严格度。',
+      securityProtectionOn: '防注入保护已开启',
+      securityProtectionOff: '防注入保护已关闭',
+      securityStrictness: '语义审核严格度',
+      securityStrictness_strict: '严格（任何可疑文本都要人工确认）',
+      securityStrictness_standard: '标准（默认）',
+      securityStrictness_relaxed: '宽松（仅高危才拦）',
+      securityInput: '输入风险检测',
+      securityInputOn: '运行中：帖子、评论、楼中楼都会先扫描',
+      securityInputOff: '已关闭',
+      securityOutput: '输出安全审核',
+      securityOutputOn: '运行中：每条候选发表前都会过闸门',
+      securityStance: '主人立场保护',
+      securityStanceOn: '运行中：回复若攻击主人或改换立场会被阻止',
+      securityHardRules: '不可绕过的核心规则',
+      securityHardRulesOn: '身份校验、目标校验、凭据泄露、立场保护始终生效',
+      securitySemantic: '独立语义审核',
+      securitySemanticOff: '未启用：本版本只有确定性安全检查，没有独立的语义审核模型',
+      securityCounters: '拦截统计',
+      securityLast24h: '最近 24 小时事件',
+      securityBlocked: '被阻止的候选',
+      securityReviewerFailures: '审核失败降级次数',
+      securityRecent: '最近的安全事件',
+      securityNoEvents: '还没有安全事件。这是好事。',
+      securityNoData: '这个 Host 版本没有提供安全状态。',
+      securityRefresh: '刷新',
+      securityDecision_block: '已阻止',
+      securityDecision_review: '待人工确认',
+      securityDecision_allow: '放行',
+    
       tabStatus: '诊断与状态',
 
       ownerUserId: '主人贴吧数字 ID',
@@ -509,6 +540,7 @@ window.__ModuleLoader__.load({
       { id: 'persona', label: 'tabPersona' },
       { id: 'publish', label: 'tabPublish' },
       { id: 'platforms', label: 'tabPlatforms' },
+      { id: 'security', label: 'tabSecurity' },
       { id: 'status', label: 'tabStatus' },
     ]
 
@@ -2029,6 +2061,130 @@ window.__ModuleLoader__.load({
      * for itself which platforms are real would be the exact failure this version
      * is meant to prevent.
      */
+    /**
+     * The security panel.
+     *
+     * Every value comes from the Host's *effective* state, not from the schema
+     * defaults: a panel that reported "protection on" while it was off would teach
+     * the owner to stop reading it, which is worse than having no panel at all.
+     *
+     * The hard rules are rendered as a non-interactive line rather than a toggle on
+     * purpose. There is no switch to draw, and drawing a disabled-looking one would
+     * imply that some configuration could turn it off.
+     */
+    function SecuritySection(props) {
+      const { t, state } = props
+      const security = state.view.security
+
+      if (!security || typeof security !== 'object') {
+        // An older Host that does not send the field. Say so rather than render an
+        // empty panel, which would read as "protection is off".
+        return h('p', { className: 'dsd-hint' }, t('securityNoData'))
+      }
+
+      const badge = (on) =>
+        h(
+          'span',
+          { className: 'dsd-badge ' + (on ? 'dsd-badge-ok' : 'dsd-badge-bad') },
+          t(on ? 'securityProtectionOn' : 'securityProtectionOff'),
+        )
+
+      const statusRow = (label, on, textOn, textOff) =>
+        h(
+          'div',
+          { className: 'dsd-inline', style: { alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 6 } },
+          h('span', { className: 'dsd-badge ' + (on ? 'dsd-badge-ok' : 'dsd-badge-warn') }, t(label)),
+          h('span', { className: 'dsd-hint', style: { margin: 0 } }, t(on ? textOn : textOff)),
+        )
+
+      const strictnessLabel = (value) => {
+        const key = 'securityStrictness_' + String(value)
+        const translated = t(key)
+        return translated === key ? String(value) : translated
+      }
+
+      const counters = security.counters || {}
+      const recent = Array.isArray(security.recent) ? security.recent : []
+
+      return h(
+        Fragment,
+        null,
+        h('p', { className: 'dsd-hint', style: { marginBottom: 12 } }, t('securityIntro')),
+
+        h(
+          'div',
+          { className: 'dsd-inline', style: { alignItems: 'baseline', gap: 8, flexWrap: 'wrap', marginBottom: 12 } },
+          h('span', { className: 'dsd-sect-title', style: { margin: 0 } }, t('tabSecurity')),
+          badge(security.protectionEnabled),
+          h('span', { className: 'dsd-badge' }, t('securityStrictness') + '：' + strictnessLabel(security.strictness)),
+        ),
+
+        statusRow('securityInput', security.inputScanning, 'securityInputOn', 'securityInputOff'),
+        statusRow('securityOutput', security.outputGate, 'securityOutputOn', 'securityOutputOff'),
+        statusRow('securityStance', security.stanceGuard, 'securityStanceOn', 'securityOutputOff'),
+        statusRow('securityHardRules', security.hardRulesEnforced === true, 'securityHardRulesOn', 'securityHardRulesOn'),
+
+        // The semantic reviewer is genuinely absent in this build. Saying so is the
+        // point: a panel that implied a second reviewer was running would overstate
+        // the protection by exactly the amount that matters.
+        h(
+          'p',
+          { className: 'dsd-hint', style: { marginTop: 10 } },
+          h('strong', null, t('securitySemantic') + '：'),
+          t(security.semanticReview ? 'securityOutputOn' : 'securitySemanticOff'),
+        ),
+
+        h('p', { className: 'dsd-sect-title', style: { marginTop: 14 } }, t('securityCounters')),
+        h(
+          'dl',
+          { className: 'dsd-kv' },
+          h('dt', null, t('securityLast24h')),
+          h('dd', null, String(counters.last24h || 0)),
+          h('dt', null, t('securityBlocked')),
+          h('dd', null, String(counters.blocked || 0)),
+          h('dt', null, t('securityReviewerFailures')),
+          h('dd', null, String(counters.reviewerUnavailable || 0)),
+        ),
+
+        h('p', { className: 'dsd-sect-title', style: { marginTop: 14 } }, t('securityRecent')),
+        recent.length === 0
+          ? h('p', { className: 'dsd-hint' }, t('securityNoEvents'))
+          : h(
+              'ul',
+              { className: 'dsd-list' },
+              recent.map((event, index) =>
+                h(
+                  'li',
+                  { key: String(index) },
+                  // Only the stored, redacted summary is rendered. The raw post text
+                  // is never sent to the browser by the Host, so there is nothing to
+                  // leak here even by accident.
+                  String(event.at || '').replace('T', ' ').slice(0, 16) +
+                    ' · ' +
+                    String(event.summary || '') +
+                    (event.decision
+                      ? ' · ' + (t('securityDecision_' + event.decision) || event.decision)
+                      : ''),
+                ),
+              ),
+            ),
+
+        h(
+          'div',
+          { className: 'dsd-inline', style: { marginTop: 12 } },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsd-btn dsd-btn-ghost',
+              onClick: () => store.load(),
+            },
+            t('securityRefresh'),
+          ),
+        ),
+      )
+    }
+
     function PlatformsSection(props) {
       const { t, state } = props
       const rows = state.view.platforms
@@ -2272,6 +2428,7 @@ window.__ModuleLoader__.load({
         if (state.tab === 'persona') return h(PersonaSection, shared)
         if (state.tab === 'publish') return h(PublishSection, shared)
         if (state.tab === 'platforms') return h(PlatformsSection, shared)
+        if (state.tab === 'security') return h(SecuritySection, shared)
         if (state.tab === 'status') return h(StatusSection, shared)
         return h(AccountSection, shared)
       })()

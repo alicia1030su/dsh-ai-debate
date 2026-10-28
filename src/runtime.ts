@@ -54,11 +54,15 @@ import {
   newCandidateId,
   newSessionId,
   type DedupeRecord,
+  type SecurityEventRecord,
   type StoredCandidate,
   type StoredSession,
   type TaskState,
 } from './store.js'
 import type { ResolvedConfig } from './config.js'
+import { guardOutput, toStorageRecord, type ConversationPost } from './security/output-guard.js'
+import { ownerFromBinding, type CandidateSecurityAssessment, type SecurityStrictness } from './security/security-policy.js'
+import { makeEvent, type SecurityEvent, type SecurityEventKind } from './security/security-events.js'
 
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
@@ -1020,6 +1024,39 @@ export async function runGeneration(
   // against that), but the id used to place the reply comes from collected data.
   const verifiedTargetPostId = dispute.opponent?.lastPostId ?? ''
   const candidateText = result.draft?.reply ?? ''
+
+  // The independent security gate.
+  //
+  // This runs on the *text*, not on the model's opinion of it: a model that has
+  // been talked into attacking the owner will also happily report that it behaved.
+  // The verdict is stored with the candidate so the publish path can re-check the
+  // exact same prose, and so editing the text afterwards invalidates it.
+  const ownerBinding = ownerFor(bindingsOf(config), session.platform)
+  const guarded = guardOutput({
+    reply: candidateText,
+    targetPostId: verifiedTargetPostId,
+    expectedTargetPostId: verifiedTargetPostId,
+    owner: ownerFromBinding({
+      platform: session.platform,
+      ...(ownerBinding?.primary.accountId !== undefined
+        ? { accountId: ownerBinding.primary.accountId }
+        : {}),
+      ...(ownerBinding?.primary.displayName !== undefined
+        ? { displayName: ownerBinding.primary.displayName }
+        : {}),
+    }),
+    ...(dispute.opponent?.displayName !== undefined
+      ? { opponentName: dispute.opponent.displayName }
+      : {}),
+    posts: collectedPostsOf(collected),
+    ownerPostIds: new Set(
+      dispute.ownerStatements.map((statement) => statement.postId),
+    ),
+    opponentPostIds: new Set(dispute.exchange.map((statement) => statement.postId)),
+    conversationText: conversationTextsOf(collected),
+    strictness: securityStrictnessOf(config),
+  })
+
   const candidate: StoredCandidate = {
     replyId: candidateId,
     text: candidateText,
@@ -1033,6 +1070,7 @@ export async function runGeneration(
     confidence: result.draft?.confidence ?? 0,
     violations: result.violations.map((violation) => violation.message),
     notes: result.notes,
+    security: toStorageRecord(guarded.assessment, guarded.fingerprint),
     createdAt: new Date().toISOString(),
     approved: false,
   }
@@ -1048,9 +1086,8 @@ export async function runGeneration(
       ? 'READY'
       : 'REVIEWING'
 
-  await runtime.store.mutate((data) => ({
-    ...data,
-    sessions: data.sessions.map((entry) => {
+  await runtime.store.mutate((data) => {
+    const nextSessions = data.sessions.map((entry) => {
       if (entry.id !== session.id) return entry
       // Every transition goes through the machine; an illegal move keeps the
       // previous state and says why instead of silently jumping.
@@ -1068,7 +1105,7 @@ export async function runGeneration(
             ? '尚未确认争论对象，不能进入待发表状态'
             : candidate.violations.length > 0
               ? `候选回复未通过检查：${candidate.violations.join('；')}`
-              : '候选回复已就绪，等待主人确认'
+              : securitySummaryOf(guarded.assessment) || '候选回复已就绪，等待主人确认'
       return {
         ...entry,
         state: moved.state,
@@ -1076,20 +1113,38 @@ export async function runGeneration(
         candidates: [...entry.candidates, candidate],
         updatedAt: new Date().toISOString(),
       }
-    }),
-    usage: [
-      ...data.usage,
-      {
-        at: new Date().toISOString(),
-        sessionId: session.id,
-        purpose: 'generate' as const,
-        model: config.llmModel,
-        inputTokens: result.usage.inputTokens,
-        outputTokens: result.usage.outputTokens,
-        elapsedMs: result.usage.elapsedMs,
-      },
-    ],
-  }))
+    })
+
+    // Record the security outcome as an event, so the settings page can show what
+    // has been happening even after the candidate is long gone. Only `block` and
+    // `review` are worth a line: logging every `allow` would bury them.
+    const securityEvents = eventsForCandidate(guarded.assessment, {
+      platform: session.platform,
+      threadId: session.threadId,
+      postId: verifiedTargetPostId,
+      limit: config.securityEventLimit,
+    })
+
+    return {
+      ...data,
+      sessions: nextSessions,
+      ...(securityEvents.length > 0
+        ? { security: boundedEvents(data.security ?? [], securityEvents, config.securityEventLimit) }
+        : {}),
+      usage: [
+        ...data.usage,
+        {
+          at: new Date().toISOString(),
+          sessionId: session.id,
+          purpose: 'generate' as const,
+          model: config.llmModel,
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          elapsedMs: result.usage.elapsedMs,
+        },
+      ],
+    }
+  })
 
   return {
     sessionId: session.id,
@@ -1350,6 +1405,107 @@ export async function healthCheck(runtime: Runtime): Promise<HealthReport> {
 function credentialNamesOf(adapter: object): readonly string[] {
   const probe = adapter as { describeCookieNames?: () => readonly string[] }
   return typeof probe.describeCookieNames === 'function' ? probe.describeCookieNames() : []
+}
+
+/** What the AI can safely be told about one collected post. */
+function collectedPostsOf(collected: CollectedThread): readonly ConversationPost[] {
+  const out: ConversationPost[] = []
+  for (const entry of collected.floors) {
+    out.push({ postId: entry.floor.postId, authorKey: entry.floor.authorId ?? '', text: entry.floor.content })
+    for (const reply of entry.nested) {
+      out.push({ postId: reply.postId, authorKey: reply.authorId ?? '', text: reply.content })
+    }
+  }
+  return out
+}
+
+/**
+ * The conversation text a reply was generated from, for injection assessment.
+ *
+ * Includes the thread body and every comment, because an attacker may hide the
+ * payload in either and the detector only sees what it is given.
+ */
+function conversationTextsOf(collected: CollectedThread): readonly string[] {
+  const out: string[] = [collected.thread.title, collected.thread.content]
+  for (const entry of collected.floors) {
+    out.push(entry.floor.content)
+    for (const reply of entry.nested) out.push(reply.content)
+  }
+  return out.filter((text) => text.trim() !== '')
+}
+
+/** The owner's strictness setting, defaulting to the middle. */
+function securityStrictnessOf(config: ResolvedConfig): SecurityStrictness {
+  const raw = config.securityStrictness
+  return raw === 'strict' || raw === 'relaxed' ? raw : 'standard'
+}
+
+/** A one-line status for the session card when security changed the outcome. */
+function securitySummaryOf(assessment: CandidateSecurityAssessment): string | undefined {
+  if (assessment.decision === 'allow') return undefined
+  const head = assessment.decision === 'block' ? '安全闸门已阻止' : '需要人工确认安全风险'
+  return assessment.reasons.length === 0 ? head : `${head}：${assessment.reasons[0]}`
+}
+
+/**
+ * Turn one candidate's assessment into events worth recording.
+ *
+ * Only `block` and `review` produce an event: an `allow` is the normal case, and
+ * logging it would bury the two that matter. A blocked candidate also records
+ * *why* in the summary so the settings page is useful without opening the session.
+ */
+function eventsForCandidate(
+  assessment: CandidateSecurityAssessment,
+  context: { platform: string; threadId: string; postId: string; limit: number },
+): readonly SecurityEvent[] {
+  if (assessment.decision === 'allow') return []
+
+  const kind: SecurityEventKind =
+    assessment.decision === 'block' ? 'output_blocked' : 'output_review'
+  const severity: SecurityEvent['severity'] = assessment.decision === 'block' ? 'critical' : 'medium'
+  const summary =
+    assessment.reasons.length > 0
+      ? assessment.reasons[0]!
+      : assessment.decision === 'block'
+        ? '候选回复被安全闸门阻止'
+        : '候选回复需要人工确认'
+
+  return [
+    makeEvent({
+      kind,
+      summary,
+      severity,
+      decision: assessment.decision,
+      platform: context.platform,
+      threadId: context.threadId,
+      postId: context.postId,
+    }),
+  ]
+}
+
+/** Append events and keep the newest `limit`. */
+function boundedEvents(
+  existing: readonly SecurityEventRecord[],
+  added: readonly SecurityEvent[],
+  limit: number,
+): readonly SecurityEventRecord[] {
+  const combined: SecurityEventRecord[] = [
+    ...existing,
+    ...added.map((event) => ({
+      id: event.id,
+      at: event.at,
+      kind: event.kind,
+      severity: event.severity,
+      summary: event.summary,
+      ...(event.platform !== undefined ? { platform: event.platform } : {}),
+      ...(event.threadId !== undefined ? { threadId: event.threadId } : {}),
+      ...(event.postId !== undefined ? { postId: event.postId } : {}),
+      ...(event.decision !== undefined ? { decision: event.decision } : {}),
+      ...(event.excerpt !== undefined ? { excerpt: event.excerpt } : {}),
+    })),
+  ]
+  if (limit <= 0) return []
+  return combined.length > limit ? combined.slice(combined.length - limit) : combined
 }
 
 /**

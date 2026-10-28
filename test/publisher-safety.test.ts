@@ -26,6 +26,7 @@ import { PlatformError } from '../lib/types.js'
 import type { TaskState } from '../lib/store.js'
 import { DebateStore, StoreError, dedupeKey } from '../lib/store.js'
 import { contentHash } from '../lib/target.js'
+import { assessmentFingerprint } from '../lib/security/security-policy.js'
 import { publishCandidate, inFlightCount, resetInFlight } from '../lib/publisher.js'
 import { stopSession } from '../lib/runtime.js'
 import { interpretPublishResponse, buildAncestors, readAuthFromHtml } from '../lib/platforms/tieba/adapter.js'
@@ -131,6 +132,28 @@ function readySession(input: {
         confidence: 0.8,
         violations: input.violations ?? [],
         notes: [],
+        // v0.2.3: every publishable candidate carries a security assessment, and
+        // the publish gate refuses one that does not. These fixtures exercise the
+        // publisher's *other* refusals (auth, dedupe, timeouts), so they attach a
+        // benign `allow` assessment — built through the real fingerprint helper so
+        // it matches the text and target exactly.
+        security: {
+          injectionDetected: false,
+          ownerIdentityValid: true,
+          targetIdentityValid: true,
+          stanceConsistency: 'consistent' as const,
+          ownerDirectedAttack: false,
+          unauthorizedInstructionFollowed: false,
+          secretLeakRisk: false,
+          evidenceIntegrityValid: true,
+          decision: 'allow' as const,
+          reasons: [],
+          fingerprint: assessmentFingerprint({
+            reply: input.candidateText,
+            targetPostId,
+            decision: 'allow',
+          }),
+        },
         createdAt: now,
         approved: false,
       },

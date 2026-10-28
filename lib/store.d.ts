@@ -69,14 +69,50 @@ export interface StoredCandidate {
     readonly confidence: number;
     readonly violations: readonly string[];
     readonly notes: readonly string[];
+    /**
+     * The security assessment this text was generated under.
+     *
+     * v0.2.3: a candidate with no assessment cannot be published. The field is
+     * optional only because candidates persisted before this version have none —
+     * and the publish gate refuses exactly those, which is the point: an approval
+     * that predates the gate must not be treated as having passed it.
+     */
+    readonly security?: CandidateSecurityRecord;
     readonly createdAt: string;
     /** True once a human approved this exact text at this exact version. */
     readonly approved: boolean;
     /** Set after publishing, when the platform confirmed it. */
     readonly publishedPostId?: string;
 }
-/** One discussion session, scoped to a single thread + owner + opponent. */
-export interface StoredSession {
+/**
+ * The persisted form of a candidate's security assessment.
+ *
+ * A structural copy of `CandidateSecurityAssessment` from `security/security-policy.ts`,
+ * declared here so `store.ts` keeps knowing nothing about the security module —
+ * persistence is a data concern, and a store that imports policy logic would make
+ * the two impossible to version apart.
+ */
+export interface CandidateSecurityRecord {
+    readonly injectionDetected: boolean;
+    readonly ownerIdentityValid: boolean;
+    readonly targetIdentityValid: boolean;
+    readonly stanceConsistency: 'consistent' | 'uncertain' | 'contradictory';
+    readonly ownerDirectedAttack: boolean;
+    readonly unauthorizedInstructionFollowed: boolean;
+    readonly secretLeakRisk: boolean;
+    readonly evidenceIntegrityValid: boolean;
+    readonly decision: 'allow' | 'review' | 'block';
+    readonly reasons: readonly string[];
+    /**
+     * Fingerprint binding this decision to one exact text and target.
+     *
+     * The publisher recomputes it before sending. Without it, "approved" would be
+     * attached to a session rather than to a piece of prose, and editing the text
+     * after approval would inherit the old approval.
+     */
+    readonly fingerprint: string;
+}
+/** One discussion session, scoped to a single thread + owner + opponent. */ export interface StoredSession {
     readonly id: string;
     readonly platform: string;
     readonly threadId: string;
@@ -194,6 +230,34 @@ export interface StoreData {
     readonly sessions: readonly StoredSession[];
     readonly dedupe: readonly DedupeRecord[];
     readonly usage: readonly UsageRecord[];
+    /**
+     * Recent security events, newest last.
+     *
+     * Optional because a store written by an earlier version has none, and because
+     * an empty list and an absent field mean the same thing here ("nothing recorded
+     * yet"). The events themselves never carry attacker text beyond a redacted
+     * excerpt — see `security/security-events.ts`, which owns that rule.
+     */
+    readonly security?: readonly SecurityEventRecord[];
+}
+/**
+ * The persisted form of a security event.
+ *
+ * Structurally identical to `SecurityEvent` in `security/security-events.ts`,
+ * declared separately so persistence keeps knowing nothing about the security
+ * module.
+ */
+export interface SecurityEventRecord {
+    readonly id: string;
+    readonly at: string;
+    readonly kind: string;
+    readonly severity: string;
+    readonly summary: string;
+    readonly platform?: string;
+    readonly threadId?: string;
+    readonly postId?: string;
+    readonly decision?: string;
+    readonly excerpt?: string;
 }
 /** Empty store. */
 export declare function emptyStore(): StoreData;
@@ -310,6 +374,21 @@ export declare class DebateStore {
     private persist;
     /** Find a session by id. */
     getSession(id: string): StoredSession | undefined;
+    /**
+     * Recent security events, oldest first.
+     *
+     * Returns an empty array when the store predates the field, so a caller never
+     * has to distinguish "no events" from "old file" — both mean nothing to report.
+     */
+    getSecurityEvents(): readonly SecurityEventRecord[];
+    /**
+     * Append one security event, keeping the newest `limit`.
+     *
+     * The cap is enforced here rather than by the caller so a store written by any
+     * path stays bounded: an attacker who can post a thousand times must not be able
+     * to grow this file without limit.
+     */
+    appendSecurityEvent(event: SecurityEventRecord, limit: number): Promise<void>;
     /** Sessions for one thread, newest first. */
     sessionsForThread(threadId: string): readonly StoredSession[];
     /** The dedupe record for a trigger, if any. */

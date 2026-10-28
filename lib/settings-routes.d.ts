@@ -122,6 +122,16 @@ export interface SettingsRouteDeps {
      * prevent.
      */
     platforms?(): readonly PlatformView[];
+    /**
+     * What the injection-protection layer is actually doing.
+     *
+     * Optional for the same reason `platforms` is: existing route tests keep
+     * compiling. When present the page shows a security section, and the values come
+     * from the running code rather than from the defaults — a page that reports the
+     * default instead of the effective value is how a disabled protection looks
+     * enabled.
+     */
+    security?(): SecurityView;
     /** Preview all four personas against a fixed exchange. */
     previewPersonas(): Promise<readonly PersonaPreview[]>;
     /**
@@ -168,6 +178,53 @@ export interface PlatformView {
     readonly constraints?: readonly string[];
     readonly authModel?: string;
     readonly urlShapes?: readonly string[];
+}
+/**
+ * What the injection-protection layer reports to the settings page.
+ *
+ * Every field is the *effective* state, read from the running code. A page that
+ * echoed the configured default instead would show protection as on while it was
+ * off, which is the worst possible lie for a security panel: the owner would stop
+ * looking.
+ *
+ * No field can carry attacker text. `recent` entries are the redacted one-line
+ * summaries produced by `security-events.ts`, and they never include a credential
+ * or a full post.
+ */
+export interface SecurityView {
+    /** The master switch, as effective right now. */
+    readonly protectionEnabled: boolean;
+    /** How eagerly text-level evidence forces review. */
+    readonly strictness: string;
+    /**
+     * True when the deterministic rules are enforced.
+     *
+     * Always true. It is in the payload so the page can *say* it, and so a future
+     * change that made it configurable would break this field rather than quietly
+     * shipping an off switch.
+     */
+    readonly hardRulesEnforced: true;
+    /** Input scanning is available and running. */
+    readonly inputScanning: boolean;
+    /** The output gate runs before every publish. */
+    readonly outputGate: boolean;
+    /** Stance protection is active, i.e. replies are checked against the owner. */
+    readonly stanceGuard: boolean;
+    /** Whether the semantic reviewer is configured at all. */
+    readonly semanticReview: boolean;
+    /** Counters over the retained event window. */
+    readonly counters: {
+        readonly last24h: number;
+        readonly blocked: number;
+        readonly reviewerUnavailable: number;
+    };
+    /** Redacted recent events, newest first, already formatted for display. */
+    readonly recent: readonly {
+        readonly at: string;
+        readonly summary: string;
+        readonly severity: string;
+        readonly decision?: string;
+    }[];
 }
 /** What a real "stop everything now" call actually managed to do. */ export interface PauseOutcome {
     /** Sessions moved to CANCELLED by this call. */

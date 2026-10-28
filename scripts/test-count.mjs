@@ -16,9 +16,28 @@ import { join } from 'node:path'
 
 const root = join(import.meta.dirname, '..')
 const testDir = join(root, 'test')
-const files = readdirSync(testDir)
-  .filter((name) => name.endsWith('.test.ts'))
-  .sort()
+
+/**
+ * Every `.test.ts` under `test/`, recursively.
+ *
+ * Recursive because v0.2.3 added `test/security/`. A non-recursive listing silently
+ * omitted 46 tests from the README table, which is worse than being wrong loudly:
+ * the table looked complete.
+ */
+function testFiles(dir, prefix = '') {
+  const out = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+    if (entry.isDirectory()) {
+      out.push(...testFiles(join(dir, entry.name), relative))
+    } else if (entry.name.endsWith('.test.ts')) {
+      out.push(relative)
+    }
+  }
+  return out
+}
+
+const files = testFiles(testDir).sort()
 
 // The repo's tests are TypeScript run through Node's own type stripping.
 const NODE_ARGS = ['--experimental-transform-types', '--test']

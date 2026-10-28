@@ -18,6 +18,7 @@
 
 import { PlatformError, type PlatformAdapter, type PublishOutcome, type ThreadRef } from './types.js'
 import { DebateStore, dedupeKey, upsertDedupe, type DedupeRecord, type StoredCandidate, type StoredSession } from './store.js'
+import { recheckBeforePublish } from './security/output-guard.js'
 import {
   describeTargetProblem,
   contentHash,
@@ -590,6 +591,31 @@ async function sendOnce(
       status: 'refused',
       message: '这个会话已被主人停止，未发出请求。',
       errorCode: 'cancelled',
+    }
+  }
+
+  // The security gate, re-run against the exact text about to be sent.
+  //
+  // This is the last thing before anything irreversible: after the target has been
+  // re-read and confirmed, and before the session moves to PUBLISHING or a `pending`
+  // row is written. Re-running it here is what makes an approval bind to *this*
+  // prose — if the text changed after approval, or the stored verdict was `block`,
+  // then nothing is written and no request leaves.
+  //
+  // It runs after the target/snapshot checks so the owner sees the most specific
+  // reason first: "this draft is stale" is more actionable than "security blocked",
+  // and a stale candidate is refused regardless of its text.
+  //
+  // `humanApproved` does not override a block. An owner who approves a reply that
+  // insults them has been persuaded or misread, and the plugin exists to argue *for*
+  // them — so the honest answer is to refuse, and let them edit and re-run.
+  const security = recheckBeforePublish({ candidate, textToSend: request.approvedText })
+  if (!security.ok) {
+    return {
+      ok: false,
+      status: 'refused',
+      errorCode: 'security_blocked',
+      message: `安全闸门拒绝发表：${security.reason}`,
     }
   }
 

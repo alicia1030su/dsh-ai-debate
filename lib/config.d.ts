@@ -35,6 +35,30 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      * degrade to "unbound" rather than prevent the plugin from mounting.
      */
     platformAccounts: z<string, string, "volatile-defined">;
+    /**
+     * Master switch for injection protection.
+     *
+     * Defaults to `true`, and turning it off does **not** disable the deterministic
+     * checks (target identity, credential leakage, owner attack) — those are not
+     * configurable, because an option to disable them is an option an attacker only
+     * has to talk the owner into flipping.
+     */
+    securityProtection: z<boolean, boolean, "volatile-defined">;
+    /**
+     * How eagerly text-level injection evidence forces a human review.
+     *
+     * Only the *semantic* threshold moves. `strict` flags anything at all (use it if
+     * the account is being actively targeted), `relaxed` only high and critical.
+     */
+    securityStrictness: z<"strict" | "standard" | "relaxed", "strict" | "standard" | "relaxed", "volatile-defined">;
+    /**
+     * How many recent security events to keep for the settings page.
+     *
+     * Events store a redacted excerpt, never a whole post, so a large number is not
+     * a memory risk — but it is also not useful, and a long list makes the important
+     * ones harder to see.
+     */
+    securityEventLimit: z<number, number, "volatile-defined">;
     /** A Tieba cookie header copied from a logged-in browser. Never logged. */
     tiebaCookie: z<string, string, "volatile-defined">;
     /** Default persona style. */
@@ -121,6 +145,30 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      * degrade to "unbound" rather than prevent the plugin from mounting.
      */
     platformAccounts: z<string, string, "volatile-defined">;
+    /**
+     * Master switch for injection protection.
+     *
+     * Defaults to `true`, and turning it off does **not** disable the deterministic
+     * checks (target identity, credential leakage, owner attack) — those are not
+     * configurable, because an option to disable them is an option an attacker only
+     * has to talk the owner into flipping.
+     */
+    securityProtection: z<boolean, boolean, "volatile-defined">;
+    /**
+     * How eagerly text-level injection evidence forces a human review.
+     *
+     * Only the *semantic* threshold moves. `strict` flags anything at all (use it if
+     * the account is being actively targeted), `relaxed` only high and critical.
+     */
+    securityStrictness: z<"strict" | "standard" | "relaxed", "strict" | "standard" | "relaxed", "volatile-defined">;
+    /**
+     * How many recent security events to keep for the settings page.
+     *
+     * Events store a redacted excerpt, never a whole post, so a large number is not
+     * a memory risk — but it is also not useful, and a long list makes the important
+     * ones harder to see.
+     */
+    securityEventLimit: z<number, number, "volatile-defined">;
     /** A Tieba cookie header copied from a logged-in browser. Never logged. */
     tiebaCookie: z<string, string, "volatile-defined">;
     /** Default persona style. */
@@ -190,6 +238,9 @@ export declare const DEFAULT_CONFIG: {
     aiAccountUserId: string;
     allowedOwnerIds: string;
     platformAccounts: string;
+    securityProtection: boolean;
+    securityStrictness: "strict" | "standard" | "relaxed";
+    securityEventLimit: number;
     tiebaCookie: string;
     personaStyle: "tieba_veteran";
     intensity: number;

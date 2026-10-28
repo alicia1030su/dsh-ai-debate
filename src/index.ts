@@ -72,10 +72,13 @@ import {
   type PlatformView,
   type RequestAuthorizer,
   type SettingsRouteDeps,
+  type SecurityView,
   type WebRoute,
 } from './settings-routes.js'
 import type { InjectableScope } from './host.js'
 import { CredentialMirror } from './credential-mirror.js'
+import { countersOf, type SecurityEvent } from './security/security-events.js'
+import type { SecurityDecision } from './security/security-policy.js'
 import { COOKIE_REF, SECRET_REFS, findCredentialSeam, type SecretOverlay } from './secrets.js'
 
 /** Stable Loader identity; matches the row id in `cordis.patch.yml`. */
@@ -357,8 +360,65 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
    * (they are a plan). The two are told apart by `implemented`, never by wording,
    * so the page cannot present a research note as a shipped feature.
    */
-  const describePlatforms = (): readonly PlatformView[] => {
-    const activeId = runtime.adapter.id
+  /**
+   * The effective security state, for the settings page.
+   *
+   * Read from the running configuration and the retained event log, not from the
+   * schema defaults: a panel that reports what *should* be on while it is off is
+   * the one failure mode a security panel must not have.
+   */
+  const describeSecurity = (): SecurityView => {
+    const config = runtime.config()
+    // The stored records are structurally a superset of `SecurityEvent` except
+    // that their string fields are widened for forward compatibility with a newer
+    // writer. Narrowing on read keeps the analysis honest: an event whose `kind`
+    // this build does not recognise still displays, it simply counts as `none`.
+    const events = runtime.store.getSecurityEvents().map(
+      (record): SecurityEvent => ({
+        id: record.id,
+        at: record.at,
+        kind: record.kind as SecurityEvent['kind'],
+        severity: record.severity as SecurityEvent['severity'],
+        summary: record.summary,
+        ...(record.platform !== undefined ? { platform: record.platform } : {}),
+        ...(record.threadId !== undefined ? { threadId: record.threadId } : {}),
+        ...(record.postId !== undefined ? { postId: record.postId } : {}),
+        ...(record.decision !== undefined
+          ? { decision: record.decision as SecurityDecision }
+          : {}),
+        ...(record.excerpt !== undefined ? { excerpt: record.excerpt } : {}),
+      }),
+    )
+    return {
+      protectionEnabled: config.securityProtection,
+      strictness: config.securityStrictness,
+      // Always true: the deterministic rules have no off switch. Declared as the
+      // literal `true` in the type so removing that property would be a type
+      // error rather than a quiet behaviour change.
+      hardRulesEnforced: true,
+      inputScanning: config.securityProtection,
+      outputGate: true,
+      // Stance checking is part of the output gate and therefore unconditional;
+      // it is reported separately so the page can name it.
+      stanceGuard: true,
+      // The semantic reviewer is optional: this build ships the deterministic
+      // layer only, and the page must say so rather than imply a second reviewer
+      // is running.
+      semanticReview: false,
+      counters: countersOf(events),
+      recent: [...events]
+        .reverse()
+        .slice(0, 10)
+        .map((event) => ({
+          at: event.at,
+          summary: event.summary,
+          severity: event.severity,
+          ...(event.decision !== undefined ? { decision: event.decision } : {}),
+        })),
+    }
+  }
+
+  const describePlatforms = (): readonly PlatformView[] => {    const activeId = runtime.adapter.id
     const rows: PlatformView[] = []
     for (const provider of platforms.list()) {
       const matrix = provider.describeCapabilities()
@@ -665,6 +725,10 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     // and manifests (a plan). A page that renders them identically is exactly how
     // "we support Weibo" starts being read as true.
     platforms: () => describePlatforms(),
+    // The security panel reads the effective state, not the configured defaults: a
+    // page that showed "protection on" while it was off would teach the owner to
+    // stop looking, which is worse than having no panel.
+    security: () => describeSecurity(),
     // The page must not be told "unconfigured" because the mirror loaded too
     // early. This is the visible half of the v0.1.9 bug: after a restart the
     // badge said the cookie was missing while the store had it all along.
