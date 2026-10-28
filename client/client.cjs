@@ -604,6 +604,23 @@ window.__ModuleLoader__.load({
         // the field undefined so the section can say "this deployment does not
         // report platforms" rather than drawing an empty list.
         platforms: Array.isArray(raw.platforms) ? raw.platforms : undefined,
+        // The effective security state.
+        //
+        // This list is a whitelist, so a field the Host sends and this function
+        // does not name is silently dropped — which is exactly what happened in
+        // v0.2.3: `describeSecurity()` built a complete state, `viewOfSettings()`
+        // put it on the payload, and the panel still reported「这个 Host 版本没有
+        // 提供安全状态。」for every deployment, including the ones where protection
+        // was *off*. A security panel that cannot see the truth always picks the
+        // safe-looking answer, which here was the false one.
+        //
+        // Shape-checked rather than copied blindly: a Host that sends an array or a
+        // string under this key is not reporting a state, and rendering it would
+        // print `undefined` all over the panel.
+        security:
+          raw.security && typeof raw.security === 'object' && !Array.isArray(raw.security)
+            ? raw.security
+            : undefined,
         capabilities: raw.capabilities || { settingsService: false, credentialService: false },
       }
     }
@@ -2619,6 +2636,12 @@ window.__ModuleLoader__.load({
         // One tab per page in the sidebar would be one entry too many, so the
         // section stacks every area: the sidebar is the "show me everything"
         // door, and the plugin row keeps the tabbed card.
+        //
+        // Every area belongs here. v0.2.3 stacked five of the seven and silently
+        // omitted `SecuritySection` and `PlatformsSection` — the two panels added
+        // last, which is precisely the pair a reader would go looking for after
+        // reading the README. A section that exists but is never mounted is
+        // indistinguishable from one that was never written.
         const shared = { t, store, state }
         return h(
           'div',
@@ -2627,6 +2650,8 @@ window.__ModuleLoader__.load({
           h('section', { className: 'dsd-page-sect' }, h(ModelSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(PersonaSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(PublishSection, shared)),
+          h('section', { className: 'dsd-page-sect' }, h(PlatformsSection, shared)),
+          h('section', { className: 'dsd-page-sect' }, h(SecuritySection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(StatusSection, shared)),
         )
       })()

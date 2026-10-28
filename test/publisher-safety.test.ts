@@ -795,6 +795,21 @@ test('a claim is released after the publish finishes, so a later retry is judged
 test('an unwritable state directory refuses to publish instead of sending unguarded', async () => {
   // Requirement: without a persisted dedupe record there must be no send. A
   // reply whose record lives only in memory can be sent again after a restart.
+  //
+  // ## Why the ordering below is load-bearing
+  //
+  // The obvious way to make writes fail is to point the store at a path whose
+  // parent is a regular file. But that same obstruction also breaks the *read*,
+  // and the two OSes report it differently:
+  //
+  //   Linux  : readFile → ENOTDIR  → StoreError('read_failed'), thrown by ready()
+  //   Windows: readFile → ENOENT   → treated as "first run", so ready() succeeds
+  //
+  // So the naive version of this test failed on CI and passed on Windows — not
+  // because the code differed, but because ENOENT hides the obstruction. The fix
+  // is to prove the *read* succeeds first, then obstruct, so every platform reaches
+  // the write path this test is actually about. Windows is no longer able to pass
+  // by accident, and Linux no longer fails before it gets here.
   resetInFlight()
   const dir = mkdtempSync(join(tmpdir(), 'debate-ro-'))
   try {
@@ -804,11 +819,24 @@ test('an unwritable state directory refuses to publish instead of sending unguar
     const session = readySession({ id: 's-ro', triggerPostId: 'p-ro', candidateText: text })
     await store.mutate((data) => ({ ...data, sessions: [session] }))
 
-    // Make every subsequent write fail by pointing the store at a path whose
-    // parent is a file, which cannot hold a directory.
-    const blocker = join(dir, 'blocked')
     const { writeFileSync } = await import('node:fs')
+    const blocker = join(dir, 'blocked')
+
+    // A second store pointed *inside* the future blocker. Its first load runs while
+    // the path is still absent, so it takes the documented "first run" branch and
+    // succeeds on both platforms — that success is the precondition.
+    const failing = new DebateStore({ dir: join(blocker, 'inner') })
+    await failing.ready()
+
+    // Only now create the obstruction. Every later write has to fail.
     writeFileSync(blocker, 'not a directory', 'utf8')
+
+    await assert.rejects(
+      () => failing.mutate((data) => ({ ...data, sessions: [session] })),
+      (error: unknown) => error instanceof StoreError && error.code === 'write_failed',
+      '写不进去时必须抛 write_failed，而不是静默当成已保存',
+    )
+    assert.equal(failing.hasUnsavedChanges, true, 'a failed write must be visible as dirty state')
 
     const roFixture = threePartyThread()
     const adapter = new FakeAdapter({
@@ -817,9 +845,6 @@ test('an unwritable state directory refuses to publish instead of sending unguar
       nested: roFixture.nested,
       publish: () => ({ status: 'confirmed', postId: 'new-3' }),
     })
-    const failing = new DebateStore({ dir: join(blocker, 'inner') })
-    await failing.mutate((data) => ({ ...data, sessions: [session] })).catch(() => undefined)
-    assert.equal(failing.hasUnsavedChanges, true, 'a failed write must be visible as dirty state')
 
     const report = await publishCandidate(
       { adapter, store: failing, policy: { ...DEFAULT_POLICY, mode: 'manual' as const } },
@@ -842,13 +867,19 @@ test('an unwritable state directory refuses to publish instead of sending unguar
 test('store.mutate rejects when the write cannot happen, and the chain recovers afterwards', async () => {
   // Two contracts at once: the caller learns about the failure, and one failure
   // does not permanently poison every later write.
+  //
+  // Same platform-ordering trap as the test above: `ready()` must succeed while the
+  // path is still absent, or Linux throws ENOTDIR long before the write is tried.
   const dir = mkdtempSync(join(tmpdir(), 'debate-chain-'))
   try {
     const { writeFileSync, rmSync: removePath } = await import('node:fs')
     const blocker = join(dir, 'blocked')
-    writeFileSync(blocker, 'x', 'utf8')
 
     const broken = new DebateStore({ dir: join(blocker, 'inner') })
+    await broken.ready() // first load: ENOENT on both platforms → "first run"
+
+    writeFileSync(blocker, 'x', 'utf8')
+
     await assert.rejects(
       () => broken.mutate((data) => ({ ...data, usage: [] })),
       (error: unknown) => error instanceof StoreError && error.code === 'write_failed',
@@ -860,6 +891,38 @@ test('store.mutate rejects when the write cannot happen, and the chain recovers 
     removePath(blocker, { force: true })
     await broken.mutate((data) => ({ ...data, usage: [] }))
     assert.equal(broken.hasUnsavedChanges, false, 'a successful write clears the dirty flag')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a genuinely unreadable state file is still refused, not treated as an empty store', async () => {
+  // The complement of the two tests above, and the reason the fix must not be
+  // "swallow ENOTDIR": a store whose document exists but cannot be read must fail
+  // loudly. Treating it as empty would drop every dedupe row and allow re-posting
+  // replies that already went out.
+  //
+  // `state.json` is made a *directory*, which no platform can read as a file:
+  // POSIX reports EISDIR, Windows reports EISDIR too. This avoids the ENOTDIR /
+  // ENOENT split entirely, so the assertion means the same thing on both.
+  const dir = mkdtempSync(join(tmpdir(), 'debate-unreadable-'))
+  try {
+    const { mkdirSync } = await import('node:fs')
+    mkdirSync(join(dir, 'state.json'), { recursive: true })
+
+    const broken = new DebateStore({ dir })
+    await assert.rejects(
+      () => broken.ready(),
+      (error: unknown) => error instanceof StoreError && error.code === 'read_failed',
+      '读不出来的状态文件必须报 read_failed，不能当成空库继续',
+    )
+
+    // And it must stay refused: a later mutate cannot quietly initialise an empty
+    // document and start writing over the unreadable original.
+    await assert.rejects(
+      () => broken.mutate((data) => ({ ...data, usage: [] })),
+      (error: unknown) => error instanceof StoreError && error.code === 'read_failed',
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

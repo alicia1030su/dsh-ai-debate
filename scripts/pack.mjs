@@ -33,6 +33,14 @@ const INCLUDE = [
   'LICENSE',
   'CHANGELOG.md',
   '.env.example',
+  // The security report travels with the package because README and CHANGELOG
+  // both link to it, and a link that only resolves inside the repository is a
+  // broken link for whoever installed the tarball.
+  //
+  // Listed by exact path rather than by adding `docs` to INCLUDE_DIRS: that
+  // directory also holds historical acceptance screenshots, which added 1.2 MiB
+  // to the archive for images no installed user needs.
+  'docs/v0.2.3-security-report.md',
 ]
 const INCLUDE_DIRS = ['lib', 'client']
 
