@@ -134,17 +134,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.5
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.6
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.5.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.6.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.5.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.6.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -630,6 +630,21 @@ client/
 `test/platform-contract.test.ts` 会直接读编译产物断言这几个文件里既没有贴吧 import，
 也没有 `platform: 'tieba'` 字面量、没有 `id === 'tieba'` 特判。
 
+**默认平台不是常量**（v0.2.6）。`runtime.adapter` 仍然存在，因为很多调用点读它，
+单平台部署也确实有个显然的答案。但它的答案是**每次从注册中心问出来的**：
+
+- 注册了贴吧 → 就是贴吧，与注册顺序无关；
+- 没注册贴吧 → 回落到第一个已注册的平台；
+- 一个平台都没注册 → 抛出「平台注册中心是空的」。
+
+在 v0.2.6 之前这一处是 `const DEFAULT_PLATFORM_ID = tiebaProvider.id`，于是
+一个只注册了其它平台的部署里，`runtime.adapter` 直接抛
+`平台「tieba」没有注册`，连带把 `healthCheck`、`checkLogin`（设置页的「检查登录」）
+和设置页的平台列表一起拖崩。那条「Runtime 只有一个固定适配器」的假设，
+v0.2.1 说已经删掉了，其实在回落路径里活到了 0.2.5。
+`test/build-runtime-platforms.test.ts` 是这条的判据，它跑的是**真实的
+`buildRuntime()`**，不是测试里手搭的 Runtime 对象。
+
 **配置面的分层**（v0.1.6 新增，与发帖那条线完全分开）：
 
 ```
@@ -874,6 +889,84 @@ platformAccounts: |
 - [ ] `publishReply` 在没有证据时返回 `uncertain`
 - [ ] 核心六个文件里没有你的平台名（跑一遍 `test/platform-contract.test.ts`）
 - [ ] 用两个假平台各跑一遍「读 → 分析 → 生成 → 审核 → 发表 → 回读」
+- [ ] 用**真实的 `buildRuntime()`** 跑一遍，不是测试里手搭的 Runtime
+      （跑一遍 `test/build-runtime-platforms.test.ts`）
+
+---
+
+## ConversationGraph 数据契约
+
+`Floor` / `NestedReply` 是贴吧的形状：楼层号、楼主、楼中楼。微博没有楼层号，
+知乎是「问题 → 回答 → 评论」，小红书连评论层数都不固定。把这些硬塞进楼层模型，
+接入方就只能**编一个楼层号**——而编出来的数字会被下游当成真实位置，
+写进提示词让模型去描述。
+
+`src/conversation.ts` 是不带这些包袱的契约。它**不是**要替换现有分析器：
+分析器仍然读 `Floor`，中间由 `conversation-bridge.ts` 做投影。这条迁移是刻意的
+增量，因为「修好跨平台 + 同时重写分析器」会让回归无法归因。
+
+### 节点
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | **平台作用域内**唯一。两个平台各有一个 `post-1` 互不冲突 |
+| `platform` | 归属平台，节点自带而不是靠上下文推断 |
+| `kind` | `root`（帖 / 微博正文 / 问题）、`comment`（一层回复）、`reply`（任意深度的回复）、`repost`（转发，有自己的内容 + 指向原帖） |
+| `author` | `{ platform, accountId?, displayName, strength }` |
+| `content` | 正文文本 |
+| `displayNumber?` | 平台**显示**的楼层号，仅用于展示。分组与定位一律用 id |
+
+`author.strength` 是四态：`stable`（平台分配的不可变 id，如贴吧 `user_id`、微博 `uid`）、
+`slug`、`opaque`、`name_only`（平台没有给 id）。`name_only` 不能用来锚定身份——
+昵称可以被改掉，用它做幂等键会让同一个人被当成两个人，或者反过来。
+
+### 边
+
+```ts
+type ConversationEdgeKind = 'contains' | 'replies_to' | 'reposts' | 'quotes'
+```
+
+| 种类 | 含义 |
+| --- | --- |
+| `contains` | 结构包含：帖 → 一层回复 → 更深回复 |
+| `replies_to` | 「这条在回那条」，争论沿它走 |
+| `reposts` | 转发另一条 |
+| `quotes` | 在自己的内容里引用了另一条 |
+
+每条边都带 `certainty: 'stated' | 'inferred'`。**这个字段是必须的**：贴吧适配器
+只能从昵称猜「在回谁」，而猜测一旦和平台明示的关系混在一起，下游就再也分不清
+哪句是事实、哪句是推断。`inferred` 的边可以通过 `basis` 说明猜的依据。
+
+不可靠的推断不能升级为事实。分析器只沿 `stated` 的边走争论链；`inferred` 的边
+可以展示，但不能用来锁定反驳对象。
+
+### 完整性
+
+`ConversationGraph.coverage` 与采集层共用一套词汇：
+
+```ts
+interface ConversationCoverage {
+  sourceComplete: boolean     // 平台自己的证据证明节点列表完整
+  missingCount?: number       // 平台声明了但读不到的
+  droppedCount?: number       // 本地限额砍掉的
+  stopReason: string          // 'confirmed_end' | 'empty_page' | 'repeated_page' | 'page_cap' | 'request_error' | 'rate_limited' | 'deleted_or_unavailable' | 'unknown'
+  issues: readonly string[]   // 含信号自相矛盾的说明
+}
+```
+
+只有 `stopReason === 'confirmed_end'` 才是「读完了」的正面证据。
+`empty_page` 和 `repeated_page` 只说明「不再产出新数据」，不说明「没有更多」。
+
+**为什么这个区分是安全要求**：如果一次被平台限流截断的读取被标成完整，
+分析器就会在「对手的质疑缺失」的情况下生成回复，而它自己不知道缺了东西。
+所以覆盖率不足时，通往发表的路径必须 fail-closed——不是「提示一下」，
+是拒绝。
+
+### 适配器可以怎么选
+
+`ConversationSource.readConversation()` 是**可选**的接口。已经说 `Floor` 的适配器
+（贴吧）继续那样写，由 bridge 投影；新平台可以直接实现 `ConversationSource`，
+不必先伪造一套楼层。两条路都不用改分析器。
 
 ---
 
@@ -898,7 +991,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**680 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**687 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -951,7 +1044,8 @@ node scripts/pack.mjs
 | `test/v025-defect-repro.test.ts` | 7 | **v0.2.5 缺陷复现**：`review` 候选在 `limited_auto` 无批准时曾能发表；`manual` 模式曾接受调用方自报的 `humanApproved` |
 | `test/client-approval-panel.test.ts` | 11 | **批准面板全链路**：Host JSON→fetch→normalizeView→store→React DOM；正文全文与换行必须显示；只 POST 两个 id；失败显示 Host 原因；进行中禁用；两个挂载面都到得了 |
 | `test/readback-integrity.test.ts` | 2 | **回读不全不得崩溃也不得假装核实**：平台返回的正文缺失时报告「无法核对内容」而非 `undefined.replace` 崩溃；发表状态如实为 `published`，`verified: false`；平台只调用一次，不会因此重试 |
-| **合计** | **680** | |
+| `test/build-runtime-platforms.test.ts` | 7 | **真实入口的平台选择**：两个假平台注册进 `buildRuntime()` 后各自的链接造出各自的适配器、只拿到自己的设置、未知链接被拒；没有贴吧的部署里 `runtime.adapter` / `healthCheck` / `checkLogin` 落到已注册平台而不是抛「tieba 没有注册」；贴吧在场时默认平台仍是贴吧、与注册顺序无关；空注册中心给出可读错误 |
+| **合计** | **687** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

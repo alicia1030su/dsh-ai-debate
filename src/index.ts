@@ -181,18 +181,35 @@ export function buildRuntime(
   })
 
   /**
-   * The single-platform fallback.
+   * The single-platform fallback: which platform `runtime.adapter` answers for.
    *
    * `runtime.adapter` still exists because a lot of code reads it and because a
-   * one-platform deployment has an obvious answer. It is the *default* platform's
-   * adapter — never another platform's — and every multi-platform code path calls
-   * `adapterFor(runtime, platform)` instead.
+   * one-platform deployment has an obvious answer. Every multi-platform code path
+   * calls `adapterFor(runtime, platform)` instead.
+   *
+   * Resolved from the registry at call time, not frozen to `tieba` (v0.2.6).
+   * Before this it was `DEFAULT_PLATFORM_ID = tiebaProvider.id`, so a deployment
+   * whose registry held only other platforms threw `平台「tieba」没有注册` from
+   * `runtime.adapter` — which took down `healthCheck`, `checkLogin` and the
+   * settings page's platform list. That is the "runtime has one fixed adapter"
+   * shape v0.2.1 was meant to remove, surviving in the fallback.
+   *
+   * Order: the registered Tieba provider (so a Tieba deployment keeps answering
+   * `tieba` even if another platform registered first), otherwise the first
+   * registered platform. An empty registry has no answer and says so.
    */
-  const defaultPlatform = DEFAULT_PLATFORM_ID
+  const defaultPlatform = (): string => {
+    if (registry.get(tiebaProvider.id) !== undefined) return tiebaProvider.id
+    const ids = registry.listIds()
+    if (ids.length === 0) {
+      throw new Error('平台注册中心是空的：没有任何平台可以处理请求。')
+    }
+    return ids[0]!
+  }
 
   return {
     get adapter() {
-      return manager.adapterFor(defaultPlatform)
+      return manager.adapterFor(defaultPlatform())
     },
     store,
     policy: policyFromConfig(config),
@@ -222,16 +239,6 @@ export function buildRuntime(
 function resolveThreadRefFromRegistry(registry: PlatformRegistry, url: string): ThreadRef {
   return registry.parseUrl(url)
 }
-
-/**
- * The platform this deployment talks to.
- *
- * Still a constant in v0.2.0: the architecture is multi-platform, the shipped
- * integration set is not. Keeping it named (rather than scattering `'tieba'`
- * literals) means adding a second platform is changing this line plus registering
- * a provider.
- */
-const DEFAULT_PLATFORM_ID = tiebaProvider.id
 
 /**
  * Fields whose change invalidates the built adapter.

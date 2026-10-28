@@ -2,6 +2,120 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.6] — 2026-10-29
+
+跨平台回落的最后一处「其实还是单平台」。**核心变化：`runtime.adapter` 不再回答
+「贴吧」，而是回答「注册中心里问出来的那个平台」。**
+
+这一版只改了一处运行代码，其余是把上一轮声称过、却没真正做到的事补齐；
+没有重构采集 / 分析 / 生成 / 去重 / 发表，没有删除任何防护。
+
+### 一、默认平台不再是常量
+
+`buildRuntime()` 里原来的写法是：
+
+```ts
+const defaultPlatform = DEFAULT_PLATFORM_ID   // = tiebaProvider.id
+```
+
+v0.2.1 删掉了「Runtime 只有一个固定适配器」这个假设，但**只在多平台路径上删掉了**。
+`runtime.adapter` 这个回落入口仍然硬编码贴吧。于是一个只注册了其它平台的部署里：
+
+```
+runtime.adapter         → 平台「tieba」没有注册。已注册：board、micro
+healthCheck(runtime)    → 同上（它读 runtime.adapter.getCapabilities()）
+checkLogin(runtime)     → 同上（它读 runtime.adapter.checkAuthentication()）
+```
+
+`checkLogin` 是设置页「检查登录」按钮的后端。也就是说：**只要插件部署在没有
+贴吧的注册中心上，设置页一按检查登录就炸，健康检查工具也炸。** 这正是
+v0.2.0 说要消灭、v0.2.1 说已经消灭的那种耦合，在回落路径里活到了 0.2.5。
+
+现在改成按注册中心解析：
+
+- 注册了贴吧 → 就回答贴吧，**与注册顺序无关**（贴吧优先，不是「第一个」）；
+- 没注册贴吧 → 回落到第一个已注册的平台；
+- 一个平台都没注册 → 抛「平台注册中心是空的：没有任何平台可以处理请求」，
+  而不是一个读不懂的 `Cannot read properties of undefined`。
+
+`DEFAULT_PLATFORM_ID` 这个常量随之删掉了：它已经没有任何读者，留着就是下一个
+「看起来是权威、其实没人用」的陷阱。
+
+### 二、把「真实入口」这件事真的测起来
+
+`test/platform-routing.test.ts` 的头注释从 v0.2.1 起就写着「adapters come from
+`buildRuntime` (the real construction entry)」，**但它没有**：那个文件自己拼了
+一个 `Runtime` 对象出来。规则是对的、测试是绿的，可是被声称覆盖的那个入口
+一次都没有被调用过。一条注释比没有注释更糟，因为它会让人停止怀疑。
+
+新增 `test/build-runtime-platforms.test.ts`（7 项），跑的是**真实的
+`buildRuntime()`**（`storeDir` 指向临时目录），两个假平台通过真实的
+`PlatformRegistry` 注册：
+
+- 两个平台的链接各自造出各自的适配器，且是两个不同实例；
+- 读取落在正确的假平台上，另一个计数不动；
+- 每个平台只拿到自己的设置，拿不到别家的 `cookie` 字段；
+- 未知链接被拒，并列出已注册平台；
+- 没有贴吧时 `runtime.adapter` 落到已注册平台；
+- 没有贴吧时 `healthCheck` 与 `checkLogin` 能跑完并返回真实结果；
+- 贴吧在场时默认平台是贴吧，**即使贴吧是在别的平台之后注册的**；
+- 空注册中心给出可读错误。
+
+前四条在删除修复后会**通过**（它们测的是既有的路由规则），后三条会**失败**——
+我实际做了这个回退验证，确认测试抓得住缺陷：
+
+```
+✖ 没有贴吧的部署：runtime.adapter 回落到已注册平台
+✖ 没有贴吧的部署：healthCheck 与 checkLogin 可运行且不崩溃
+✖ 空注册中心：默认平台给出明确错误，而不是 TypeError
+ℹ pass 4   ℹ fail 3
+```
+
+`platform-routing.test.ts` 的头注释已改成如实说明它测什么、不测什么。
+
+### 三、README 补上 ConversationGraph 契约
+
+v0.2.1 交付了 `src/conversation.ts`（节点、带类型的边、四态 `certainty`、
+覆盖率），但 README 只在模块清单里写了一行，没有契约文档。上一轮我把
+「ConversationGraph 数据契约」算进「已交付」，那是**评估错误**：代码在，
+文档不在，而任务书要的是契约本身可读。
+
+新增一章，写清楚：节点四种 `kind`、`displayNumber` 为什么只能是展示用、
+四种边、`certainty: 'stated' | 'inferred'` 为什么是必需字段（贴吧只能从昵称
+猜「在回谁」，猜出来的东西一旦和平台明示的关系混在一起，下游就再也分不清
+哪句是事实）、覆盖率词汇与「只有 `confirmed_end` 才算读完」的理由、
+以及适配器可以 `Floor` 或 `ConversationSource` 二选一。
+
+### 四、顺带核实过的（结论：本来就对，不需要改）
+
+这一轮把 v0.2.1 任务书十四条重新对着代码核了一遍，以下都**已经成立**，
+所以没动：
+
+- 会话自带 `platform` 字段，跨重启仍在（用同一目录开第二个 `DebateStore` 实测）；
+- 配置变化后适配器按指纹重建，旧 cookie jar 随旧实例丢弃（实测 `built=2`）；
+- 分页完整性：空首页无总数 → `empty_page`、重复内容 → `repeated_page`、
+  请求失败 → `request_error`、总数被超过 → `inconsistent_pagination`，
+  **四种都不标 `complete`**；只有 `confirmed_end` 才标；
+- 凭据命名空间单射编码、跨平台越权引用被拒；
+- 核心六个文件里没有贴吧 import / 字面量 / id 特判（静态读编译产物）。
+
+这些行为当时是有的，但**没有测试固定它们**（会话恢复与适配器重建都是我这轮
+用临时脚本实测的，没进测试套件）。这不算缺陷，是覆盖缺口，已记在下面。
+
+### 五、测试
+
+687 项全绿（0.2.5 的 680 项 + 新增 7 项）。`node scripts/verify.mjs` 全流程通过：
+类型检查、全部测试、打包、裸目录安装验证（9 个工具 + 1 个提示区块、37 个配置项）。
+
+### 未验证
+
+- **贴吧真实发帖仍未跑过。** 本机对 `tieba.baidu.com` 持续 403（「百度安全验证」），
+  未绕过。`comment.publish` 的能力状态仍是 `unverified`，这是如实反映。
+- **真实 DSH 桌面端界面未重新截图。** 本轮改动只影响 `runtime.adapter` 的回落
+  行为，不涉及渲染；但「没有重新验证」和「验证过」是两件事，记在这里。
+- **两处覆盖缺口仍在**：会话跨重启恢复平台、适配器按配置指纹重建，
+  行为正确但没有自动化测试。下一轮补。
+
 ## [0.2.5] — 2026-10-28
 
 发布授权安全加固与防注入闭环。**核心变化：模型在工具参数里写 `confirm: true`

@@ -5,13 +5,19 @@
  * to one adapter, so this file exists to make that failure impossible to ship
  * again. The rules it enforces:
  *
- * - adapters come from `buildRuntime` (the real construction entry), never from a
- *   field a test assigned;
  * - the adapter that is *called* is the one for the resolved platform, proven by
  *   each fake counting its own reads;
  * - credentials, identity and quota do not cross platforms;
  * - a session records its platform and a resumed session uses it;
  * - an unknown link is refused rather than falling back to the default platform.
+ *
+ * Scope note (v0.2.6): this file builds its `Runtime` by hand, mirroring what
+ * `buildRuntime` assembles. That keeps each rule isolated from config, store and
+ * credential wiring — but it means a passing run proves the *rules*, not that the
+ * production entry point wires them up. The entry point is covered separately by
+ * `build-runtime-platforms.test.ts`, which calls the real `buildRuntime()` with two
+ * registered fake platforms. Before v0.2.6 the line above claimed these adapters
+ * came from `buildRuntime`, and they did not.
  */
 
 import { test } from 'node:test'
