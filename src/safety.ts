@@ -133,8 +133,19 @@ export interface PublishAttempt {
   readonly threadPublishes: number
   /** Epoch ms of the last publish anywhere, when known. */
   readonly lastPublishAt?: number
-  /** True when the caller is a human approving a specific candidate. */
+  /** True when the caller holds a verified human approval for this candidate. */
   readonly humanApproved: boolean
+  /**
+   * The candidate's security verdict.
+   *
+   * Added in v0.2.5 because its absence was the v0.2.4 defect: without it the policy
+   * could not tell a `review` candidate from an `allow` one, so `limited_auto`
+   * granted automatic slots to candidates that were supposed to wait for a human.
+   *
+   * `optional` only so an existing caller keeps compiling; the publisher always
+   * passes it, and `undefined` is treated as the strictest reading (see below).
+   */
+  readonly securityDecision?: 'allow' | 'review' | 'block'
   readonly now: number
 }
 
@@ -146,15 +157,51 @@ export type PolicyDecision =
 /**
  * Decide whether a publish may proceed.
  *
- * The `humanApproved` flag is what separates the modes: in `manual` mode it is
- * the only thing that can authorise a send, so a bug that loses the approval
- * fails closed instead of posting.
+ * ## The policy matrix (v0.2.5)
+ *
+ * | verdict | mode | approval | outcome |
+ * | --- | --- | --- | --- |
+ * | `block` | any | any | refuse — enforced earlier, before this function |
+ * | `review` | any | none | refuse — no automatic slot for a flagged candidate |
+ * | `review` | any | valid | continue to the rest of the checks |
+ * | `allow` | `manual` | required | refuse without it |
+ * | `allow` | `single_shot` | any | a one-shot grant is the authorisation |
+ * | `allow` | `limited_auto` | optional | still needs budget, cooldown and account |
+ *
+ * The `review` row is the one this version adds. It is checked here *and* in the
+ * publisher: here so every caller gets the same answer, there so a caller that
+ * bypassed this function still cannot send.
+ *
+ * `securityDecision` being `undefined` is read as `review`, not as `allow`: a caller
+ * that forgot to pass the verdict has not proven the candidate is clean, and
+ * defaulting the other way would turn a missing argument into a permission.
  */
 export function checkPublishPolicy(
   policy: InteractionPolicy,
   attempt: PublishAttempt,
 ): PolicyDecision {
   const reasons: string[] = []
+  const verdict = attempt.securityDecision ?? 'review'
+
+  if (verdict === 'block') {
+    return {
+      allowed: false,
+      code: 'security_blocked',
+      reason: '这个候选已被安全闸门阻止，任何发表模式都不能发送',
+    }
+  }
+
+  // A flagged candidate may never spend an automatic slot. With an approval it may
+  // continue; without one it stops here regardless of mode.
+  if (verdict === 'review' && !attempt.humanApproved) {
+    return {
+      allowed: false,
+      code: 'security_review_required',
+      reason:
+        '这个候选被标记为「需要人工确认」，没有有效的人工批准不能发表。' +
+        '受限自动模式也不能绕过这一条。',
+    }
+  }
 
   if (policy.mode === 'manual' && !attempt.humanApproved) {
     return {

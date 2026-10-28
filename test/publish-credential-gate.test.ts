@@ -80,6 +80,25 @@ function readySession(): Record<string, unknown> {
         confidence: 0.8,
         violations: [],
         notes: [],
+        // This fixture predates v0.2.5, when a candidate carried no security
+        // assessment. Since then the publish path refuses one that has none
+        // (`security_blocked`), which would pre-empt the credential refusal these
+        // tests exist to pin. Every candidate a real run produces has an assessment,
+        // so this is the one a clean generation would produce: `allow`, no findings —
+        // leaving the credential phase as the only thing that can refuse.
+        security: {
+          injectionDetected: false,
+          ownerIdentityValid: true,
+          targetIdentityValid: true,
+          stanceConsistency: 'consistent',
+          ownerDirectedAttack: false,
+          unauthorizedInstructionFollowed: false,
+          secretLeakRisk: false,
+          evidenceIntegrityValid: true,
+          decision: 'allow',
+          reasons: [],
+          fingerprint: 'allow:fixture:1',
+        },
         createdAt: NOW,
         approved: false,
       },

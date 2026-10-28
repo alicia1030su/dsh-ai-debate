@@ -19,6 +19,7 @@
 import { PlatformError, type PlatformAdapter, type PublishOutcome, type ThreadRef } from './types.js'
 import { DebateStore, dedupeKey, upsertDedupe, type DedupeRecord, type StoredCandidate, type StoredSession } from './store.js'
 import { recheckBeforePublish } from './security/output-guard.js'
+import { bindingOf, checkApproval, consumeApproval, findApproval } from './security/approvals.js'
 import {
   describeTargetProblem,
   contentHash,
@@ -35,13 +36,31 @@ import {
   type InteractionPolicy,
 } from './safety.js'
 
-/** What a caller must supply to publish. */
+/**
+ * What a caller must supply to publish.
+ *
+ * ## `humanApproved` is deprecated and cannot authorise anything
+ *
+ * Through v0.2.4 the caller passed `humanApproved: true` and the publisher treated
+ * that as "the owner approved". `debate_publish_reply` filled it from its own
+ * `confirm` argument, which comes from the model — so the field was a model-supplied
+ * boolean wearing the name of a human decision.
+ *
+ * It survives as an optional field so an existing caller compiles, and it is
+ * **ignored**: the publisher looks up a stored approval record instead. The only
+ * thing that authorises a send is a record created by an authenticated request the
+ * model cannot make.
+ */
 export interface PublishRequest {
   readonly sessionId: string
   readonly candidateId: string
   /** The exact text the human saw and approved. */
   readonly approvedText: string
-  readonly humanApproved: boolean
+  /**
+   * @deprecated Ignored. Authorisation comes from a stored approval record, not from
+   * a boolean the caller supplies. Kept only so old call sites keep compiling.
+   */
+  readonly humanApproved?: boolean
   readonly signal?: AbortSignal
 }
 
@@ -197,6 +216,50 @@ export async function publishCandidate(
     }
   }
 
+  // ---- the security verdict, before any policy decision --------------------
+  //
+  // This runs *first* among the authorisation checks, and it is the fix for the
+  // v0.2.4 hole where a `review` candidate published automatically.
+  //
+  // The old arrangement checked the assessment much later, in
+  // `recheckBeforePublish`, and that function refused only `block`. So:
+  //
+  //   * `checkPublishPolicy` never saw the verdict at all (`PublishAttempt` has no
+  //     security field), and
+  //   * `mayAutoPublish` — which does encode "only `allow` may go automatic" — was
+  //     called from nowhere.
+  //
+  // The result was that `review` + `limited_auto` + no approval published, which is
+  // the defect this version exists to close.
+  //
+  // The order matters for a second reason: an assessment that is missing or
+  // unreadable must not be able to reach the policy at all, or a corrupted field
+  // would read as "no objection".
+  const stored = candidate.security
+  if (stored === undefined) {
+    return {
+      ok: false,
+      status: 'refused',
+      message:
+        '这个候选没有安全评估记录（可能是旧版本生成的）。安全闸门无法确认它是否通过了输出检查，' +
+        '因此拒绝发表。请重新生成一次。',
+      errorCode: 'security_blocked',
+    }
+  }
+  if (stored.decision === 'block') {
+    return {
+      ok: false,
+      status: 'refused',
+      message: `这个候选已被安全闸门阻止：${stored.reasons.join('；') || '未记录原因'}`,
+      errorCode: 'security_blocked',
+    }
+  }
+
+  // `review` may proceed, but only with a human approval — never on an automatic
+  // budget. Carried into `sendOnce` rather than re-derived there, so there is exactly
+  // one place that decides what a verdict means.
+  const requiresHumanApproval = stored.decision === 'review'
+
   // The platform must be able to write at all, before anything else is decided.
   //
   // This runs first — ahead of the credential probe, the in-flight claim, the
@@ -265,7 +328,10 @@ export async function publishCandidate(
   inFlight.set(key, { startedAt: (deps.now ?? Date.now)(), candidateId: candidate.replyId })
 
   try {
-    return await sendOnce(deps, request, session, candidate, key)
+    return await sendOnce(deps, request, session, candidate, key, {
+      assessment: stored,
+      requiresHumanApproval,
+    })
   } finally {
     // Released only once the dedupe record has been written by `sendOnce`, so a
     // later call is stopped by the record rather than by this in-memory claim.
@@ -280,6 +346,12 @@ async function sendOnce(
   session: StoredSession,
   candidate: StoredSession['candidates'][number],
   key: string,
+  gate: {
+    /** The stored assessment. Already checked for `block`/missing by the caller. */
+    readonly assessment: NonNullable<StoredSession['candidates'][number]['security']>
+    /** True when the verdict is `review`, which forbids an automatic slot. */
+    readonly requiresHumanApproval: boolean
+  },
 ): Promise<PublishReport> {
   const now = deps.now ?? (() => Date.now())
 
@@ -325,18 +397,12 @@ async function sendOnce(
   const threadPublishes = activity.confirmed + activity.unresolved
   const lastPublishAt = activity.lastConfirmedAt
 
-  const decision = checkPublishPolicy(deps.policy, {
-    sessionId: session.id,
-    threadId: session.threadId,
-    sessionPublishes: session.publishedPostIds.length,
-    threadPublishes,
-    lastPublishAt,
-    humanApproved: request.humanApproved,
-    now: now(),
-  })
-  if (!decision.allowed) {
-    return { ok: false, status: 'refused', message: decision.reason, errorCode: decision.code }
-  }
+  // The policy check and the approval lookup both come *after* identity
+  // verification, because an approval is bound to the account that would post. Doing
+  // it here — before we know who is speaking — would let an approval granted for one
+  // account authorise a send from another.
+  //
+  // Moved down from v0.2.4 deliberately; see the block after the identity section.
 
   try {
     assertPublishableText(request.approvedText, 2000)
@@ -469,6 +535,73 @@ async function sendOnce(
       }
     }
   }
+
+  // ---- authorisation: the policy check and the stored approval ---------------
+  //
+  // Both live here, after identity verification, because an approval is bound to the
+  // account that would post. Placing them earlier — where v0.2.4 had the policy call
+  // — would let an approval granted for one account authorise a send from another.
+  //
+  // The order is: security verdict (already checked above) → approval → policy. A
+  // `review` candidate needs an approval before the policy question is even asked,
+  // so no interaction mode can grant it an automatic slot.
+
+  const publishingAccount = (configuredAiId || configuredAiName).trim()
+  const binding = bindingOf({
+    sessionId: session.id,
+    candidateId: candidate.replyId,
+    platform: session.platform,
+    targetPostId: candidate.targetPostId,
+    publishingAccount,
+    text: request.approvedText,
+    candidateVersion: candidate.candidateVersion ?? 0,
+    assessmentFingerprint: gate.assessment.fingerprint,
+  })
+  const approval = checkApproval(
+    findApproval(deps.store.getApprovals(), {
+      sessionId: session.id,
+      candidateId: candidate.replyId,
+    }),
+    binding,
+    now,
+  )
+
+  // A `review` verdict cannot reach the platform without a human approval. This is
+  // the check whose absence published a review candidate automatically: `review`
+  // used to be indistinguishable from `allow` because only `block` was refused.
+  if (gate.requiresHumanApproval && !approval.ok) {
+    return {
+      ok: false,
+      status: 'refused',
+      message: `这个候选被标记为「需要人工确认」，没有有效的人工批准，不能发表。${approval.reason}`,
+      errorCode: `approval_${approval.code}`,
+    }
+  }
+
+  const decision = checkPublishPolicy(deps.policy, {
+    sessionId: session.id,
+    threadId: session.threadId,
+    sessionPublishes: session.publishedPostIds.length,
+    threadPublishes,
+    lastPublishAt,
+    // A verified approval record, not a caller-supplied boolean. In `manual` mode
+    // this is the only thing that can allow a send; in `limited_auto` an approved
+    // candidate spends the owner's authorisation rather than an automatic slot.
+    humanApproved: approval.ok,
+    // The verdict, so the policy matrix can be enforced in one place instead of
+    // being re-derived by every caller.
+    securityDecision: gate.assessment.decision,
+    now: now(),
+  })
+  if (!decision.allowed) {
+    return { ok: false, status: 'refused', message: decision.reason, errorCode: decision.code }
+  }
+
+  // The approval is spent by the same mutation that writes the `pending` ledger row,
+  // further down. Doing it here — before the target has been re-read — would burn an
+  // approval on an attempt that then failed for an unrelated reason, forcing the
+  // owner to approve again for no gain.
+  const approvalToConsume = approval.ok ? approval.record : undefined
 
   // Everything up to here is local validation that can refuse without touching the
   // session state. Only once the target is confirmed does the session move to
@@ -645,6 +778,19 @@ async function sendOnce(
           ? { ...entry, state: publishing.state, statusText: '正在发表…', updatedAt: nowIso(now()) }
           : entry,
       ),
+      // Spend the approval in the same mutation that claims the publish.
+      //
+      // This is what makes it single-use. Two concurrent callers both read the
+      // record as unconsumed earlier, but only one of these mutations wins the
+      // write; the loser's whole sequence is rejected when it re-checks, and even if
+      // it were not, the record it claimed is gone from the second read.
+      //
+      // Writing it here rather than at check time also means a refusal that happens
+      // *between* the check and this line — a stale target, a dirty store — does not
+      // burn the owner's approval.
+      ...(approvalToConsume === undefined
+        ? {}
+        : { approvals: consumeApproval(data.approvals ?? [], approvalToConsume.id, now) }),
     }))
   } catch (error) {
     return {
@@ -1050,10 +1196,20 @@ async function verifyPublished(
   }
 
   const actualKind: 'floor' | 'nested' = context.nested ? 'nested' : 'floor'
-  const body = context.nested ? context.nested.content : context.floor.content
+  const body: string | undefined = context.nested ? context.nested.content : context.floor.content
 
   // 2. The body must be what the owner approved.
-  if (normalizeForCompare(body) !== normalizeForCompare(expectation.text)) {
+  //
+  // An absent body is "could not check", **not** "checked and different". Reading it as a
+  // mismatch claims the reply is wrong when nothing was read, and reading it as a match
+  // claims it is right when nothing was read — both are lies about the same missing fact.
+  // This is not hypothetical: a platform that returns a context without the body (a
+  // partial read, a stripped field, a page shape the parser does not know) hit an
+  // unhandled `undefined.replace` here, and the reply had already been sent — so the
+  // crash landed on the one path where the user most needs a truthful answer.
+  if (typeof body !== 'string') {
+    unconfirmed.push('回读到的回复没有正文，无法核对内容')
+  } else if (normalizeForCompare(body) !== normalizeForCompare(expectation.text)) {
     mismatches.push('回读到的正文与审核通过的正文不一致')
   }
 

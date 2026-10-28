@@ -67,8 +67,19 @@ export interface PublishAttempt {
     readonly threadPublishes: number;
     /** Epoch ms of the last publish anywhere, when known. */
     readonly lastPublishAt?: number;
-    /** True when the caller is a human approving a specific candidate. */
+    /** True when the caller holds a verified human approval for this candidate. */
     readonly humanApproved: boolean;
+    /**
+     * The candidate's security verdict.
+     *
+     * Added in v0.2.5 because its absence was the v0.2.4 defect: without it the policy
+     * could not tell a `review` candidate from an `allow` one, so `limited_auto`
+     * granted automatic slots to candidates that were supposed to wait for a human.
+     *
+     * `optional` only so an existing caller keeps compiling; the publisher always
+     * passes it, and `undefined` is treated as the strictest reading (see below).
+     */
+    readonly securityDecision?: 'allow' | 'review' | 'block';
     readonly now: number;
 }
 /** The outcome of a policy check. */
@@ -83,9 +94,24 @@ export type PolicyDecision = {
 /**
  * Decide whether a publish may proceed.
  *
- * The `humanApproved` flag is what separates the modes: in `manual` mode it is
- * the only thing that can authorise a send, so a bug that loses the approval
- * fails closed instead of posting.
+ * ## The policy matrix (v0.2.5)
+ *
+ * | verdict | mode | approval | outcome |
+ * | --- | --- | --- | --- |
+ * | `block` | any | any | refuse — enforced earlier, before this function |
+ * | `review` | any | none | refuse — no automatic slot for a flagged candidate |
+ * | `review` | any | valid | continue to the rest of the checks |
+ * | `allow` | `manual` | required | refuse without it |
+ * | `allow` | `single_shot` | any | a one-shot grant is the authorisation |
+ * | `allow` | `limited_auto` | optional | still needs budget, cooldown and account |
+ *
+ * The `review` row is the one this version adds. It is checked here *and* in the
+ * publisher: here so every caller gets the same answer, there so a caller that
+ * bypassed this function still cannot send.
+ *
+ * `securityDecision` being `undefined` is read as `review`, not as `allow`: a caller
+ * that forgot to pass the verdict has not proven the candidate is clean, and
+ * defaulting the other way would turn a missing argument into a permission.
  */
 export declare function checkPublishPolicy(policy: InteractionPolicy, attempt: PublishAttempt): PolicyDecision;
 /** Which platform failures must stop everything until a human intervenes. */

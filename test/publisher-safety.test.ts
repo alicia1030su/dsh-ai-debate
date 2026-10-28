@@ -30,7 +30,7 @@ import { assessmentFingerprint } from '../lib/security/security-policy.js'
 import { publishCandidate, inFlightCount, resetInFlight } from '../lib/publisher.js'
 import { stopSession } from '../lib/runtime.js'
 import { interpretPublishResponse, buildAncestors, readAuthFromHtml } from '../lib/platforms/tieba/adapter.js'
-import { FakeAdapter, makeFloor, makeNested, threePartyThread } from './helpers.ts'
+import { FakeAdapter, makeFloor, makeNested, threePartyThread, grantApproval } from './helpers.ts'
 import type { StoredSession } from '../lib/store.js'
 
 /** A temporary store directory. */
@@ -186,13 +186,15 @@ test('test 9: an unauthenticated account cannot publish and the session pauses',
       errorCode: 'auth_required',
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: `${session.id}-c1`, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: session.candidates[0]!.text,
-        humanApproved: true,
       },
     )
 
@@ -224,13 +226,15 @@ test('test 10: a timeout after send is uncertain, is not retried, and needs a hu
       errorCode: 'timeout',
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: `${session.id}-c1`, config: BOUND_ACCOUNT })
     const first = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: session.candidates[0]!.text,
-        humanApproved: true,
       },
     )
     assert.equal(first.status, 'uncertain')
@@ -239,13 +243,15 @@ test('test 10: a timeout after send is uncertain, is not retried, and needs a hu
 
     // A second attempt must be refused, because the outcome of the first is
     // unknown: retrying could post the same reply twice.
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: `${session.id}-c1`, config: BOUND_ACCOUNT })
     const second = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: session.candidates[0]!.text,
-        humanApproved: true,
       },
     )
     assert.equal(second.ok, false)
@@ -267,13 +273,15 @@ test('test 12: a restart cannot republish a trigger that already went out', asyn
     await store.mutate((data) => ({ ...data, sessions: [session] }))
 
     const adapter = new FakeAdapter(threePartyThread())
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: `${session.id}-c1`, config: BOUND_ACCOUNT })
     const first = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: session.candidates[0]!.text,
-        humanApproved: true,
       },
     )
     assert.equal(first.ok, true)
@@ -282,13 +290,15 @@ test('test 12: a restart cannot republish a trigger that already went out', asyn
     // Simulate a restart: a brand-new store object reading the same directory.
     const restarted = new DebateStore({ dir })
     await restarted.ready()
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(restarted, { sessionId: session.id, candidateId: `${session.id}-c1` })
     const second = await publishCandidate(
       { adapter, store: restarted, policy: DEFAULT_POLICY },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: session.candidates[0]!.text,
-        humanApproved: true,
       },
     )
     assert.equal(second.ok, false)
@@ -310,13 +320,15 @@ test('test 13: an edited approval does not send different text', async () => {
     await store.mutate((data) => ({ ...data, sessions: [session] }))
 
     const adapter = new FakeAdapter(threePartyThread())
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: `${session.id}-c1`, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: '这是审核之后被偷偷改掉的文字。',
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -339,13 +351,15 @@ test('test 13: a candidate with violations cannot be published at all', async ()
     await store.mutate((data) => ({ ...data, sessions: [session] }))
 
     const adapter = new FakeAdapter(threePartyThread())
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: `${session.id}-c1`, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: session.candidates[0]!.text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -400,13 +414,15 @@ test('test 14: a captcha response pauses the session with the platform reason', 
       error: '需要验证码：请完成安全验证',
       errorCode: 'captcha',
     })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: `${session.id}-c1`, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: `${session.id}-c1`,
         approvedText: session.candidates[0]!.text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -464,6 +480,12 @@ test('test 16: two threads keep separate sessions, opponents and publish records
       floors: [...threadA.floors, ...threadB.floors],
       nested: { ...threadA.nested, ...threadB.nested },
     })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: 's-a', candidateId: 's-a-c1', config: BOUND_ACCOUNT })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: 's-a', candidateId: 's-a-c1', config: BOUND_ACCOUNT })
     const reportA = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       { sessionId: 's-a', candidateId: 's-a-c1', approvedText: 'A 帖的回复。', humanApproved: true },
@@ -475,6 +497,12 @@ test('test 16: two threads keep separate sessions, opponents and publish records
     assert.equal(storedB.state, 'READY')
     assert.equal(storedB.publishedPostIds.length, 0)
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: 's-b', candidateId: 's-b-c1', config: BOUND_ACCOUNT })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: 's-b', candidateId: 's-b-c1', config: BOUND_ACCOUNT })
     const reportB = await publishCandidate(
       { adapter, store, policy: DEFAULT_POLICY, config: BOUND_ACCOUNT },
       { sessionId: 's-b', candidateId: 's-b-c1', approvedText: 'B 帖的回复。', humanApproved: true },
@@ -544,6 +572,11 @@ test('the limited-auto policy enforces its caps and cooldown', () => {
     sessionPublishes: 0,
     threadPublishes: 0,
     humanApproved: false,
+    // v0.2.5: the policy reads the security verdict, and treats a *missing* one as
+    // `review` — deliberately, so a caller that forgets to pass it cannot get an
+    // automatic slot by omission. This test is about the caps and cooldown, so it
+    // states the verdict it is assuming.
+    securityDecision: 'allow' as const,
     now: 1_000_000,
   }
   assert.equal(checkPublishPolicy(policy, base).allowed, true)
@@ -561,12 +594,26 @@ test('the limited-auto policy enforces its caps and cooldown', () => {
   assert.equal((threadCapped as { code: string }).code, 'thread_limit')
 
   // A human approval still respects the thread cap but skips the auto budget.
+  //
+  // `humanApproved: true` is the whole point of the case and was missing: with the
+  // base value (`false`) and 99 session publishes this is a plain session-limit
+  // refusal, which the earlier assertion already covers. The gap only became visible
+  // once the first assertion in this test stopped failing first.
   const humanOverBudget = checkPublishPolicy(policy, {
     ...base,
     sessionPublishes: 99,
     humanApproved: true,
   })
   assert.equal(humanOverBudget.allowed, true)
+
+  // …but it does not lift the thread cap: an approval is not a licence to exceed it.
+  const approvedThreadCapped = checkPublishPolicy(policy, {
+    ...base,
+    threadPublishes: 5,
+    humanApproved: true,
+  })
+  assert.equal(approvedThreadCapped.allowed, false)
+  assert.equal((approvedThreadCapped as { code: string }).code, 'thread_limit')
 })
 
 test('publishable text rejects empty, over-long and control-character content', () => {
@@ -732,8 +779,11 @@ test('ten concurrent publishes of the same candidate reach the platform exactly 
       sessionId: session.id,
       candidateId: session.candidates[0]!.replyId,
       approvedText: text,
-      humanApproved: true,
     }
+    // v0.2.5: manual mode needs a stored approval. One record is enough for the
+    // racing callers: whichever claim wins consumes it, and the other nine are
+    // refused by the claim or the ledger — which is what this test measures.
+    await grantApproval(store, { ...request, config: BOUND_ACCOUNT })
 
     const results = await Promise.all(
       Array.from({ length: 10 }, () => publishCandidate(deps, request)),
@@ -775,8 +825,8 @@ test('a claim is released after the publish finishes, so a later retry is judged
       sessionId: session.id,
       candidateId: session.candidates[0]!.replyId,
       approvedText: text,
-      humanApproved: true,
     }
+    await grantApproval(store, { ...request, config: BOUND_ACCOUNT })
 
     const first = await publishCandidate(deps, request)
     assert.equal(first.status, 'published')
@@ -846,13 +896,17 @@ test('an unwritable state directory refuses to publish instead of sending unguar
       publish: () => ({ status: 'confirmed', postId: 'new-3' }),
     })
 
+    // No approval is created here on purpose. This store cannot write, so
+    // `grantApproval` itself would throw ENOTDIR — and that is the honest signal:
+    // the reason this publish must be refused is the dirty store, which the
+    // publisher checks *before* it ever looks for an approval. Minting a record
+    // would mean a "successful" write to a store this test just broke.
     const report = await publishCandidate(
       { adapter, store: failing, policy: { ...DEFAULT_POLICY, mode: 'manual' as const } },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -947,6 +1001,9 @@ test('publishing with a different logged-in account than configured is refused',
       publish: () => ({ status: 'confirmed', postId: 'nope' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId })
     const report = await publishCandidate(
       {
         adapter,
@@ -958,7 +1015,6 @@ test('publishing with a different logged-in account than configured is refused',
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
 
@@ -990,6 +1046,9 @@ test('a login without an exposed user id is refused when an account id is config
       publish: () => ({ status: 'confirmed', postId: 'nope' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId })
     const report = await publishCandidate(
       {
         adapter,
@@ -1001,7 +1060,6 @@ test('a login without an exposed user id is refused when an account id is config
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
 
@@ -1032,18 +1090,26 @@ test('the matching account publishes normally', async () => {
       publish: () => ({ status: 'confirmed', postId: 'new-9' }),
     })
 
+    // v0.2.5: a stored approval authorises the send, and it binds to the publishing
+    // account. The same getter goes to both, so the record names the account the
+    // publish will actually use.
+    const config = () => ({ aiAccountUserId: '1001', aiAccountName: 'ai-account' })
+    await grantApproval(store, {
+      sessionId: session.id,
+      candidateId: session.candidates[0]!.replyId,
+      config,
+    })
     const report = await publishCandidate(
       {
         adapter,
         store,
         policy: { ...DEFAULT_POLICY, mode: 'manual' as const },
-        config: () => ({ aiAccountUserId: '1001', aiAccountName: 'ai-account' }),
+        config,
       },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
 
@@ -1117,13 +1183,15 @@ test('a candidate without a target snapshot cannot be published', async () => {
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1156,13 +1224,15 @@ test('a target whose body changed after review is refused', async () => {
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1195,13 +1265,15 @@ test('a target whose author changed after review is refused', async () => {
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1229,13 +1301,15 @@ test('a deleted target is refused at publish time', async () => {
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1270,13 +1344,15 @@ test('a snapshot whose author id vanished at re-read is treated as unverifiable'
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1484,6 +1560,9 @@ test('a configured AI name with no reported name is refused (fail-closed)', asyn
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId })
     const report = await publishCandidate(
       {
         adapter,
@@ -1495,7 +1574,6 @@ test('a configured AI name with no reported name is refused (fail-closed)', asyn
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1524,6 +1602,9 @@ test('a mismatched AI name is refused even when the id matches', async () => {
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId })
     const report = await publishCandidate(
       {
         adapter,
@@ -1535,7 +1616,6 @@ test('a mismatched AI name is refused even when the id matches', async () => {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1565,18 +1645,26 @@ test('a configured AI name that matches publishes normally', async () => {
       publish: () => ({ status: 'confirmed', postId: 'new-name-ok' }),
     })
 
+    // v0.2.5: a stored approval authorises the send, and it binds to the account
+    // that would post. The same getter is passed to both, or the record would name a
+    // different account than the publish and be refused for `account_mismatch`.
+    const config = () => ({ aiAccountName: 'EXPECTED_PERSON' })
+    await grantApproval(store, {
+      sessionId: session.id,
+      candidateId: session.candidates[0]!.replyId,
+      config,
+    })
     const report = await publishCandidate(
       {
         adapter,
         store,
         policy: { ...DEFAULT_POLICY, mode: 'manual' as const },
-        config: () => ({ aiAccountName: 'EXPECTED_PERSON' }),
+        config,
       },
       {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, true, report.message)
@@ -1604,6 +1692,9 @@ test('account switching between validation and publish is caught', async () => {
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId })
     const report = await publishCandidate(
       {
         adapter,
@@ -1615,7 +1706,6 @@ test('account switching between validation and publish is caught', async () => {
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1754,6 +1844,9 @@ test('a cancel that lands before the send prevents the platform call', async () 
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: session.id, candidateId: session.candidates[0]!.replyId, config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       {
         adapter,
@@ -1766,7 +1859,6 @@ test('a cancel that lands before the send prevents the platform call', async () 
         sessionId: session.id,
         candidateId: session.candidates[0]!.replyId,
         approvedText: text,
-        humanApproved: true,
       },
     )
     assert.equal(report.ok, false)
@@ -1803,6 +1895,11 @@ test('refusing one stale candidate does not condemn the whole session', async ()
           confidence: 0.7,
           violations: [],
           notes: [],
+          // Carries an assessment so the *version* gate is what refuses it. Without
+          // one, v0.2.5's missing-assessment check (which runs first, being the more
+          // fundamental "cannot verify this at all") would answer instead and this
+          // test would pin the wrong refusal.
+          security: base.candidates[0]!.security,
           createdAt: new Date().toISOString(),
           approved: false,
         },
@@ -1819,12 +1916,22 @@ test('refusing one stale candidate does not condemn the whole session', async ()
     })
     const deps = { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT }
 
+    // The stale candidate needs an approval of its own, even though it will be
+    // refused: the publisher checks authorisation before the version gate, so
+    // without one this would come back `approval_required` and never reach the
+    // refusal this test is about.
+    await grantApproval(store, {
+      sessionId: 's-mixed',
+      candidateId: 's-mixed-c0',
+      text: stale,
+      config: BOUND_ACCOUNT,
+    })
+
     // The stale one is refused…
     const staleReport = await publishCandidate(deps, {
       sessionId: 's-mixed',
       candidateId: 's-mixed-c0',
       approvedText: stale,
-      humanApproved: true,
     })
     assert.equal(staleReport.ok, false)
     // This candidate is *both* older than the current one and snapshot-less. The
@@ -1836,11 +1943,15 @@ test('refusing one stale candidate does not condemn the whole session', async ()
     const afterStale = store.getSession('s-mixed')!
     assert.equal(afterStale.state, 'READY', 'a per-candidate refusal must not block the session')
 
+    await grantApproval(store, {
+      sessionId: 's-mixed',
+      candidateId: 's-mixed-c1',
+      config: BOUND_ACCOUNT,
+    })
     const goodReport = await publishCandidate(deps, {
       sessionId: 's-mixed',
       candidateId: 's-mixed-c1',
       approvedText: fresh,
-      humanApproved: true,
     })
     assert.equal(goodReport.ok, true, goodReport.message)
     assert.equal(adapter.publishes.length, 1)
@@ -1872,6 +1983,12 @@ test('a target that moved still blocks the whole session', async () => {
       publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
     })
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: 's-drift', candidateId: 's-drift-c1', config: BOUND_ACCOUNT })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(store, { sessionId: 's-drift', candidateId: 's-drift-c1', config: BOUND_ACCOUNT })
     const report = await publishCandidate(
       { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
       { sessionId: 's-drift', candidateId: 's-drift-c1', approvedText: text, humanApproved: true },

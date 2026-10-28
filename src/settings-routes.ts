@@ -208,6 +208,62 @@ export interface SettingsRouteDeps {
   stopAllActive(): Promise<PauseOutcome>
   /** Read the publish ledger and session counters. */
   diagnostics(): Promise<Diagnostics>
+  /**
+   * Candidates that are waiting for a human approval, newest first.
+   *
+   * This is what makes the approval section possible: the page cannot approve something
+   * it cannot see, and it must not be told "approve candidate X" by the agent — the list
+   * comes from the store, so what the owner sees is what is actually waiting.
+   *
+   * Optional so existing route tests keep compiling. When absent the page says there is
+   * nothing to approve rather than inventing an empty success.
+   */
+  pendingApprovals?(): readonly PendingApprovalView[]
+  /**
+   * Create a human approval for one candidate.
+   *
+   * This is the *only* way an approval record comes into existence, and it is only
+   * reachable from an authenticated browser session (see {@link makeSettingsRoutes}'s
+   * `guard`). The agent cannot call it: no tool wraps it, and the publish tool
+   * deliberately has no equivalent.
+   *
+   * Optional so route tests written against the older shape keep compiling. When it is
+   * absent the endpoint answers 501 rather than pretending to approve — a page that
+   * silently "approves" nothing would teach the owner to trust a broken button.
+   */
+  approve?(input: Record<string, unknown>): Promise<ApprovalOutcome>
+}
+
+/** The status and body an approval attempt answers with. */
+export interface ApprovalOutcome {
+  readonly status: number
+  readonly body: Record<string, unknown>
+}
+
+/**
+ * One candidate waiting for approval, as the page renders it.
+ *
+ * Nothing here is a secret, and nothing here is a capability: `sessionId` and
+ * `candidateId` are the two names the approve route needs, and both are already visible
+ * in the session the owner is looking at. The approval itself is created by the *route*
+ * from what is stored, so a page that lied about the text could not approve a different
+ * body — the Host would bind the approval to the stored one.
+ */
+export interface PendingApprovalView {
+  readonly sessionId: string
+  readonly candidateId: string
+  readonly platform: string
+  readonly threadTitle: string
+  readonly threadUrl: string
+  readonly targetPostId: string
+  /** The exact body that would be posted, so the owner reads what they approve. */
+  readonly text: string
+  readonly candidateVersion: number
+  /** `allow` or `review`. A `block` candidate is never listed: it cannot be approved. */
+  readonly verdict: string
+  readonly createdAt: string
+  /** Why this needs a human, already formatted for display. */
+  readonly reason: string
 }
 
 /**
@@ -483,6 +539,11 @@ export async function viewOfSettings(deps: SettingsRouteDeps): Promise<Record<st
     // rather than what the defaults say.
     ...
     (deps.security === undefined ? {} : { security: deps.security() }),
+    // Candidates waiting for a human approval. Separate from `security`: the security
+    // panel reports what the guards are doing, this reports what the owner has to
+    // decide. Mixing them was how "protection is on" and "a reply is waiting for you"
+    // became the same paragraph.
+    ...(deps.pendingApprovals === undefined ? {} : { pendingApprovals: deps.pendingApprovals() }),
     capabilities: {
       // The settings RPC is unavailable to third-party namespaces, so the write
       // path is this route; `writable` above mirrors the Host's own flag.
@@ -834,11 +895,60 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     writeJson(response, 400, { error: `未知操作 "${String(action)}"` })
   })
 
+  /**
+   * The human-approval endpoint.
+   *
+   * ## Why this is the only place an approval can be created
+   *
+   * v0.2.4 took `humanApproved: true` from the model's own tool arguments, so "the
+   * model wrote a boolean" and "the owner clicked approve" were the same event. The
+   * whole point of this version is that they are not. A record created here is
+   * reachable **only** through this route, and the route sits behind `guard`: a
+   * loopback peer, a same-origin Host/Origin pair, and a verified DSH browser session.
+   * No tool exposes it, and the agent has no client pointed at it.
+   *
+   * ## The body carries no secret and the reply carries none either
+   *
+   * `{ sessionId, candidateId }` in; a boolean and the record's *id* out. The id is an
+   * audit handle, not a capability: possessing it authorises nothing, because the
+   * publish path looks the record up by the binding it is about to send rather than by
+   * an id a caller supplies. A token the agent could read would be a token it could
+   * replay.
+   *
+   * ## What it refuses
+   *
+   * A `block` candidate cannot be approved at all. An approval is not a way past the
+   * security gate, and minting one would leave a record that is refused later for a
+   * different reason than the one that matters.
+   */
+  const approveRoute = guard(async (request, response) => {
+    if ((request.method ?? 'GET') !== 'POST') {
+      writeJson(response, 405, { error: `method not allowed: ${request.method ?? 'GET'}` })
+      return
+    }
+    const body = await readJsonBody(request)
+    if (body === undefined) {
+      writeJson(response, 400, { error: '请求体不是合法 JSON' })
+      return
+    }
+    const outcome = await (deps.approve?.(body) ??
+      Promise.resolve({
+        status: 501,
+        body: {
+          error:
+            '这个 Host 版本没有提供人工批准接口，无法创建发表授权。' +
+            '候选仍然可以生成和复制；真实发表会被拒绝。',
+        },
+      }))
+    writeJson(response, outcome.status, outcome.body)
+  })
+
   return [
     { kind: 'exact', path: `${ROUTE_PREFIX}/settings`, handler: settingsRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/secrets`, handler: secretRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/status`, handler: statusRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/action`, handler: actionRoute },
+    { kind: 'exact', path: `${ROUTE_PREFIX}/approve`, handler: approveRoute },
   ]
 }
 
@@ -847,6 +957,7 @@ export const ROUTE_SETTINGS = `${ROUTE_PREFIX}/settings`
 export const ROUTE_SECRETS = `${ROUTE_PREFIX}/secrets`
 export const ROUTE_STATUS = `${ROUTE_PREFIX}/status`
 export const ROUTE_ACTION = `${ROUTE_PREFIX}/action`
+export const ROUTE_APPROVE = `${ROUTE_PREFIX}/approve`
 
 /** A masked tail, exposed for the diagnostics panel's credential rows. */
 export { maskedTail }

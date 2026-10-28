@@ -58,6 +58,11 @@ window.__ModuleLoader__.load({
     const ROUTE_SECRETS = `${API}/secrets`
     const ROUTE_STATUS = `${API}/status`
     const ROUTE_ACTION = `${API}/action`
+    // v0.2.5: the human-approval endpoint. This is the only caller of it anywhere in
+    // the plugin, and it lives in the browser half on purpose — the agent has no client
+    // pointed at this route, which is what makes "the owner clicked approve" a different
+    // event from "the model wrote confirm: true".
+    const ROUTE_APPROVE = `${API}/approve`
 
     /** Credential reference names (mirrors src/secrets.ts). */
     const REF_COOKIE = 'DSH_AI_DEBATE_TIEBA_COOKIE'
@@ -123,6 +128,7 @@ window.__ModuleLoader__.load({
       tabModel: 'AI 模型',
       tabPersona: '人格',
       tabPublish: '发表与安全',
+      tabApprove: '发表授权',
       tabPlatforms: '平台',
       tabSecurity: '安全与防注入',
       securityIntro: '防注入保护默认开启。确定性规则（身份、目标、凭据、立场）没有关闭开关——能关掉的只有语义审核的严格度。',
@@ -268,6 +274,25 @@ window.__ModuleLoader__.load({
       recordsEmpty: '暂无记录。',
       recordsNotLoading: '点击刷新读取',
 
+      approveTitle: '发表授权',
+      approveHint:
+        '一次批准只授权一条候选回复、一次发表。批准后会绑定当时的正文、目标、发表账号和候选版本；其中任何一项变了，这条批准就失效，需要重新批准。批准记录由这个页面创建，Agent 无法自己创建。',
+      approveNoCandidate: '当前没有等待批准的候选回复。先让 Agent 生成一条候选，再回来批准。',
+      approveAction: '批准这一条',
+      approveWorking: '正在写授权…',
+      approveDone: '已写入授权记录，可以在 Agent 那边发表这一条。',
+      approveExpires: '有效期到 {time}。',
+      approveFailed: '授权失败：{reason}',
+      approveForbidden:
+        '这个候选不能批准（例如已被安全闸门拦住）。人工批准不能覆盖安全判定。',
+      approveNeedBind: '还没有为这个平台绑定 AI 发帖账号，无法创建授权。请先在上面的「贴吧账号」里填写 AI 账号。',
+      approveCandidateText: '候选正文',
+      approveTarget: '回复目标',
+      approveVersion: '候选版本',
+      approveVerdict: '安全判定',
+      approveReviewNote: '这条候选被标记为「需要人工确认」，必须由你批准后才能发表。',
+      approveAllowNote: '这条候选通过了自动检查；当前是人工审核模式，同样需要你批准。',
+
       statusTitle: '运行状态',
       dshVersion: 'DSH 版本',
       pluginVersion: '插件版本',
@@ -351,6 +376,7 @@ window.__ModuleLoader__.load({
       tabModel: 'AI model',
       tabPersona: 'Persona',
       tabPublish: 'Publishing',
+      tabApprove: 'Authorisation',
       tabPlatforms: 'Platforms',
       tabStatus: 'Status',
 
@@ -463,6 +489,26 @@ window.__ModuleLoader__.load({
       recordsEmpty: 'No records.',
       recordsNotLoading: 'Refresh to read',
 
+      approveTitle: 'Publishing authorisation',
+      approveHint:
+        'One approval authorises one candidate reply for one publish. It is bound to the body, target, publishing account and candidate version as they were at that moment; if any of them changes the approval stops applying and you have to approve again. Records are created by this page — the agent cannot create one.',
+      approveNoCandidate: 'No candidate is waiting for approval. Have the agent generate one, then come back.',
+      approveAction: 'Approve this reply',
+      approveWorking: 'Writing the approval…',
+      approveDone: 'Approval recorded. The agent can publish this reply now.',
+      approveExpires: 'Valid until {time}.',
+      approveFailed: 'Approval failed: {reason}',
+      approveForbidden:
+        'This candidate cannot be approved (it may have been blocked by the security gate). A human approval never overrides that verdict.',
+      approveNeedBind:
+        'No AI posting account is bound for this platform, so no approval can be created. Fill in the AI account above first.',
+      approveCandidateText: 'Candidate body',
+      approveTarget: 'Replying to',
+      approveVersion: 'Candidate version',
+      approveVerdict: 'Security verdict',
+      approveReviewNote: 'This candidate is flagged "needs a human"; it cannot be published until you approve it.',
+      approveAllowNote: 'This candidate passed the automatic checks. Review mode is manual, so it still needs your approval.',
+
       statusTitle: 'Runtime',
       dshVersion: 'DSH version',
       pluginVersion: 'Plugin version',
@@ -533,12 +579,17 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** The six page sections. */
+    /** The seven page sections. */
     const TABS = [
       { id: 'account', label: 'tabAccount' },
       { id: 'model', label: 'tabModel' },
       { id: 'persona', label: 'tabPersona' },
       { id: 'publish', label: 'tabPublish' },
+      // v0.2.5: its own tab, not a block inside "publish". Approving is the one action
+      // in this card that changes what the plugin is *allowed* to do, and burying it
+      // under the policy sliders is how an owner comes to publish without ever having
+      // read the body they authorised.
+      { id: 'approve', label: 'tabApprove' },
       { id: 'platforms', label: 'tabPlatforms' },
       { id: 'security', label: 'tabSecurity' },
       { id: 'status', label: 'tabStatus' },
@@ -621,6 +672,17 @@ window.__ModuleLoader__.load({
           raw.security && typeof raw.security === 'object' && !Array.isArray(raw.security)
             ? raw.security
             : undefined,
+        // Candidates waiting for a human approval.
+        //
+        // Same whitelist rule as `security` above — and same trap: a field the Host
+        // sends and this function does not name disappears with no error anywhere. The
+        // v0.2.4 security panel was invisible for exactly that reason, so this is listed
+        // next to it rather than added later.
+        //
+        // Absent stays `undefined` (not `[]`): the section has to distinguish "this Host
+        // version cannot report them" from "nothing is waiting", because those need
+        // different words on screen.
+        pendingApprovals: Array.isArray(raw.pendingApprovals) ? raw.pendingApprovals : undefined,
         capabilities: raw.capabilities || { settingsService: false, credentialService: false },
       }
     }
@@ -959,8 +1021,43 @@ window.__ModuleLoader__.load({
         }
       }
 
-      /** Run one named probe and keep its result. */
-      async probe(action) {        this.probes = { ...this.probes, [action]: { state: 'running' } }
+      /**
+       * Approve one candidate for one publish attempt.
+       *
+       * This is the human half of the v0.2.5 approval chain: the publisher will not
+       * send anything without a record created here, and this is the only code path
+       * that creates one. It sends only `{ sessionId, candidateId }` — no text, no
+       * account, no token. The Host rebuilds the binding from what is actually stored,
+       * so an approval always describes the candidate as it exists now rather than as
+       * this page happens to remember it.
+       *
+       * Deliberately not optimistic: the button reports what the route said. A UI that
+       * showed "approved" before the write landed would teach the owner to trust a
+       * record that may not exist.
+       */
+      async approve(sessionId, candidateId) {
+        const key = `approve:${sessionId}:${candidateId}`
+        this.probes = { ...this.probes, [key]: { state: 'running' } }
+        this.publish()
+        try {
+          const result = await callJson(ROUTE_APPROVE, {
+            method: 'POST',
+            body: JSON.stringify({ sessionId, candidateId }),
+          })
+          this.probes = { ...this.probes, [key]: { state: 'done', result } }
+          this.publish()
+          return result
+        } catch (error) {
+          this.probes = {
+            ...this.probes,
+            [key]: { state: 'failed', error: error instanceof Error ? error.message : String(error) },
+          }
+          this.publish()
+          throw error
+        }
+      }
+
+      /** Run one named probe and keep its result. */      async probe(action) {        this.probes = { ...this.probes, [action]: { state: 'running' } }
         this.publish()
         try {
           const result = await callJson(ROUTE_ACTION, {
@@ -1104,7 +1201,21 @@ window.__ModuleLoader__.load({
       // every prerequisite red, which reads as "something is broken" when it is
       // actually "here is what has to happen first".
       '.dsd-notes{list-style:none;margin:6px 0 0;padding:0;font-size:12px;line-height:1.6}' +
-      '.dsd-notes li{color:var(--dsw-alias-label-secondary);padding:3px 0;border-top:1px solid var(--dsw-alias-border-l2)}'
+      '.dsd-notes li{color:var(--dsw-alias-label-secondary);padding:3px 0;border-top:1px solid var(--dsw-alias-border-l2)}' +
+      // The approval list. Each row is one decision, so rows are separated visually
+      // rather than running together as a single block of prose — an owner scanning
+      // three candidates must not mistake one's body for another's.
+      '.dsd-approve-list{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:10px}' +
+      '.dsd-approve-row{border:1px solid var(--dsw-alias-border-l2);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}' +
+      '.dsd-approve-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px}' +
+      '.dsd-approve-thread{color:var(--dsw-alias-label-primary);font-weight:600;overflow-wrap:anywhere}' +
+      '.dsd-approve-version{color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary))}' +
+      '.dsd-approve-reason{margin:0;font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.6;overflow-wrap:anywhere}' +
+      // `pre-wrap` so the body appears exactly as it would be posted: a reply with
+      // newlines must not look like one paragraph here and read differently on the
+      // platform, because the approval is bound to this text.
+      '.dsd-approve-text{margin:0;font-size:13px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-l2,rgba(127,127,127,.06));border-radius:6px;padding:8px 10px}' +
+      '.dsd-approve-target{margin:0;font-size:12px;color:var(--dsw-alias-label-tertiary,var(--dsw-alias-label-secondary));overflow-wrap:anywhere}'
 
     /** Insert this card's stylesheet once, tagged so a reload can find it. */
     function ensureStyles() {
@@ -2079,6 +2190,141 @@ window.__ModuleLoader__.load({
      * is meant to prevent.
      */
     /**
+     * The publishing-authorisation panel.
+     *
+     * ## Why the list is read from the Host, not from the agent
+     *
+     * The agent knows which candidate it just generated, so the tempting design is a
+     * button that takes an id from somewhere the agent controls. That would restore
+     * exactly the hole v0.2.5 closes: the model could point the owner at a candidate it
+     * chose. The list below comes from `pendingApprovals()`, which derives it from the
+     * store — the owner approves what is actually waiting.
+     *
+     * ## Why the body is shown in full
+     *
+     * An approval is bound to the text hash, so approving without reading the text would
+     * be approving something the owner never saw. The whole body is on screen, not a
+     * truncated preview: this is the one place where "it looked fine in the panel" has to
+     * mean the thing that gets posted.
+     *
+     * ## Why each row is its own button
+     *
+     * A single "approve all" would let one click authorise several replies at once, which
+     * is the same loss of attention that makes bulk approvals dangerous everywhere. One
+     * decision, one row.
+     */
+    function ApproveSection(props) {
+      const { t, store, state } = props
+      const pending = state.view.pendingApprovals
+      // One in-flight click at a time. Keyed by candidate so a second click on a
+      // different row is still possible, but a double click on one row is not.
+      const [busy, setBusy] = useState('')
+      const [outcome, setOutcome] = useState(null)
+
+      const rows = Array.isArray(pending) ? pending : []
+
+      const header = h(
+        'div',
+        { className: 'dsd-sect-head' },
+        h('span', { className: 'dsd-sect-title', style: { margin: 0 } }, t('approveTitle')),
+        h('span', { className: 'dsd-badge' }, String(rows.length)),
+      )
+
+      if (!Array.isArray(pending)) {
+        // A Host that cannot report the list must not render as "nothing waiting":
+        // those are different facts and the owner acts on them differently.
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          header,
+          h('p', { className: 'dsd-hint' }, t('unavailable')),
+        )
+      }
+
+      if (rows.length === 0) {
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          header,
+          h('p', { className: 'dsd-hint' }, t('approveNoCandidate')),
+        )
+      }
+
+      const onClickApprove = (row) => {
+        const key = row.candidateId
+        setBusy(key)
+        setOutcome(null)
+        Promise.resolve(store.approve(row.sessionId, row.candidateId)).then(
+          (result) => {
+            setBusy('')
+            // Re-read so the row disappears for the right reason: the Host now holds a
+            // live approval, which is the same fact the publish path will check.
+            setOutcome({ ok: true, expiresAt: result && result.expiresAt })
+            store.load()
+          },
+          (error) => {
+            setBusy('')
+            setOutcome({ ok: false, error: error instanceof Error ? error.message : String(error) })
+          },
+        )
+      }
+
+      return h(
+        'div',
+        { className: 'dsd-sect' },
+        header,
+        h('p', { className: 'dsd-sect-sub' }, t('approveHint')),
+
+        outcome
+          ? h(
+              'p',
+              { className: 'dsd-hint' + (outcome.ok ? '' : ' dsd-hint-error'), role: 'status' },
+              outcome.ok
+                ? t('approveDone') +
+                  (outcome.expiresAt
+                    ? ` ${t('approveExpires').replace('{time}', String(outcome.expiresAt))}`
+                    : '')
+                : t('approveFailed').replace('{reason}', outcome.error || t('unavailable')),
+            )
+          : null,
+
+        h(
+          'ul',
+          { className: 'dsd-approve-list' },
+          rows.map((row) =>
+            h(
+              'li',
+              { key: row.candidateId, className: 'dsd-approve-row' },
+              h(
+                'div',
+                { className: 'dsd-approve-meta' },
+                h('span', { className: 'dsd-badge' }, row.platform),
+                h('span', { className: 'dsd-approve-thread' }, row.threadTitle || row.threadUrl),
+                h('span', { className: 'dsd-approve-version' }, `${t('approveVersion')}: ${row.candidateVersion}`),
+                h('span', { className: 'dsd-badge' }, `${t('approveVerdict')}: ${row.verdict}`),
+              ),
+              h('p', { className: 'dsd-approve-reason' }, row.reason),
+              // The full body. `white-space: pre-wrap` in the stylesheet, so a reply
+              // containing newlines is shown as it would be posted.
+              h('p', { className: 'dsd-approve-text' }, h('strong', null, `${t('approveCandidateText')}：`), row.text),
+              h('p', { className: 'dsd-approve-target' }, `${t('approveTarget')}：${row.targetPostId}`),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dsd-btn',
+                  disabled: busy === row.candidateId,
+                  onClick: () => onClickApprove(row),
+                },
+                busy === row.candidateId ? t('approveWorking') : t('approveAction'),
+              ),
+            ),
+          ),
+        ),
+      )
+    }
+
+    /**
      * The security panel.
      *
      * Every value comes from the Host's *effective* state, not from the schema
@@ -2444,6 +2690,7 @@ window.__ModuleLoader__.load({
         if (state.tab === 'model') return h(ModelSection, shared)
         if (state.tab === 'persona') return h(PersonaSection, shared)
         if (state.tab === 'publish') return h(PublishSection, shared)
+        if (state.tab === 'approve') return h(ApproveSection, shared)
         if (state.tab === 'platforms') return h(PlatformsSection, shared)
         if (state.tab === 'security') return h(SecuritySection, shared)
         if (state.tab === 'status') return h(StatusSection, shared)
@@ -2650,6 +2897,11 @@ window.__ModuleLoader__.load({
           h('section', { className: 'dsd-page-sect' }, h(ModelSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(PersonaSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(PublishSection, shared)),
+          // Directly after the publish settings: approving is what those settings
+          // gate, and putting the decision next to the policy is what makes the
+          // connection between "manual review mode" and "here is something to review"
+          // visible without reading either panel's prose.
+          h('section', { className: 'dsd-page-sect' }, h(ApproveSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(PlatformsSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(SecuritySection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(StatusSection, shared)),
@@ -2840,6 +3092,15 @@ window.__ModuleLoader__.load({
     exports.DebateCard = DebateCard
     exports.DebateSection = DebateSection
     exports.DebateSummary = DebateSummary
+    /**
+     * The approval panel, exposed so a test can render it directly.
+     *
+     * The panel's whole job is to not approve things it should not, and that is easiest
+     * to pin by rendering it with a hand-built view than by driving a whole Host. It is
+     * also the only place a reader can see what the owner is asked to decide, so a test
+     * on it doubles as a check that the wording stays honest.
+     */
+    exports.ApproveSection = ApproveSection
     /**
      * The page model, exposed for tests only.
      *

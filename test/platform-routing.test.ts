@@ -50,6 +50,7 @@ import type {
   ThreadRef,
   UserProfile,
 } from '../lib/types.js'
+import { grantApproval } from './helpers.ts'
 
 // ---------------------------------------------------------------------------
 // A fake platform that records what it was actually asked to do
@@ -710,11 +711,13 @@ test('只读平台在真实发表路径上被拒绝，且平台适配器一次�
       postId: 'micro-r3',
     })
     const generated = await runGeneration(runtime, { sessionId: analysis.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
 
     assert.equal(report.ok, false, `没有发表能力的平台不能返回成功：${JSON.stringify(report)}`)
@@ -758,11 +761,13 @@ test('发表能力未验证的平台同样被拒绝（unverified 不等于 suppo
       postId: 'micro-r3',
     })
     const generated = await runGeneration(runtime, { sessionId: analysis.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, false)
     assert.equal(report.errorCode, 'capability_not_proven')

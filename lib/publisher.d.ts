@@ -18,13 +18,31 @@
 import { type PlatformAdapter } from './types.js';
 import { DebateStore } from './store.js';
 import { type InteractionPolicy } from './safety.js';
-/** What a caller must supply to publish. */
+/**
+ * What a caller must supply to publish.
+ *
+ * ## `humanApproved` is deprecated and cannot authorise anything
+ *
+ * Through v0.2.4 the caller passed `humanApproved: true` and the publisher treated
+ * that as "the owner approved". `debate_publish_reply` filled it from its own
+ * `confirm` argument, which comes from the model — so the field was a model-supplied
+ * boolean wearing the name of a human decision.
+ *
+ * It survives as an optional field so an existing caller compiles, and it is
+ * **ignored**: the publisher looks up a stored approval record instead. The only
+ * thing that authorises a send is a record created by an authenticated request the
+ * model cannot make.
+ */
 export interface PublishRequest {
     readonly sessionId: string;
     readonly candidateId: string;
     /** The exact text the human saw and approved. */
     readonly approvedText: string;
-    readonly humanApproved: boolean;
+    /**
+     * @deprecated Ignored. Authorisation comes from a stored approval record, not from
+     * a boolean the caller supplies. Kept only so old call sites keep compiling.
+     */
+    readonly humanApproved?: boolean;
     readonly signal?: AbortSignal;
 }
 /** The detailed result of a publish attempt. */

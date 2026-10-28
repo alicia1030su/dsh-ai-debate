@@ -27,6 +27,10 @@ import type {
   ThreadRef,
   UserProfile,
 } from '../lib/types.js'
+import type { DebateStore, ApprovalRecord } from '../lib/store.js'
+import { bindingOf, createApproval } from '../lib/security/approvals.js'
+import { bindingsOf } from '../lib/runtime.js'
+import { aiAccountFor } from '../lib/platforms/accounts.js'
 import { parseWapFloors, parseWapPageMeta, parseWapThreadMeta } from '../lib/platforms/tieba/parse.js'
 import { parseTiebaUrl } from '../lib/platforms/tieba/url.js'
 
@@ -444,4 +448,124 @@ export function tempDir(prefix: string): string {
     `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   )
   return base
+}
+
+/**
+ * Grant a real approval for one candidate, the way the settings route does.
+ *
+ * ## Why tests go through this instead of setting a flag
+ *
+ * Through v0.2.4 a test (and the publish tool) could say `humanApproved: true` and
+ * the publisher believed it. That boolean is now ignored, so every test that wants
+ * a publishable candidate has to create the thing that actually authorises one.
+ *
+ * The temptation is a test-only bypass. That would be a permanent hole: "test mode"
+ * checks live in shipped code, and this version's acceptance criterion is precisely
+ * that no caller can publish without a record. So this helper writes the same record
+ * the authenticated route writes, through the same `bindingOf` and `createApproval`,
+ * and the publisher validates it normally. A test that forgets to call it fails,
+ * loudly, which is the correct behaviour.
+ *
+ * ## The publishing account has to match, or nothing will
+ *
+ * `bindingOf` records which account would post and `checkApproval` compares it, so a
+ * wrong value here fails as `account_mismatch` — a refusal that reads like a security
+ * bug. `publisher.ts` derives it as
+ * `(config.aiAccountUserId || config.aiAccountName).trim()`. Rather than restate that
+ * rule and let it drift, pass the same `config` getter the publish uses and this
+ * helper reads it the same way.
+ */
+export async function grantApproval(
+  store: DebateStore,
+  input: {
+    sessionId: string
+    candidateId: string
+    /** Defaults to the stored candidate's text. */
+    text?: string
+    /**
+     * The account that would post.
+     *
+     * Defaults to what the publish path itself will use. That is **not** always
+     * `aiAccountUserId || aiAccountName`: `runPublish` resolves the account through
+     * the platform's binding (`aiAccountFor(bindingsOf(config), platform)`), so a
+     * test that binds accounts via `platformAccounts` and passes its `runtime.config`
+     * here would otherwise record an empty account and the publish would be refused
+     * as `account_mismatch` — a refusal that reads like a security bug but is a
+     * fixture mismatch.
+     *
+     * Pass it explicitly only to test a mismatch on purpose.
+     */
+    publishingAccount?: string
+    /**
+     * Resolve the default `publishingAccount`.
+     *
+     * Takes the whole resolved config (not just the two legacy fields) so the
+     * per-platform table is visible here. `aiAccountFor` is imported lazily below to
+     * keep this file's import graph the same as before.
+     */
+    config?: () => ResolvedConfigLike
+    /** Defaults to now; pass a past value to test expiry. */
+    grantedAt?: number
+    /** Defaults to the candidate's stored assessment fingerprint. */
+    assessmentFingerprint?: string
+  },
+): Promise<ApprovalRecord> {
+  const session = store.getSession(input.sessionId)
+  if (session === undefined) throw new Error(`grantApproval: 找不到会话 ${input.sessionId}`)
+  const candidate = session.candidates.find((row) => row.replyId === input.candidateId)
+  if (candidate === undefined) throw new Error(`grantApproval: 找不到候选 ${input.candidateId}`)
+
+  const account = input.publishingAccount ?? resolvePublishingAccount(input.config, session.platform)
+
+  const binding = bindingOf({
+    sessionId: session.id,
+    candidateId: candidate.replyId,
+    platform: session.platform,
+    targetPostId: candidate.targetPostId,
+    publishingAccount: account,
+    text: input.text ?? candidate.text,
+    candidateVersion: candidate.candidateVersion ?? 0,
+    assessmentFingerprint: input.assessmentFingerprint ?? candidate.security?.fingerprint ?? '',
+  })
+  const record = createApproval(binding, 'owner@test', () => input.grantedAt ?? Date.now())
+  await store.mutate((data) => ({ ...data, approvals: [...(data.approvals ?? []), record] }))
+  return record
+}
+
+/** The subset of a resolved config this helper needs. */
+interface ResolvedConfigLike {
+  readonly aiAccountUserId?: string
+  readonly aiAccountName?: string
+  readonly platformAccounts?: string
+}
+
+/**
+ * The account `runPublish` will use for `platform`.
+ *
+ * Mirrors `runPublish`'s own resolution instead of restating the legacy
+ * `aiAccountUserId || aiAccountName` rule. With per-platform bindings configured
+ * those two fields are empty and the real account lives in `platformAccounts`, so
+ * the naive rule yields `''` — and an approval bound to `''` can never match, which
+ * surfaces as `account_mismatch` on every publish. That reads like a security bug
+ * but is a fixture mismatch, so it is worth doing properly.
+ */
+function resolvePublishingAccount(
+  config: (() => ResolvedConfigLike) | undefined,
+  platform: string,
+): string {
+  const resolved = config?.()
+  if (resolved === undefined) return ''
+  const legacy = (resolved.aiAccountUserId?.trim() || resolved.aiAccountName?.trim() || '').trim()
+  // Many fixtures hand the publisher a two-field object rather than a whole resolved
+  // config. `bindingsOf` parses `platformAccounts` and throws on the missing field, so
+  // this has to fall back instead of propagating: a fixture that only uses the legacy
+  // pair is legitimate, and the legacy pair is exactly what the resolver would have
+  // used for it anyway.
+  try {
+    const bound = aiAccountFor(bindingsOf(resolved as never), platform)
+    const account = bound?.account
+    return (account?.accountId ?? account?.displayName ?? '').trim() || legacy
+  } catch {
+    return legacy
+  }
 }

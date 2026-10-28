@@ -115,7 +115,7 @@ test('真实 Cordis 容器上，apply 会注册九个工具', async () => {
   }
 })
 
-test('真实 Cordis 容器上，webServer 里会出现四条设置路由', async () => {
+test('真实 Cordis 容器上，webServer 里会出现五条设置路由', async () => {
   // This is the assertion that would have caught the observed 404: the tools came
   // up, the page did not.
   const { fiber, server } = await mount()
@@ -123,6 +123,10 @@ test('真实 Cordis 容器上，webServer 里会出现四条设置路由', async
     const paths = server.routes.map((route) => route.path).sort()
     assert.deepEqual(paths, [
       '/api/dsh-ai-debate/action',
+      // v0.2.5: the human-approval endpoint. Listed explicitly rather than counted,
+      // because a family that silently loses one member is exactly the 404 this test
+      // exists to catch — a bare length check would not notice a swap.
+      '/api/dsh-ai-debate/approve',
       '/api/dsh-ai-debate/secrets',
       '/api/dsh-ai-debate/settings',
       '/api/dsh-ai-debate/status',
@@ -139,7 +143,7 @@ test('真实 Cordis 容器上，webServer 里会出现四条设置路由', async
 
 test('停掉插件后路由被摘掉，不留悬空 handler', async () => {
   const { fiber, server } = await mount()
-  assert.equal(server.routes.length, 4)
+  assert.equal(server.routes.length, 5)
   await fiber.dispose()
   assert.equal(server.routes.length, 0, 'dispose 之后路由必须被移除')
 })
@@ -165,7 +169,7 @@ test('webServer 晚于插件出现时，路由仍然注册', async () => {
   app.provide('webServer', server)
   await new Promise((resolve) => setTimeout(resolve, 50))
 
-  assert.equal(server.routes.length, 4, 'webServer 晚到也必须拿到全部四条路由')
+  assert.equal(server.routes.length, 5, 'webServer 晚到也必须拿到全部五条路由')
   await fiber.dispose()
 })
 

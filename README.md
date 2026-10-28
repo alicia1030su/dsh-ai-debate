@@ -134,17 +134,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.4
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.5
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.4.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.5.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.4.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.5.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -168,7 +168,7 @@ dsh plugin --profile <你的 profile 名> add .
 
 ### 方式一：DSH 界面配置页（推荐）
 
-打开 **设置（侧边栏底部 ⚙）→ AI代吵架**，页面分六个区域：
+打开 **设置（侧边栏底部 ⚙）→ AI代吵架**，页面分七个区域：
 
 | 区域 | 能改什么 |
 | --- | --- |
@@ -176,6 +176,7 @@ dsh plugin --profile <你的 profile 名> add .
 | **AI 模型** | Base URL、模型名、**模型 API Key 凭据**、温度、最大输出 tokens、超时、上下文预算、**测试模型连接** |
 | **人格** | 四种人格、五个强度滑杆、**预览四种风格** |
 | **发表与安全** | 总开关、互动模式、自动发表上限、冷却、单帖上限、向 Agent 播报、**关闭自动发表模式**、**立即暂停所有任务**、台账 |
+| **发表授权**（v0.2.5 新增） | 等待批准的候选列表（正文全文、回复目标、候选版本、安全判定），逐条**批准**。这是唯一的授权入口，见下面「发表授权」 |
 | **平台** | 已注册平台清单、各自的能力矩阵与验证状态、每平台的主人/AI 账号绑定情况 |
 | **诊断与状态** | 运行状态、DSH 版本、会话与台账统计、模型用量、近期错误、限流状态 |
 
@@ -360,7 +361,11 @@ dsh plugin --profile <你的 profile 名> add .
 
 ### 5. 审核并发表
 
-把候选正文原样念给你自己看，你同意后再：
+**从 v0.2.5 起，发表需要在 DSH 界面里点一次批准。** `confirm: true` 只是让 Agent 发起
+请求，它不能代替你点头。
+
+先把候选正文原样念给你自己看，你同意后去**设置页 → 发表授权**，找到这一条候选，点
+「批准这一条」。批准之后，Agent 才能：
 
 ```
 debate_publish_reply({
@@ -372,6 +377,17 @@ debate_publish_reply({
 ```
 
 `text` 必须和候选**完全一致**；不一致会被拒绝（防止「审核的是一套、发出去的是另一套」）。
+
+如果还没批准就调用，会得到 `approval_required`：这条候选没有人工批准记录。这不是报错，
+是设计——Agent 自己写 `confirm: true` 和真的点了「批准」在 v0.2.4 及以前是同一个事件，
+现在不是了。
+
+关于批准，四条要知道的：
+
+- **一次批准只换一次发表。** 消费过的记录不能再用；要再发得重新批准。
+- **批准绑定当时的正文、目标、账号和候选版本。** 其中任何一样变了，旧批准自动失效。
+- **批准有有效期**（30 分钟），过期要重新批准。
+- **`block` 的候选根本不能批准。** 人工点头不覆盖安全判定。
 
 ### 6. 查看 / 停止
 
@@ -412,9 +428,52 @@ debate_publish_reply({
 
 | 模式 | 行为 |
 | --- | --- |
-| `manual`（默认） | 生成后必须由主人调用 `debate_publish_reply` 且 `confirm: true` 才会发 |
+| `manual`（默认） | 生成后必须在设置页批准这一条候选，再由主人调用 `debate_publish_reply` 且 `text` 与候选一致，才会发 |
 | `single_shot` | 对某一条候选给一次授权，只发这一条 |
 | `limited_auto` | 受 `maxAutoPerSession` / `cooldownSeconds` / `maxPerThread` 三重限制，且每个帖子可以单独关掉 |
+
+**`limited_auto` 也不能跳过安全判定。** 被判为「需要人工确认」的候选永远不会占用自动额度，
+无论哪种模式都必须有人点过批准。被判为 `block` 的候选任何模式都发不出去。
+
+### 发表授权（v0.2.5）
+
+三种模式共用同一条授权链，区别只在「要不要人点头」的严格程度：
+
+```mermaid
+flowchart TD
+    A[生成候选] --> B{安全判定}
+    B -->|block| C[拒绝，人工批准也不能覆盖]
+    B -->|review| D[必须有人工批准记录]
+    B -->|allow| E{互动模式}
+    E -->|manual| D
+    E -->|limited_auto| F[检查自动额度/冷却/帖级上限]
+    D --> G[绑定校验：正文哈希/目标/账号/版本/评估指纹]
+    F --> G
+    G --> H[消费这条批准]
+    H --> I[写 pending 去重记录]
+    I --> J[真实发表]
+```
+
+**批准记录只能由设置页创建。** Agent 没有 HTTP 客户端指向那个接口，也没有工具包着它；
+`debate_publish_reply` 的参数里没有任何能造出记录的东西。这一条是 v0.2.5 的全部意义：
+模型在自己的工具参数里写 `confirm: true`，和你在界面上点「批准」，必须永远是两个事件。
+
+**批准记录存在哪、长什么样：**
+
+| 字段 | 作用 |
+| --- | --- |
+| `sessionId` / `candidateId` | 只对这一条候选有效 |
+| `platform` / `targetPostId` | 换了平台或换了回复对象就失效 |
+| `publishingAccount` | 换了发表账号就失效 |
+| `textHash` | 正文被改过就失效 |
+| `candidateVersion` | 候选重新生成过就失效 |
+| `assessmentFingerprint` | 安全评估重算过就失效 |
+| `grantedAt` | 30 分钟有效期 |
+| `consumedAt` | 用过一次就作废 |
+| `revokedAt` | 主人撤销后立刻作废 |
+
+绑定校验是**逐字段比较**，每个不匹配都有自己的错误码（`account_mismatch`、`text_mismatch`
+……），所以出问题时能看出到底哪一维度变了，而不是笼统的「批准无效」。
 
 ### 发表前会再查一遍
 
@@ -440,6 +499,8 @@ debate_publish_reply({
 > [`docs/v0.2.3-security-report.md`](docs/v0.2.3-security-report.md)。
 > v0.2.4 修的是这个面板**显示**上的两个缺陷（客户端白名单漏了字段、侧栏布局漏挂载
 > 两个区域），安全规则本身没有变化，也没有放宽。
+> v0.2.5 在这一层之上补了**发表授权**：只防注入不够，还要证明「这一条是主人点头同意的」。
+> 详见下面的「发表授权」一节。
 
 ### 它防的是什么
 
@@ -837,7 +898,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**612 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**680 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -871,7 +932,7 @@ node scripts/pack.mjs
 | `test/publisher-safety.test.ts` | 59 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
 | `test/route-lifecycle.test.ts` | 4 | 路由注册与卸载生命周期 |
 | `test/settings-auth.test.ts` | 18 | 设置读写的授权与越权拒绝 |
-| `test/settings-page.test.ts` | 36 | 设置页六个区域的行为 |
+| `test/settings-page.test.ts` | 36 | 设置页七个区域的行为 |
 | `test/target.test.ts` | 12 | 目标快照与漂移检测 |
 | `test/trigger-identity.test.ts` | 23 | 召唤定位与主人身份 |
 | `test/verification-and-auth.test.ts` | 9 | 发表后回读与登录态核对 |
@@ -880,10 +941,17 @@ node scripts/pack.mjs
 | `test/security/adversarial.test.ts` | 36 | **18 个对抗场景**：直接注入、假冒管理员/主人、立场反转、归因污染、多轮拆分、结构伪装、Unicode 混淆、编码载荷、目标正确但攻击主人、替换已批准正文、跨平台撞车、审核被操纵、审核超时、直改状态文件 |
 | `test/security/security-events.test.ts` | 11 | **安全事件日志**：摘录必须脱敏去凭据、有长度上限、去掉不可见字符；日志本身不能变第二份攻击载荷 |
 | `test/settings-security-view.test.ts` | 8 | 设置页安全区：报告生效状态而非默认值；关闭保护时必须读得到 false；不含任何凭据 |
-| `test/cordis-integration.test.ts` | 6 | **真实 Cordis 容器**：插件 `apply` 在真 `Context` 上注册出四条设置路由；webServer 晚到时仍注册；dispose 后路由摘干净 |
+| `test/cordis-integration.test.ts` | 6 | **真实 Cordis 容器**：插件 `apply` 在真 `Context` 上注册出五条设置路由（settings/secrets/status/action/approve）；webServer 晚到时仍注册；dispose 后路由摘干净 |
 | `test/client-security-panel.test.ts` | 11 | **安全面板全链路**：Host→fetch→normalizeView→store→React DOM；两个挂载入口都测；保护关闭必须显示关闭，不伪造开启 |
 | `test/test-count.test.ts` | 11 | **统计脚本自测**：TAP 与 spec 两种格式解析一致；非零退出与无法解析都让整体失败；`NODE_TEST_CONTEXT` 继承陷阱 |
-| **合计** | **612** | |
+| `test/account-binding-partial.test.ts` | 10 | **部分配置不得崩溃**：只有 AI 账号字段、只有主人字段、完全空、`platformAccounts` 缺失或损坏，都按「未配置」处理；缺字段与空字符串必须等价 |
+| `test/approval-adversarial.test.ts` | 17 | **发表授权对抗测试**：模型自己传 `confirm=true`、正文里伪造「已批准」、批准后换正文/换目标/换账号、并发消费同一份授权、已消费复用、过期、重启、状态文件被篡改、`block` 不可批准 |
+| `test/approval-route.test.ts` | 13 | **批准接口的信任边界**：无会话认证时整体关闭、未登录/校验失败/授权器抛错一律拒绝、只接受 POST、Host 不支持时 501 不假装成功、响应不含凭据 |
+| `test/store-field-preservation.test.ts` | 8 | **状态字段不得被静默丢弃**：`prune()` 与 `validateStore()` 都必须保留 approvals/security；消费状态跨重启保持；`PRESERVED_FIELDS` 覆盖 `StoreData` 全部字段 |
+| `test/v025-defect-repro.test.ts` | 7 | **v0.2.5 缺陷复现**：`review` 候选在 `limited_auto` 无批准时曾能发表；`manual` 模式曾接受调用方自报的 `humanApproved` |
+| `test/client-approval-panel.test.ts` | 11 | **批准面板全链路**：Host JSON→fetch→normalizeView→store→React DOM；正文全文与换行必须显示；只 POST 两个 id；失败显示 Host 原因；进行中禁用；两个挂载面都到得了 |
+| `test/readback-integrity.test.ts` | 2 | **回读不全不得崩溃也不得假装核实**：平台返回的正文缺失时报告「无法核对内容」而非 `undefined.replace` 崩溃；发表状态如实为 `published`，`verified: false`；平台只调用一次，不会因此重试 |
+| **合计** | **680** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 
@@ -928,7 +996,7 @@ node --experimental-transform-types --test v013_dedupe_expiry_regression.test.mj
 
 #### 自动化测试（Mock / fixture，可重复运行）
 
-612 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
+667 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
 不需要网络和账号，**证明的是代码逻辑，不是平台能力**。
 
 #### 0.1.5 这一轮修的是什么

@@ -21,6 +21,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 
 import type { TargetSnapshot } from './types.js'
+import type { ApprovalRecord } from './security/approvals.js'
+import { pruneApprovals } from './security/approvals.js'
 
 /**
  * A store failure the caller is expected to act on.
@@ -264,6 +266,19 @@ export interface StoreData {
    * excerpt — see `security/security-events.ts`, which owns that rule.
    */
   readonly security?: readonly SecurityEventRecord[]
+  /**
+   * Human approvals, oldest first.
+   *
+   * This is the record that makes "the owner approved" checkable, replacing the
+   * v0.2.4 arrangement where a boolean in the model's tool arguments *was* the
+   * approval. See `security/approvals.ts` for the binding rules and for why the id
+   * is not handed to the model.
+   *
+   * Optional for the same reason `security` is: a store written by an earlier
+   * version has no approval list, and "no records" and "absent field" mean the same
+   * thing — nothing has been approved.
+   */
+  readonly approvals?: readonly ApprovalRecord[]
 }
 
 /**
@@ -288,7 +303,7 @@ export interface SecurityEventRecord {
 
 /** Empty store. */
 export function emptyStore(): StoreData {
-  return { version: 1, sessions: [], dedupe: [], usage: [], security: [] }
+  return { version: 1, sessions: [], dedupe: [], usage: [], security: [], approvals: [] }
 }
 
 /** Options for the store. */
@@ -544,6 +559,17 @@ export class DebateStore {
   }
 
   /**
+   * Every stored approval, oldest first.
+   *
+   * Returns an empty array when the store predates the field. A caller must not
+   * read "empty" as "no approval needed" — the publish path treats a missing record
+   * as a refusal, and this accessor only answers "what is on file".
+   */
+  getApprovals(): readonly ApprovalRecord[] {
+    return this.data.approvals ?? []
+  }
+
+  /**
    * Append one security event, keeping the newest `limit`.
    *
    * The cap is enforced here rather than by the caller so a store written by any
@@ -715,6 +741,17 @@ export function validateStore(value: unknown): { ok: true; data: StoreData } | {
     if (problem) return { ok: false, reason: `的第 ${index} 条去重记录${problem}` }
   }
 
+  // A malformed approval is *dropped*, not repaired and not refused.
+  //
+  // Repairing it would invent authorisation from a damaged record, which is the one
+  // direction that ends in a wrongly-published reply. Dropping is fail-closed: the
+  // publish path treats "no record" as "not approved" and asks the owner again, which
+  // costs one click. Refusing the whole document would be worse than either — a single
+  // bad row would make the store unreadable and take the publish ledger with it.
+  const approvals = (Array.isArray(record.approvals) ? record.approvals : []).filter(
+    (entry): entry is ApprovalRecord => validateApproval(entry) === undefined,
+  )
+
   return {
     ok: true,
     data: {
@@ -722,6 +759,16 @@ export function validateStore(value: unknown): { ok: true; data: StoreData } | {
       sessions: sessions as StoredSession[],
       dedupe: dedupe as DedupeRecord[],
       usage: Array.isArray(record.usage) ? (record.usage as UsageRecord[]) : [],
+      // Same failure as `prune()`: this rebuilds the document field by field, so
+      // anything omitted here is lost on read. `approvals` was omitted, which meant an
+      // approval written by the settings page disappeared the moment the plugin
+      // restarted — and the publish path then reported "no approval on file" for a
+      // record the owner had demonstrably created minutes earlier.
+      //
+      // Both are optional-by-design (a v0.2.2 store has neither), so absent is
+      // repaired to an empty list rather than refused. Validated below when present.
+      security: Array.isArray(record.security) ? (record.security as SecurityEventRecord[]) : [],
+      approvals,
     },
   }
 }
@@ -757,6 +804,47 @@ function validateDedupe(value: unknown): string | undefined {
     if (state !== 'pending' && state !== 'confirmed' && state !== 'failed') {
       return `的 publishState 是未知值 ${JSON.stringify(state)}`
     }
+  }
+  return undefined
+}
+
+/**
+ * A stored approval must carry every field the binding comparison reads.
+ *
+ * Missing one would make the comparison silently pass on that dimension: an
+ * `undefined === undefined` on `assessmentFingerprint` would let an approval for one
+ * assessment authorise a different one. So a row that cannot answer every question is
+ * dropped rather than loaded with holes.
+ */
+function validateApproval(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return '不是对象'
+  const entry = value as Record<string, unknown>
+  for (const field of [
+    'id',
+    'sessionId',
+    'candidateId',
+    'platform',
+    'targetPostId',
+    'publishingAccount',
+    'textHash',
+    'assessmentFingerprint',
+    'grantedBy',
+    'grantedAt',
+  ] as const) {
+    if (typeof entry[field] !== 'string') return `缺少字符串字段 ${field}`
+  }
+  // An empty id cannot be consumed by id, and an unparseable timestamp cannot be
+  // expiry-checked — both would be permanently-valid free passes.
+  if ((entry.id as string).length === 0) return 'id 为空'
+  if (!Number.isFinite(Date.parse(entry.grantedAt as string))) return '的 grantedAt 不是时间戳'
+  if (typeof entry.candidateVersion !== 'number' || !Number.isFinite(entry.candidateVersion)) {
+    return '缺少数字字段 candidateVersion'
+  }
+  if ('consumedAt' in entry && entry.consumedAt !== undefined && typeof entry.consumedAt !== 'string') {
+    return '的 consumedAt 不是字符串'
+  }
+  if ('revokedAt' in entry && entry.revokedAt !== undefined && typeof entry.revokedAt !== 'string') {
+    return '的 revokedAt 不是字符串'
   }
   return undefined
 }
@@ -839,8 +927,39 @@ function prune(data: StoreData, options: StoreOptions): StoreData {
 
   const usage = data.usage.slice(-maxUsage)
 
-  return { version: 1, sessions, dedupe, usage }
+  // `security` and `approvals` must survive this function.
+  //
+  // It returns a *fresh* document rather than mutating the old one, so any field it
+  // forgets to carry is silently erased by the very next write. `approvals` was added
+  // in v0.2.5 and not carried here, which meant every approval record vanished on the
+  // next mutation — and since the publish path *writes a ledger row* before sending,
+  // the record was gone before it could ever be checked. The failure mode was a
+  // refusal that looked like "the owner never approved", with a record sitting in
+  // memory that had demonstrably been created.
+  //
+  // `security` had the same latent bug from v0.2.3; the panel simply reads through a
+  // different accessor that re-reads from disk, so it showed an empty log instead of
+  // crashing. Both are fixed here, and `PRESERVED_FIELDS` below is asserted against
+  // `StoreData` in the tests so a future field cannot repeat this.
+  return {
+    version: 1,
+    sessions,
+    dedupe,
+    usage,
+    security: data.security ?? [],
+    approvals: pruneApprovals(data.approvals ?? [], () => now),
+  }
 }
+
+/**
+ * Every field of {@link StoreData}.
+ *
+ * `prune()` builds a new document by hand, so a field it omits is destroyed on the
+ * next write. Listing them here lets a test assert that this list covers the
+ * interface: adding a field to `StoreData` without deciding what happens to it in
+ * `prune()` now fails loudly instead of losing data quietly.
+ */
+export const PRESERVED_FIELDS = ['version', 'sessions', 'dedupe', 'usage', 'security', 'approvals'] as const
 
 /**
  * How many sessions are still actionable, and whether that exceeds the cap.

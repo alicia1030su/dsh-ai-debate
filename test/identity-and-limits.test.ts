@@ -16,7 +16,7 @@ import { DEFAULT_CONFIG, resolveConfig } from '../lib/config.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
 import { hasStableAuthor } from '../lib/target.js'
-import { FakeAdapter, threePartyThread } from './helpers.ts'
+import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 function modelReply(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -148,11 +148,13 @@ test('publishing is refused when the target is identified only by a nickname', a
       })),
     }))
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
 
     assert.equal(report.ok, false, '只有昵称的作者不允许发表')
@@ -169,11 +171,13 @@ test('publishing still works when the target carries a stable id', async () => {
     const data = threePartyThread()
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, true, `有稳定 ID 时应该能发表：${report.message}`)
     assert.equal(rig.adapter.publishes.length, 1)
@@ -191,11 +195,13 @@ test('the per-thread cap is counted from the ledger, so expiry cannot reset it',
     const data = threePartyThread()
     const analysis = await runAnalysis(first.runtime, { url: data.thread.url, postId: 'n7' })
     const generated = await runGeneration(first.runtime, { sessionId: analysis.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(first.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: first.runtime.config })
     const sent = await runPublish(first.runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
     assert.equal(sent.ok, true, `首次发表应该成功：${sent.message}`)
     assert.equal(first.adapter.publishes.length, 1)
@@ -223,11 +229,13 @@ test('the per-thread cap is counted from the ledger, so expiry cannot reset it',
     // A different trigger on the same thread, which has already used its quota.
     const other = await runAnalysis(second.runtime, { url: data.thread.url, postId: 'n4' })
     const otherGen = await runGeneration(second.runtime, { sessionId: other.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(second.runtime.store, { sessionId: other.sessionId, candidateId: otherGen.candidateId, config: second.runtime.config })
     const blocked = await runPublish(second.runtime, {
       sessionId: other.sessionId,
       candidateId: otherGen.candidateId,
       approvedText: otherGen.text,
-      humanApproved: true,
     })
 
     assert.equal(blocked.ok, false, '本帖已达上限，会话过期不能把额度清零')
@@ -244,11 +252,13 @@ test('the cap for one thread does not block another thread', async () => {
     const data = threePartyThread()
     const first = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const gen = await runGeneration(rig.runtime, { sessionId: first.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: first.sessionId, candidateId: gen.candidateId, config: rig.runtime.config })
     const sent = await runPublish(rig.runtime, {
       sessionId: first.sessionId,
       candidateId: gen.candidateId,
       approvedText: gen.text,
-      humanApproved: true,
     })
     assert.equal(sent.ok, true, `首次发表应该成功：${sent.message}`)
     assert.equal(rig.adapter.publishes.length, 1)
@@ -266,11 +276,13 @@ test('the cap for one thread does not block another thread', async () => {
     }
     const otherAnalysis = await runAnalysis(otherRuntime, { url: other.thread.url, postId: 'xn7' })
     const otherGen = await runGeneration(otherRuntime, { sessionId: otherAnalysis.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(otherRuntime.store, { sessionId: otherAnalysis.sessionId, candidateId: otherGen.candidateId, config: otherRuntime.config })
     const otherSent = await runPublish(otherRuntime, {
       sessionId: otherAnalysis.sessionId,
       candidateId: otherGen.candidateId,
       approvedText: otherGen.text,
-      humanApproved: true,
     })
 
     assert.equal(otherSent.ok, true, `另一个帖子不应受限：${otherSent.message}`)
@@ -293,11 +305,13 @@ test('an unresolved attempt occupies a thread slot', async () => {
     }))
 
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
 
     assert.equal(report.ok, false, '未决结果应占住名额，不能当作空位')

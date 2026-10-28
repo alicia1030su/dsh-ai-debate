@@ -19,7 +19,7 @@ import { isAllowedOwner, describeFailure, healthCheck, getSession, stopSession }
 import { ScriptedLlmClient, LlmError } from '../lib/llm.js'
 import { PlatformError } from '../lib/types.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
-import { FakeAdapter, threePartyThread } from './helpers.ts'
+import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 /** Build a runtime over a temporary store and a fake adapter. */
 function makeRuntime(input: {
@@ -151,11 +151,13 @@ test('the full pipeline produces a publishable candidate', async () => {
     const session = (await getSession(runtime, analysis.sessionId)).session
     assert.equal(session.state, 'READY')
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, true, `发表被拒绝：${report.errorCode ?? ''} ${report.message}`)
     assert.equal(adapter.publishes.length, 1)
@@ -337,11 +339,13 @@ test('stopping a session is terminal and blocks publishing', async () => {
     const generated = await runGeneration(runtime, { sessionId: analysis.sessionId })
     await stopSession(runtime, analysis.sessionId, '主人叫停')
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, false)
     assert.match(report.message, /CANCELLED|状态/)
@@ -478,11 +482,13 @@ test('a model that invents a target id cannot get the reply published', async ()
     const candidate = session.candidates.at(-1)!
     assert.equal(candidate.targetPostId, 'n5', 'stored target must come from collected data')
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidate.replyId, config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
       candidateId: candidate.replyId,
       approvedText: candidate.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, false, 'a draft with violations must not be publishable')
     assert.equal(adapter.publishes.length, 0)
@@ -510,11 +516,14 @@ test('an unconfirmed opponent blocks generation from reaching READY', async () =
       ),
     }))
 
+    // No approval is created on purpose. This session was forced to
+    // NEEDS_CONFIRMATION before any candidate existed, so the state check is what
+    // must refuse — and `grantApproval` would throw "no such candidate", which would
+    // be a failure of the fixture rather than of the rule under test.
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
       candidateId: `${analysis.sessionId}-c1`,
       approvedText: '任意文本，本来就不该被发送。',
-      humanApproved: true,
     })
     assert.equal(report.ok, false)
     assert.equal(adapter.publishes.length, 0, 'NEEDS_CONFIRMATION must never publish')

@@ -18,7 +18,7 @@ import { DEFAULT_CONFIG, resolveConfig } from '../lib/config.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
 import { NO_MARKER_REASON, readAuthFromHtml } from '../lib/platforms/tieba/adapter.js'
-import { FakeAdapter, threePartyThread } from './helpers.ts'
+import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 const TRIGGER = 'n7'
 
@@ -84,11 +84,13 @@ test('a read-back that matches is reported as verified', async () => {
   const rig = makeRig()
   try {
     const prep = await prepare(rig)
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: prep.sessionId, candidateId: prep.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: prep.sessionId,
       candidateId: prep.candidateId,
       approvedText: prep.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, true, `发表应成功：${report.message}`)
     // The fake adapter echoes the body and the bound account, so every check that the
@@ -135,11 +137,13 @@ test('a reply that exists but has the wrong body is a mismatch, not a success', 
       context.nested ? { ...context, nested: { ...context.nested, content: '完全不相干的正文' } } : context,
     )
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: prep.sessionId, candidateId: prep.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: prep.sessionId,
       candidateId: prep.candidateId,
       approvedText: prep.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, false, '回读正文不一致不能算成功')
     assert.equal(report.errorCode, 'verification_mismatch', `实际是 ${report.errorCode}：${report.message}`)
@@ -159,11 +163,13 @@ test('a reply posted by another account is a mismatch', async () => {
       context.nested ? { ...context, nested: { ...context.nested, authorId: '9999' } } : context,
     )
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: prep.sessionId, candidateId: prep.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: prep.sessionId,
       candidateId: prep.candidateId,
       approvedText: prep.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, false, '作者不是绑定账号时不能算成功')
     assert.equal(report.errorCode, 'verification_mismatch', `实际是 ${report.errorCode}：${report.message}`)
@@ -190,11 +196,13 @@ test('an unreadable read-back leaves the publish unverified but recorded', async
       },
     }) as never
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: prep.sessionId, candidateId: prep.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: prep.sessionId,
       candidateId: prep.candidateId,
       approvedText: prep.text,
-      humanApproved: true,
     })
     // The platform said it published; not being able to read it back is not proof it
     // failed, so this stays a success with `verified: false` rather than a failure.
@@ -245,11 +253,13 @@ test('publishing is refused when the login cannot be identified', async () => {
   })
   try {
     const prep = await prepare(rig)
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: prep.sessionId, candidateId: prep.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: prep.sessionId,
       candidateId: prep.candidateId,
       approvedText: prep.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, false, '无法确认账号身份时必须拒绝')
     assert.equal(report.errorCode, 'identity_unverified')
@@ -283,11 +293,13 @@ test('the login probe is not pinned to one hard-coded thread', async () => {
       },
     } as never
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: prep.sessionId, candidateId: prep.candidateId, config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: prep.sessionId,
       candidateId: prep.candidateId,
       approvedText: prep.text,
-      humanApproved: true,
     })
     assert.equal(report.ok, true, report.message)
     assert.deepEqual(

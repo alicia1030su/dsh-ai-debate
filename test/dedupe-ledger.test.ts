@@ -21,7 +21,7 @@ import { DebateStore, dedupeKey } from '../lib/store.js'
 import { DEFAULT_CONFIG, resolveConfig } from '../lib/config.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
-import { FakeAdapter, threePartyThread } from './helpers.ts'
+import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 /** A model answer aimed at the fixture's opponent. */
 function modelReply(overrides: Record<string, unknown> = {}): string {
@@ -96,11 +96,18 @@ function makeRig(input: { sessionTtlMs?: number; dir?: string; maxPublishesPerTh
 /** Drive a session all the way to a real publish, and return what happened. */
 async function publishOnce(rig: Rig, sessionId: string): Promise<{ ok: boolean; message: string }> {
   const generated = await runGeneration(rig.runtime, { sessionId })
+  // v0.2.5: the publisher reads a stored approval, not the caller's boolean. Without
+  // this the publish is refused in manual mode and the test would be asserting on a
+  // refusal rather than on the dedupe behaviour it is about.
+  await grantApproval(rig.runtime.store, {
+    sessionId,
+    candidateId: generated.candidateId,
+    config: rig.runtime.config,
+  })
   const report = await runPublish(rig.runtime, {
     sessionId,
     candidateId: generated.candidateId,
     approvedText: generated.text,
-    humanApproved: true,
   })
   return { ok: report.ok, message: report.message }
 }
@@ -155,11 +162,14 @@ test('confirmed publish survives session expiry and blocks a second one', async 
     assert.equal(session?.state, 'PUBLISHED', '重分析应生成只读会话，而不是可发布的新会话')
     assert.deepEqual(session?.publishedPostIds, ['already-sent'], '只读会话应带上历史 post id')
 
+    // v0.2.5: no approval is created here on purpose. The session is read-only, so
+    // the publish is refused by the state check, which runs before authorisation —
+    // that refusal is what this test is about, and minting a record for a session
+    // with no candidates would fail for an unrelated reason.
     const report = await runPublish(rig.runtime, {
       sessionId: again.sessionId,
       candidateId: `${again.sessionId}-c1`,
       approvedText: '不会发出去',
-      humanApproved: true,
     })
     assert.equal(report.ok, false, '已发表的召唤不允许再次发表')
     assert.equal(rig.adapter.publishes.length, 0, '被拒绝的发表不能真的调用平台')
@@ -199,11 +209,14 @@ test('pending publish survives session expiry and still blocks a retry', async (
     const session = rig.store.getSession(again.sessionId)
     assert.equal(session?.state, 'NEEDS_CONFIRMATION', 'pending 历史应产出待人工核实的只读会话')
 
+    // v0.2.5: no approval is created here on purpose. The session is read-only, so
+    // the publish is refused by the state check, which runs before authorisation —
+    // that refusal is what this test is about, and minting a record for a session
+    // with no candidates would fail for an unrelated reason.
     const report = await runPublish(rig.runtime, {
       sessionId: again.sessionId,
       candidateId: `${again.sessionId}-c1`,
       approvedText: '不会发出去',
-      humanApproved: true,
     })
     assert.equal(report.ok, false, 'pending 的召唤不允许直接重试发表')
     assert.equal(rig.adapter.publishes.length, 0, '被拒绝的发表不能真的调用平台')

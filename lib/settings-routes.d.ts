@@ -145,6 +145,60 @@ export interface SettingsRouteDeps {
     stopAllActive(): Promise<PauseOutcome>;
     /** Read the publish ledger and session counters. */
     diagnostics(): Promise<Diagnostics>;
+    /**
+     * Candidates that are waiting for a human approval, newest first.
+     *
+     * This is what makes the approval section possible: the page cannot approve something
+     * it cannot see, and it must not be told "approve candidate X" by the agent — the list
+     * comes from the store, so what the owner sees is what is actually waiting.
+     *
+     * Optional so existing route tests keep compiling. When absent the page says there is
+     * nothing to approve rather than inventing an empty success.
+     */
+    pendingApprovals?(): readonly PendingApprovalView[];
+    /**
+     * Create a human approval for one candidate.
+     *
+     * This is the *only* way an approval record comes into existence, and it is only
+     * reachable from an authenticated browser session (see {@link makeSettingsRoutes}'s
+     * `guard`). The agent cannot call it: no tool wraps it, and the publish tool
+     * deliberately has no equivalent.
+     *
+     * Optional so route tests written against the older shape keep compiling. When it is
+     * absent the endpoint answers 501 rather than pretending to approve — a page that
+     * silently "approves" nothing would teach the owner to trust a broken button.
+     */
+    approve?(input: Record<string, unknown>): Promise<ApprovalOutcome>;
+}
+/** The status and body an approval attempt answers with. */
+export interface ApprovalOutcome {
+    readonly status: number;
+    readonly body: Record<string, unknown>;
+}
+/**
+ * One candidate waiting for approval, as the page renders it.
+ *
+ * Nothing here is a secret, and nothing here is a capability: `sessionId` and
+ * `candidateId` are the two names the approve route needs, and both are already visible
+ * in the session the owner is looking at. The approval itself is created by the *route*
+ * from what is stored, so a page that lied about the text could not approve a different
+ * body — the Host would bind the approval to the stored one.
+ */
+export interface PendingApprovalView {
+    readonly sessionId: string;
+    readonly candidateId: string;
+    readonly platform: string;
+    readonly threadTitle: string;
+    readonly threadUrl: string;
+    readonly targetPostId: string;
+    /** The exact body that would be posted, so the owner reads what they approve. */
+    readonly text: string;
+    readonly candidateVersion: number;
+    /** `allow` or `review`. A `block` candidate is never listed: it cannot be approved. */
+    readonly verdict: string;
+    readonly createdAt: string;
+    /** Why this needs a human, already formatted for display. */
+    readonly reason: string;
 }
 /**
  * One platform, as the settings page shows it.
@@ -356,6 +410,7 @@ export declare const ROUTE_SETTINGS = "/api/dsh-ai-debate/settings";
 export declare const ROUTE_SECRETS = "/api/dsh-ai-debate/secrets";
 export declare const ROUTE_STATUS = "/api/dsh-ai-debate/status";
 export declare const ROUTE_ACTION = "/api/dsh-ai-debate/action";
+export declare const ROUTE_APPROVE = "/api/dsh-ai-debate/approve";
 /** A masked tail, exposed for the diagnostics panel's credential rows. */
 export { maskedTail };
 /** The config the route family serves, resolved from a raw row config. */

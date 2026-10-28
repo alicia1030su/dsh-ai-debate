@@ -34,7 +34,7 @@ import {
 import { DEFAULT_CONFIG, resolveConfig } from '../lib/config.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
-import { FakeAdapter, threePartyThread } from './helpers.ts'
+import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 const THREAD_ID = '900000000000'
 const OWNER_ID = '111111'
@@ -355,11 +355,13 @@ test('P0: after a nickname change the confirmed publish is not re-opened', async
     const before = collectedThread('主人旧昵称')
     const analysis = await runAnalysis(rig.runtime, { url: before.thread.url, postId: OWNER_TRIGGER })
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
     const sent = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
       candidateId: generated.candidateId,
       approvedText: generated.text,
-      humanApproved: true,
     })
     assert.equal(sent.ok, true, `首次发表应该成功：${sent.message}`)
     assert.equal(rig.adapter.publishes.length, 1)
@@ -375,11 +377,13 @@ test('P0: after a nickname change the confirmed publish is not re-opened', async
     const session = rig.store.getSession(after.sessionId)
     assert.equal(session?.state, 'PUBLISHED', '改名后不得重新获得发布资格')
 
+    // v0.2.5: a stored approval authorises the send; `humanApproved` is
+    // ignored by the publisher now, so create the record the old flag stood for.
+    await grantApproval(rig.runtime.store, { sessionId: after.sessionId, candidateId: `${after.sessionId}-c1`, config: rig.runtime.config })
     const retry = await runPublish(rig.runtime, {
       sessionId: after.sessionId,
       candidateId: `${after.sessionId}-c1`,
       approvedText: '再发一次',
-      humanApproved: true,
     })
     assert.equal(retry.ok, false)
     assert.equal(rig.runtime.adapter.publishes.length, 0, '平台不能被再次调用')
@@ -598,13 +602,21 @@ test('P1: pruning interacts safely with a concurrent publish write', async () =>
 
     // A prune-triggering write and a publish at the same time: neither may lose the
     // other's state, because both go through the same serialised `mutate`.
+    //
+    // The approval is created *before* the race on purpose. `grantApproval` is itself
+    // a mutate, so putting it inside the `Promise.all` would add a third writer and
+    // the test would be measuring a different interleaving than the one it names.
+    await grantApproval(rig.runtime.store, {
+      sessionId: analysis.sessionId,
+      candidateId: generated.candidateId,
+      config: rig.runtime.config,
+    })
     const [, report] = await Promise.all([
       rig.store.mutate((store) => ({ ...store, sessions: [...store.sessions] })),
       runPublish(rig.runtime, {
         sessionId: analysis.sessionId,
         candidateId: generated.candidateId,
         approvedText: generated.text,
-        humanApproved: true,
       }),
     ])
     assert.equal(report.ok, true, `发表应成功：${report.message}`)

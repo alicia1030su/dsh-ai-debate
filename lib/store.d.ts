@@ -17,6 +17,7 @@
  * database would add an install dependency for no benefit at this size.
  */
 import type { TargetSnapshot } from './types.js';
+import type { ApprovalRecord } from './security/approvals.js';
 /**
  * A store failure the caller is expected to act on.
  *
@@ -239,6 +240,19 @@ export interface StoreData {
      * excerpt — see `security/security-events.ts`, which owns that rule.
      */
     readonly security?: readonly SecurityEventRecord[];
+    /**
+     * Human approvals, oldest first.
+     *
+     * This is the record that makes "the owner approved" checkable, replacing the
+     * v0.2.4 arrangement where a boolean in the model's tool arguments *was* the
+     * approval. See `security/approvals.ts` for the binding rules and for why the id
+     * is not handed to the model.
+     *
+     * Optional for the same reason `security` is: a store written by an earlier
+     * version has no approval list, and "no records" and "absent field" mean the same
+     * thing — nothing has been approved.
+     */
+    readonly approvals?: readonly ApprovalRecord[];
 }
 /**
  * The persisted form of a security event.
@@ -382,6 +396,14 @@ export declare class DebateStore {
      */
     getSecurityEvents(): readonly SecurityEventRecord[];
     /**
+     * Every stored approval, oldest first.
+     *
+     * Returns an empty array when the store predates the field. A caller must not
+     * read "empty" as "no approval needed" — the publish path treats a missing record
+     * as a refusal, and this accessor only answers "what is on file".
+     */
+    getApprovals(): readonly ApprovalRecord[];
+    /**
      * Append one security event, keeping the newest `limit`.
      *
      * The cap is enforced here rather than by the caller so a store written by any
@@ -462,6 +484,15 @@ export declare function validateStore(value: unknown): {
     ok: false;
     reason: string;
 };
+/**
+ * Every field of {@link StoreData}.
+ *
+ * `prune()` builds a new document by hand, so a field it omits is destroyed on the
+ * next write. Listing them here lets a test assert that this list covers the
+ * interface: adding a field to `StoreData` without deciding what happens to it in
+ * `prune()` now fails loudly instead of losing data quietly.
+ */
+export declare const PRESERVED_FIELDS: readonly ["version", "sessions", "dedupe", "usage", "security", "approvals"];
 /**
  * How many sessions are still actionable, and whether that exceeds the cap.
  *
