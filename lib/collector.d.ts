@@ -34,12 +34,65 @@ export interface CollectProgress {
     readonly current?: number;
     readonly total?: number;
 }
+/**
+ * The four independent things "complete" used to mean, separated.
+ *
+ * v0.2.1 had one boolean `complete`, and it answered every question at once. The
+ * problem is that they genuinely differ: a thread can be read perfectly from the
+ * platform and then trimmed to the first floor by `maxFloors`, and the old flag
+ * stayed `true` — the data handed to the model was *not* the thread, while the
+ * plugin said the read was complete.
+ *
+ * Reproduced before this change: a platform returns 3 floors, `maxFloors: 1`, and
+ * `complete` was still `true`.
+ *
+ * Keeping them apart is what lets each one be honest:
+ *
+ * | field | question it answers |
+ * | --- | --- |
+ * | `sourceComplete` | did the platform's own evidence prove we saw all of it? |
+ * | `retainedComplete` | did we *keep* everything we read? |
+ * | `analysisComplete` | is the dispute chain we need actually present? |
+ * | `nestedComplete` | were the sub-comments under each floor fully read? |
+ *
+ * `sourceComplete` can be true while `retainedComplete` is false (read 3, kept 1
+ * by cap) — that combination is exactly what v0.2.1 could not express, and it is
+ * the one that matters most: the model must be told that replies exist which it
+ * has not seen, so it cannot invent them.
+ */
+export interface CompletenessReport {
+    /** The platform's evidence proves the floor list was read in full. */
+    readonly sourceComplete: boolean;
+    /** Everything read was kept; no cap, trim or sampling dropped anything. */
+    readonly retainedComplete: boolean;
+    /** The argument chain needed to answer is present, so publishing is safe. */
+    readonly analysisComplete: boolean;
+    /** Every floor's nested replies were read to the platform's declared count. */
+    readonly nestedComplete: boolean;
+    /** Floors the platform declares that could not be read (usually deleted). */
+    readonly missingCount?: number;
+    /** Floors dropped locally by `maxFloors`, stated so nothing is silently lost. */
+    readonly droppedByCap?: number;
+    /** Fraction of declared floors retained, when a total was declared. */
+    readonly retainedRatio?: number;
+    /** Why any of the above is false, phrased for a human. */
+    readonly reasons: readonly string[];
+}
 /** Everything collected for one thread. */
 export interface CollectedThread {
     readonly thread: Thread;
     readonly floors: readonly FloorWithNested[];
-    /** True when every declared floor was read. */
+    /**
+     * True when every declared floor was read *and* kept.
+     *
+     * Kept as a single flag for v0.2.x callers. v0.2.2 made it strictly stronger
+     * than before: it is now the conjunction of `sourceComplete` and
+     * `retainedComplete`, so a capped read no longer reports `true`. New code
+     * should read {@link completeness} instead, which says which part failed.
+     */
     readonly complete: boolean;
+    /** The separated verdicts. Always present on a v0.2.2 or later read. */
+    readonly completeness: CompletenessReport;
     /** Floors the platform declares but that were not readable (usually deleted). */
     readonly missingCount?: number;
     /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -89,6 +142,20 @@ export type StopReason =
  | 'degraded'
 /** The platform reports the content as deleted or unavailable. */
  | 'deleted_or_unavailable'
+/**
+ * The platform's own pagination signals contradict each other.
+ *
+ * v0.2.2: a platform that declares `declaredTotalPages: 8` and then answers
+ * page 1 with `hasMore: false` used to be taken at its word — the walk stopped
+ * with `pagesRead: 1, complete: true, stopReason: 'confirmed_end'`. Two
+ * mutually exclusive claims ("there are 8 pages" / "page 1 was the last") were
+ * resolved in favour of whichever field the code happened to read first.
+ *
+ * Neither claim can be trusted alone once they conflict, so the read is neither
+ * complete nor failed: it is *inconsistent*, and saying so is the only honest
+ * answer. The data read so far is kept.
+ */
+ | 'inconsistent_pagination'
 /** The walk ended for a reason this module cannot classify. */
  | 'unknown';
 /** The outcome of walking every floor page. */
@@ -104,6 +171,14 @@ export interface FloorWalk {
     readonly stopReason: StopReason;
     /** True when more pages were known to remain when the walk stopped. */
     readonly truncated: boolean;
+    /**
+     * Human-readable notes about coverage, including signal contradictions.
+     *
+     * v0.2.2: the walk can end while platform signals disagree, and that fact is
+     * worth keeping even though `stopReason` already names it, because the caller
+     * has to be able to tell the user *which* numbers disagreed.
+     */
+    readonly issues: readonly string[];
 }
 /**
  * Walk every floor page of a thread through the generic adapter interface.

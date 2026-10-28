@@ -14,7 +14,7 @@
  * can check that the reply target exists.
  */
 
-import type { NestedReply } from './types.js'
+import type { NestedReply, PlatformId } from './types.js'
 import type { CollectedThread, TimelineEntry } from './collector.js'
 import { buildTimeline, floorOf } from './collector.js'
 
@@ -98,6 +98,22 @@ export interface TriggerRef {
 
 /** Owner identity supplied by configuration. */
 export interface OwnerIdentity {
+  /**
+   * The platform this identity belongs to.
+   *
+   * v0.2.2: **required for any id-based match.** A user id is only meaningful
+   * inside one platform — Tieba's `user_id` and Weibo's `uid` are both 9–10 digit
+   * decimals in unrelated namespaces. Before this field existed, a single global
+   * `ownerUserId` was compared against whatever platform the link happened to
+   * point at (`analyzer.ts:345-348` did a bare `===`), so an id collision meant
+   * the plugin would argue **on a stranger's behalf under the owner's name** —
+   * the failure this module's own comment calls "the single worst outcome".
+   *
+   * Optional only so old callers keep compiling; `analyzeDispute` refuses an
+   * id-based match when it is absent, because an id with no platform cannot be
+   * proven to be this owner's.
+   */
+  readonly platform?: PlatformId
   /** Stable platform id; preferred. */
   readonly userId?: string
   /** Display name; used only when no id is configured or matched. */
@@ -117,6 +133,33 @@ export function analyzeDispute(
   owner: OwnerIdentity,
   trigger: TriggerRef,
 ): Dispute {
+  // Refuse to reason about a thread on a platform other than the one the owner
+  // identity was configured for.
+  //
+  // This is the cross-platform half of the impostor defence. The in-platform half
+  // (below, in `resolveOwnerKey`) already refuses to degrade an id to a nickname;
+  // it could not, however, notice that the id came from a *different* platform,
+  // because a bare `===` between two 9-digit decimals cannot tell Tieba's
+  // `user_id` from Weibo's `uid`. An owner id that happens to collide would have
+  // been accepted as the owner, and the plugin would argue on a stranger's behalf
+  // under the owner's name.
+  //
+  // Only enforced when the caller states a platform. An identity with no platform
+  // predates v0.2.2; it is widened to the thread's platform below, which is the
+  // same assumption the old code made implicitly — and is safe *within* one
+  // platform. The cross-platform boundary proper is `ownerIdentity()` in
+  // `runtime.ts`, which refuses to hand one platform's id to another at all.
+  const threadPlatform = collected.thread.platform
+  const effectiveOwner: OwnerIdentity =
+    owner.platform === undefined ? { ...owner, platform: threadPlatform } : owner
+  if (effectiveOwner.platform !== threadPlatform) {
+    throw new Error(
+      `主人的账号绑定在「${effectiveOwner.platform}」，但这篇帖子属于「${threadPlatform}」。` +
+        '同一个用户 ID 在不同平台上指向不同的人，插件不会跨平台复用身份。' +
+        `请为「${threadPlatform}」单独配置主人账号（或在该平台没有绑定前台使用只读功能）。`,
+    )
+  }
+
   const timeline = buildTimeline(collected)
   const target = timeline.find((entry) => entry.postId === trigger.postId)
   if (!target) {
@@ -135,7 +178,7 @@ export function analyzeDispute(
   const keyOf = (entry: TimelineEntry): string => resolveKey(entry, nameByHandle)
 
   const participants = indexParticipants(timeline, nameByHandle)
-  const ownerKey = resolveOwnerKey(participants, owner, notes)
+  const ownerKey = resolveOwnerKey(participants, effectiveOwner, notes)
   const ownerParticipant = participants.get(ownerKey)
   if (!ownerParticipant) {
     throw new Error(
@@ -343,6 +386,22 @@ function resolveOwnerKey(
   notes: string[],
 ): string {
   if (owner.userId) {
+    // Cross-platform refusal comes first, before any id comparison.
+    //
+    // A user id is scoped to one platform: Tieba's `user_id` and Weibo's `uid`
+    // are both 9–10 digit decimals in unrelated namespaces, so `===` alone would
+    // let a thread on platform B match the owner's platform-A id and argue on
+    // some stranger's behalf. When the caller did not say which platform the id
+    // came from, there is no way to prove the match is the owner's, so it is
+    // refused rather than guessed.
+    if (owner.platform === undefined) {
+      throw new Error(
+        `主人身份配置了用户 ID ${owner.userId}，但没有说明它属于哪个平台。` +
+          '用户 ID 只在所属平台内有意义，不同平台的数字 ID 可能相同但不是同一个人，' +
+          '因此无法确认帖子里哪个账号是主人。请指定平台后再重试。',
+      )
+    }
+
     for (const participant of participants.values()) {
       if (participant.userId === owner.userId) return participant.key
     }

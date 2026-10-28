@@ -14,6 +14,7 @@
  */
 import { type PlatformAdapter, type PlatformCapabilities, type ThreadRef } from './types.js';
 import type { RegistryDiagnostics } from './platforms/registry.js';
+import { type PlatformAccountBinding } from './platforms/accounts.js';
 import { type Dispute, type OwnerIdentity } from './analyzer.js';
 import { type CollectedThread } from './collector.js';
 import { type LlmClient } from './llm.js';
@@ -158,8 +159,31 @@ export interface AnalysisOutput {
 }
 /** Build the LLM client from configuration, or throw a clear error. */
 export declare function buildLlm(config: ResolvedConfig): LlmClient;
-/** The owner identity from configuration. */
-export declare function ownerIdentity(config: ResolvedConfig): OwnerIdentity;
+/**
+ * The owner identity for one platform, from configuration.
+ *
+ * v0.2.2 derives this from a per-platform binding table rather than from global
+ * fields. The reason is a real failure, not tidiness: a user id only identifies
+ * someone inside one platform (Tieba `user_id` and Weibo `uid` are both 9–10
+ * digit decimals in unrelated namespaces), so a single global id compared against
+ * whatever platform the link pointed at could match a stranger and make the
+ * plugin argue on their behalf under the owner's name.
+ *
+ * A platform with no binding yields an identity carrying only the platform — the
+ * analyzer then reports that the owner was not found rather than reusing another
+ * platform's id.
+ *
+ * @param platform the platform this identity will be matched against
+ */
+export declare function ownerIdentity(config: ResolvedConfig, platform: string): OwnerIdentity;
+/**
+ * The per-platform binding table for a resolved config.
+ *
+ * Exposed so the publisher, the summon check and the diagnostics page all read
+ * the same structure — three separate readings of the global fields is how they
+ * drifted apart in the first place.
+ */
+export declare function bindingsOf(config: ResolvedConfig): PlatformAccountBinding;
 /** The persona from configuration. */
 export declare function personaFromConfig(config: ResolvedConfig): PersonaConfig;
 /** The interaction policy from configuration. */
@@ -316,8 +340,14 @@ export interface HealthReport {
 }
 /** Build a health report without touching the network. */
 export declare function healthCheck(runtime: Runtime): Promise<HealthReport>;
-/** Check whether an id may summon. */
-export declare function isAllowedOwner(config: ResolvedConfig, userId: string | undefined): boolean;
+/**
+ * Check whether an account id may summon on a given platform.
+ *
+ * Scoped to the platform because a summon allow-list is a set of people, and a
+ * Tieba user id identifies a different person on Weibo. The old signature had no
+ * platform at all, so a Tieba allow-list silently applied everywhere.
+ */
+export declare function isAllowedOwner(config: ResolvedConfig, userId: string | undefined, platform: string): boolean;
 /** Translate an arbitrary failure into a user-facing sentence. */
 export declare function describeFailure(error: unknown): {
     message: string;

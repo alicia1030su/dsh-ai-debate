@@ -25,6 +25,20 @@ export const Config = z.object({
   aiAccountUserId: z.string().default('').volatile(),
   /** Extra owner ids allowed to summon, comma separated. */
   allowedOwnerIds: z.string().default('').volatile(),
+  /**
+   * Per-platform account bindings, as JSON.
+   *
+   * Empty means "derive from the legacy globals above", which keeps existing
+   * profiles working unchanged (the globals describe Tieba, which is what they
+   * always did). Setting it opts into the platform-scoped model, so a Weibo or
+   * Zhihu account can be bound without inventing a second set of global fields.
+   *
+   * Shape: `{ "owners": [...], "aiAccounts": [...] }` — see
+   * `platforms/accounts.ts`. Stored as a string rather than a nested schema
+   * because this field is edited by the settings page, and a malformed value must
+   * degrade to "unbound" rather than prevent the plugin from mounting.
+   */
+  platformAccounts: z.string().default('').volatile(),
 
   // ---- credentials ---------------------------------------------------------
   /** A Tieba cookie header copied from a logged-in browser. Never logged. */
@@ -127,6 +141,7 @@ export const DEFAULT_CONFIG = {
   aiAccountName: '',
   aiAccountUserId: '',
   allowedOwnerIds: '',
+  platformAccounts: '',
   tiebaCookie: '',
   personaStyle: 'tieba_veteran' as const,
   intensity: 3,
@@ -208,6 +223,7 @@ export function resolveConfig(input: unknown): ResolvedConfig {
     aiAccountName: readString(raw.aiAccountName, '').trim(),
     aiAccountUserId: readString(raw.aiAccountUserId, '').trim(),
     allowedOwnerIds: readString(raw.allowedOwnerIds, '').trim(),
+    platformAccounts: readString(raw.platformAccounts, '').trim(),
     tiebaCookie: readString(raw.tiebaCookie, '').trim(),
     personaStyle: (['tieba_veteran', 'soft_defensive', 'tsundere', 'aloof'] as const).includes(
       style as never,

@@ -18,6 +18,7 @@
 - [九个工具](#九个工具)
 - [回复的审核与发布](#回复的审核与发布)
 - [架构与模块划分](#架构与模块划分)
+- [如何开发新的平台适配器](#如何开发新的平台适配器)
 - [开发、测试与打包](#开发测试与打包)
 - [常见问题](#常见问题)
 - [已知限制](#已知限制)
@@ -133,17 +134,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.1
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.2
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.1.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.2.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.1.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.2.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -167,7 +168,7 @@ dsh plugin --profile <你的 profile 名> add .
 
 ### 方式一：DSH 界面配置页（推荐）
 
-打开 **设置（侧边栏底部 ⚙）→ AI代吵架**，页面分五个区域：
+打开 **设置（侧边栏底部 ⚙）→ AI代吵架**，页面分六个区域：
 
 | 区域 | 能改什么 |
 | --- | --- |
@@ -175,6 +176,7 @@ dsh plugin --profile <你的 profile 名> add .
 | **AI 模型** | Base URL、模型名、**模型 API Key 凭据**、温度、最大输出 tokens、超时、上下文预算、**测试模型连接** |
 | **人格** | 四种人格、五个强度滑杆、**预览四种风格** |
 | **发表与安全** | 总开关、互动模式、自动发表上限、冷却、单帖上限、向 Agent 播报、**关闭自动发表模式**、**立即暂停所有任务**、台账 |
+| **平台** | 已注册平台清单、各自的能力矩阵与验证状态、每平台的主人/AI 账号绑定情况 |
 | **诊断与状态** | 运行状态、DSH 版本、会话与台账统计、模型用量、近期错误、限流状态 |
 
 要点：
@@ -250,6 +252,7 @@ dsh plugin --profile <你的 profile 名> add .
 | 配置项 | 说明 |
 | --- | --- |
 | `ownerUserId` | **主人的贴吧数字 ID 或账号名**。优先填数字 ID；只填昵称会有重名风险（插件会在结果里提醒你）。 |
+| `platformAccounts` | 按平台绑定主人/AI 账号（JSON 字符串）。留空时，上面这些 `ownerUserId` 之类的旧字段**一律当作贴吧的**，向后兼容；要接微博/知乎就必须填。见「如何开发新的平台适配器」最后一节。 |
 | `llmBaseUrl` | 模型接口，例如 `https://api.openai.com/v1` |
 | `llmModel` | 模型名 |
 
@@ -278,7 +281,7 @@ dsh plugin --profile <你的 profile 名> add .
 | `maxPerThread` | 10 | 同一个帖子最多发几条 |
 | `maxAutoPerSession` | 0 | 每个会话最多自动发几条（仅 `limited_auto` 生效） |
 | `cooldownSeconds` | 60 | 自动发表的冷却时间 |
-| `maxFloorPages` | 60 | 单帖最多读多少页。**读到这里还有下一页时会明确标记"不是完整结果"** |
+| `maxFloorPages` | 60 | 单帖最多读多少页。**读到这里还有下一页时会明确标记"不是完整结果"**（`stopReason: 'page_cap'`、`truncated: true`） |
 | `pageDelayMs` | 400 | 翻页间隔，别把人家服务器打坏 |
 | `storeDir` | 空 | 状态目录，空则用 `~/.dsh/ai-debate`（目录 0700、文件 0600） |
 | `sessionTtlDays` | 7 | 会话保留天数 |
@@ -443,21 +446,28 @@ src/
     contracts.ts        平台契约：能力状态、Provider/Adapter 接口、能力错误
     registry.ts         平台注册中心：注册 / 解析链接 / 能力断言 / 诊断
     manifests.ts        微博、知乎、小红书、抖音的清单（只有计划，没有适配器）
+    credentials.ts      凭据命名空间：平台 id 校验、单射编码、归属判定
+    accounts.ts         平台账号绑定：主人 / AI 账号按平台隔离
+    adapter-manager.ts  适配器缓存与重建：按配置指纹、跨平台凭据边界
     http.ts             cookie jar、有界重试、错误分类、编码探测
     tieba/
       provider.ts       贴吧接入注册中心：链接判定、能力矩阵、适配器构造
       url.ts            各种贴吧链接形状的解析
       parse.ts          纯函数解析器（WAP 页面 / 楼中楼 / totalComment）
       adapter.ts        TiebaAdapter：唯一知道贴吧页面结构的模块
-  collector.ts          分页采集、去重、部分成功、时间线
+  collector.ts          分页采集、去重、部分成功、时间线、四维完整性
+  conversation.ts       平台无关对话图：节点 + 边（replies_to / reposts / quotes）
+  conversation-bridge.ts 贴吧两层结构到对话图的投影
   analyzer.ts           主人识别、对手识别、争论链、未答问题
   compressor.ts         按优先级花预算的上下文压缩
   persona.ts            四种人格与表达参数
+  brief.ts              可追溯的 DebateBrief：每个论点都带 post id
   llm.ts                模型边界（OpenAI 兼容客户端 + 测试用客户端）
   generator.ts          提示词、JSON 解析、规则校验、有限重试
   safety.ts             状态机守卫、发布策略、暂停判定、注入检测
   store.ts              原子落盘的状态存储（temp + rename）
   publisher.ts          发表：去重、策略、结果确认、回读验证
+  verification.ts       一次性真实发表验收：授权、只发一条、四项回读
   runtime.ts            把上面这些串成可测试的编排层
   tools.ts              九个工具的薄封装
   render.ts             工具结果的卡片渲染
@@ -528,7 +538,23 @@ src/platforms/<你的平台>/
 或者契约缺了个能力——后者应该改 `contracts.ts`（一次，对所有平台生效），
 而不是在核心加 `if (platform === 'xxx')`。
 
-### 第 1 步：解析链接
+### 第 1 步：给平台起一个合法的 id（v0.2.2 起强制）
+
+平台 id 不只是个名字：凭据命名空间由它派生，所以它是一个受约束的标识符。
+`validatePlatformId`（`src/platforms/credentials.ts`）会拒绝：
+
+| 规则 | 拒绝的例子 | 为什么 |
+| --- | --- | --- |
+| 小写 `[a-z0-9_-]`，首字符字母或数字 | `Weibo`、`tie ba`、`tie.ba` | 旧规则会把大写和符号折叠掉，两个不同 id 共用一个命名空间 |
+| 长度 ≤ 32 | 超长串 | 凭据键有长度限制，应该在注册时拒绝而不是使用时出错 |
+| 不以 `_` 或 `-` 结尾 | `tieba_` | 容易和下一个 id 的前缀混淆 |
+| 不能是 `llm` | `llm` | 会与插件自用的 `DSH_AI_DEBATE_LLM_API_KEY` 撞车，等同抢走模型密钥 |
+
+`tieba` 是唯一的例外：它通过一个**封闭的** legacy 表映射到字面量 `TIEBA`，
+保住已有部署里存着的 `DSH_AI_DEBATE_TIEBA_COOKIE`。这张表不参与规范化，
+所以 `tie_ba` 拿不到 `tieba` 的凭据。
+
+### 第 2 步：解析链接
 
 ```ts
 // src/platforms/example/url.ts
@@ -563,7 +589,7 @@ export function parseExampleUrl(input: string): ThreadRef {
 `ThreadRef.platform` 必须等于你注册的 id。注册中心会用这个字段建去重账本、
 分会话，所以它对不上会同时污染两件事。
 
-### 第 2 步：实现广告牌上的能力
+### 第 3 步：实现广告牌上的能力
 
 先想清楚**你到底证明了什么**，再写 `describeCapabilities()`。五个状态的区别是这一版的重点：
 
@@ -580,15 +606,16 @@ export function parseExampleUrl(input: string): ThreadRef {
 `src/platforms/tieba/provider.ts`——贴吧的 `comment.publish` 是 `unverified`，
 因为只验证了未登录时的拒绝响应，登录态下的真实发表从未验证过。
 
-### 第 3 步：实现 adapter
+### 第 4 步：实现 adapter
 
-实现 `PlatformAdapter`（`src/types.ts`）。核心真正会调用的只有这五个：
+实现 `PlatformAdapter`（`src/types.ts`）。核心真正会调用的是这七个：
 
 ```ts
 getCapabilities()                                   // 供健康检查显示
 checkAuthentication(signal?)                        // 身份验证，无副作用
 getThread(ref, signal?)                             // 帖子正文
 getReplies(ref, page, signal?)                      // 一页评论，必须真的分页
+getNestedReplies(ref, floor, page, signal?)         // 一页子评论；collector 在逐楼抓楼中楼时调用
 getReplyContext(ref, postId, signal?, {forceFresh}) // 按 id 定位一条评论及其上下文
 publishReply(ref, target, content, signal?)         // 发表，并自己判定结果
 ```
@@ -604,12 +631,11 @@ publishReply(ref, target, content, signal?)         // 发表，并自己判定�
    或者给了 id 但回读不到，都必须返回 `uncertain`，不能返回 `confirmed`。
    `{ status: 'confirmed' }` 的含义是「有证据证明发出去了」。
 
-### 第 4 步：包成 provider 并注册
+### 第 5 步：包成 provider 并注册
 
 ```ts
 // src/platforms/example/provider.ts
 import type { PlatformProvider } from '../contracts.js'
-import { Matrix } from '../contracts.js'
 import { ExampleAdapter } from './adapter.js'
 import { exampleCanHandleUrl, parseExampleUrl } from './url.js'
 
@@ -647,9 +673,50 @@ platforms.register(exampleProvider)
 - `createAdapter(context)` 拿到的 `context.settings` 是**平台作用域的配置副本**，
   不含别的平台的凭据。凭据通过 `context.resolveCredential(name)` 按名字取，
   名字统一是 `DSH_AI_DEBATE_<PLATFORM>_<WHAT>`。
+
+  平台那一段不是直接大写，而是经过**单射编码**（`encodePlatformId`）：
+  `_` 转义成 `__`，其它非字母数字转义成 `_<十六进制>_`。这样两个不同的平台 id
+  永远不会生成同一个命名空间：
+
+  | 平台 id | 编码后 | 凭据名（`what = cookie`） |
+  | --- | --- | --- |
+  | `tieba` | `TIEBA` | `DSH_AI_DEBATE_TIEBA_COOKIE` |
+  | `weibo` | `WEIBO` | `DSH_AI_DEBATE_WEIBO_COOKIE` |
+  | `a_b` | `A__B` | `DSH_AI_DEBATE_A__B_COOKIE` |
+  | `a-b` | `A_2D_B` | `DSH_AI_DEBATE_A_2D_B_COOKIE` |
+
+  **不要自己拼这个字符串**——用 `credentialRefFor(platform, what)`。归属判定
+  也不要写 `startsWith`，用 `refBelongsToPlatform(ref, platform)`：它按精确编码
+  比对，所以 `foo` 读不到 `foo_bar` 的凭据。
+
 - 适配器**不能**访问 store、模型客户端或 publisher。它没有发表权，只有被调用时才动网。
 - 想加一个所有平台都该有的能力，改 `contracts.ts` 的 `CapabilityName`——
   一次改动，`test/platform-manifest.test.ts` 会强制每个平台都给它一行。
+
+### 最后一步：绑定这个平台的主人账号（不做就发不了）
+
+v0.2.2 起，账号身份是**按平台**绑定的，不再是全局字段。新平台如果不配
+`platformAccounts`，`ownerFor()` 会返回 `undefined`，插件把它当作「这个平台还没绑定
+主人」——可以只读，**不能发表**。
+
+```yaml
+platformAccounts: |
+  {
+    "owners": [
+      { "platform": "weibo", "primary": { "platform": "weibo", "accountId": "1234567890" } }
+    ],
+    "aiAccounts": [
+      { "platform": "weibo", "account": { "platform": "weibo", "accountId": "9876543210" } }
+    ]
+  }
+```
+
+为什么不复用老的 `ownerUserId`：用户 ID 只在所属平台内有意义。贴吧 `user_id` 和
+微博 `uid` 都是 9–10 位十进制数，一个数字撞上，插件就会以主人的名义去替陌生人吵架。
+所以旧字段一律解释为**贴吧的**，其它平台必须显式绑定。
+
+配置里拿到的身份是 `OwnerIdentity { platform, userId?, userName? }`。
+`analyzeDispute` 还会再检查一次「主人绑定平台 == 帖子平台」，不一致直接拒绝。
 
 ### 自测清单
 
@@ -674,7 +741,7 @@ pnpm install
 node scripts/verify.mjs
 
 # 只编译
-node scripts/build.mjs   # 或 npx tsc -p tsconfig.json
+npx tsc -p tsconfig.json
 
 # 只跑测试
 node --experimental-transform-types --test "test/**/*.test.ts"
@@ -685,7 +752,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**453 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**518 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -693,6 +760,9 @@ node scripts/pack.mjs
 | `test/client-credential-badge.test.ts` | 6 | 凭据状态徽章：超时/失败/部分加载各显示自己的状态，不谎报「未配置」 |
 | `test/client-module.test.ts` | 10 | 浏览器半侧的 `apply()` 契约与 slot 注册 |
 | `test/client-placeholders.test.ts` | 2 | 模板占位符与后端 payload 键名一致（防 `{awaiting}` 复活） |
+| `test/conversation-graph.test.ts` | 8 | **平台无关对话图**：无楼层号的平台照样投影出节点与边；回复边只记平台声明过的，缺口写进 issues；覆盖率不自升级；环会截断 |
+| `test/credential-namespace.test.ts` | 12 | **凭据命名空间**：前缀包含、连字符/下划线、大小写、特殊字符、`tieba` 历史引用兼容、`llm` 保留字、双实现检查、fail-closed |
+| `test/debate-brief.test.ts` | 12 | **可追溯简报**：引用未读帖子、把对方发言归成主人立场、单方证据冒充双方共识，全部拒绝 |
 | `test/client-react-dom.test.ts` | 16 | 真实 React + 真实 DOM：空白页、加载态、真实文本 |
 | `test/client-render.test.ts` | 8 | 组件浅渲染与分支 |
 | `test/client-snapshot-boundary.test.ts` | 5 | 快照边界：Map 不得进快照（防 Immer 抛错让整张表单变哑） |
@@ -705,6 +775,7 @@ node scripts/pack.mjs
 | `test/isolation-auth.test.ts` | 22 | 设置 API 的会话授权与信任边界 |
 | `test/json-safety.test.ts` | 11 | 工具返回值 JSON 安全、工具诚实性 |
 | `test/parse.test.ts` | 21 | WAP 页面解析、楼中楼、真实 fixture 回归 |
+| `test/pagination-integrity.test.ts` | 23 | **分页完整性**：声明页数/楼层数与 `hasMore` 的四种矛盾都不得算完整；重复页、限流、超时、分页上限；正常路径不受影响 |
 | `test/persona-compressor.test.ts` | 17 | 人格压缩与提示词预算 |
 | `test/pipeline.test.ts` | 31 | 分析→生成→审核→发表主流程 |
 | `test/platform-contract.test.ts` | 17 | **跨平台契约**：两个假平台各自走完主流程；核心不含贴吧分支；能力状态与幂等按平台隔离 |
@@ -715,11 +786,12 @@ node scripts/pack.mjs
 | `test/publisher-safety.test.ts` | 58 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
 | `test/route-lifecycle.test.ts` | 4 | 路由注册与卸载生命周期 |
 | `test/settings-auth.test.ts` | 18 | 设置读写的授权与越权拒绝 |
-| `test/settings-page.test.ts` | 36 | 设置页五个区域的行为 |
+| `test/settings-page.test.ts` | 36 | 设置页六个区域的行为 |
 | `test/target.test.ts` | 12 | 目标快照与漂移检测 |
 | `test/trigger-identity.test.ts` | 23 | 召唤定位与主人身份 |
 | `test/verification-and-auth.test.ts` | 9 | 发表后回读与登录态核对 |
-| **合计** | **453** | |
+| `test/verification.test.ts` | 10 | **一次性发表验收**：只有 `unverified` 可验；四项授权必填无默认；一份授权只发一条；登录账号必须匹配；四项回读齐全才升级为支持态 |
+| **合计** | **518** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 
@@ -764,7 +836,7 @@ node --experimental-transform-types --test v013_dedupe_expiry_regression.test.mj
 
 #### 自动化测试（Mock / fixture，可重复运行）
 
-410 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
+518 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
 不需要网络和账号，**证明的是代码逻辑，不是平台能力**。
 
 #### 0.1.5 这一轮修的是什么
@@ -892,7 +964,10 @@ node --experimental-transform-types --test v013_dedupe_expiry_regression.test.mj
 同一个楼层里有两个人的互动证据一样多，插件拒绝靠猜。请用 `debate_analyze_reply` 指定一个更明确的 `postId`。
 
 **「平台声明 240 楼，实际可读 219 楼」是什么意思？**
-有 21 个楼层被删了或者不可访问。插件不会编造这些楼层，也不会假装读全了。这会体现在 `complete: false` 上。
+有 21 个楼层被删了或者不可访问。插件不会编造这些楼层，也不会假装读全了。这会体现在
+`completeness.sourceComplete: false` 上；如果是被 `maxFloors` 裁掉，则是
+`retainedComplete: false` 且 `droppedByCap > 0`。旧的 `complete` 字段仍然存在，
+它等于前两者同时成立——但只有 `CompletenessReport` 能告诉你是哪一种。
 
 **发表被拒绝说「会话当前状态是 NEEDS_CONFIRMATION」？**
 上次发表的结果不确定（可能超时但已经发出去了）。先去帖子看一眼有没有发出去，再决定怎么做。插件不会自己重试。

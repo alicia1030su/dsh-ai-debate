@@ -417,17 +417,29 @@ function makeRuntime(input: {
   platform: ReturnType<typeof makeFakePlatform>
   registry: PlatformRegistry
   replies: string[]
+  /** The AI account id this platform's adapter was built with. */
+  aiAccountId: string
 }): { runtime: Runtime; dir: string } {
   const dir = mkdtempSync(join(tmpdir(), 'debate-contract-'))
   const store = new DebateStore({ dir })
   // The scripted client returns whole model responses, so the text has to be
   // wrapped the way the real API would.
   const client = new ScriptedLlmClient(input.replies.map((text) => ({ text })))
+  // v0.2.2: the owner and AI accounts are bound per platform. This suite runs the
+  // same core against two fake platforms, so each one needs its own binding —
+  // a shared global id is exactly what the new model exists to prevent.
+  const platformId = input.platform.adapter.id
   const config = resolveConfig({
     ...DEFAULT_CONFIG,
-    ownerUserId: 'owner-1',
-    aiAccountUserId:
-      input.platform.adapter.id === SHAPE_A.id ? SHAPE_A.account.userId : SHAPE_B.account.userId,
+    platformAccounts: JSON.stringify({
+      owners: [{ platform: platformId, primary: { platform: platformId, accountId: 'owner-1' } }],
+      aiAccounts: [
+        {
+          platform: platformId,
+          account: { platform: platformId, accountId: input.aiAccountId },
+        },
+      ],
+    }),
     llmBaseUrl: 'http://127.0.0.1:1/v1',
     llmModel: 'test-model',
   })
@@ -696,6 +708,7 @@ test('假平台A：读取 → 分析 → 生成 → 发表 → 回读 全链路�
     platform,
     registry,
     replies: [modelReply(`${shape.id}-r2`)],
+    aiAccountId: shape.account.userId,
   })
   try {
     const analysis = await runAnalysis(runtime, {
@@ -740,6 +753,7 @@ test('假平台B：同一套核心、不同分页与 id 方案，全链路同样
     platform,
     registry,
     replies: [modelReply(`${shape.id}-r2`)],
+    aiAccountId: shape.account.userId,
   })
   try {
     const analysis = await runAnalysis(runtime, {
@@ -784,11 +798,13 @@ test('两个平台的相同帖子 id 不冲突：去重记录按平台隔离', a
     platform: a,
     registry,
     replies: [modelReply(`${SHAPE_A.id}-r2`)],
+    aiAccountId: SHAPE_A.account.userId,
   })
   const { runtime: runtimeB, dir: dirB } = makeRuntime({
     platform: b,
     registry,
     replies: [modelReply(`${SHAPE_B.id}-r2`)],
+    aiAccountId: SHAPE_B.account.userId,
   })
   try {
     const analysisA = await runAnalysis(runtimeA, {
@@ -827,6 +843,7 @@ test('没有发布能力的平台在读阶段正常，发表阶段被拒绝而�
     platform,
     registry,
     replies: [modelReply('readonly-r2')],
+    aiAccountId: shape.account.userId,
   })
   try {
     const analysis = await runAnalysis(runtime, {

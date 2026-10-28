@@ -16,6 +16,13 @@
 import { PlatformError, type PlatformAdapter, type PlatformCapabilities, type ThreadRef } from './types.js'
 import type { RegistryDiagnostics } from './platforms/registry.js'
 import {
+  aiAccountFor,
+  isAllowedOwnerOn,
+  ownerFor,
+  resolveBindings,
+  type PlatformAccountBinding,
+} from './platforms/accounts.js'
+import {
   analyzeDispute,
   buildHandleDirectory,
   describeParticipants,
@@ -52,7 +59,6 @@ import {
   type TaskState,
 } from './store.js'
 import type { ResolvedConfig } from './config.js'
-import { splitIds } from './config.js'
 
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
@@ -251,9 +257,76 @@ export function buildLlm(config: ResolvedConfig): LlmClient {
   })
 }
 
-/** The owner identity from configuration. */
-export function ownerIdentity(config: ResolvedConfig): OwnerIdentity {
-  return { userId: config.ownerUserId || undefined, userName: config.ownerUserName || undefined }
+/**
+ * The owner identity for one platform, from configuration.
+ *
+ * v0.2.2 derives this from a per-platform binding table rather than from global
+ * fields. The reason is a real failure, not tidiness: a user id only identifies
+ * someone inside one platform (Tieba `user_id` and Weibo `uid` are both 9–10
+ * digit decimals in unrelated namespaces), so a single global id compared against
+ * whatever platform the link pointed at could match a stranger and make the
+ * plugin argue on their behalf under the owner's name.
+ *
+ * A platform with no binding yields an identity carrying only the platform — the
+ * analyzer then reports that the owner was not found rather than reusing another
+ * platform's id.
+ *
+ * @param platform the platform this identity will be matched against
+ */
+export function ownerIdentity(config: ResolvedConfig, platform: string): OwnerIdentity {
+  const binding = bindingsOf(config)
+  const owner = ownerFor(binding, platform)
+  if (owner === undefined) return { platform }
+  return {
+    platform,
+    ...(owner.primary.accountId !== undefined ? { userId: owner.primary.accountId } : {}),
+    ...(owner.primary.displayName !== undefined ? { userName: owner.primary.displayName } : {}),
+  }
+}
+
+/**
+ * The per-platform binding table for a resolved config.
+ *
+ * Exposed so the publisher, the summon check and the diagnostics page all read
+ * the same structure — three separate readings of the global fields is how they
+ * drifted apart in the first place.
+ */
+export function bindingsOf(config: ResolvedConfig): PlatformAccountBinding {
+  return resolveBindings({
+    legacy: {
+      ownerUserId: config.ownerUserId,
+      ownerUserName: config.ownerUserName,
+      aiAccountUserId: config.aiAccountUserId,
+      aiAccountName: config.aiAccountName,
+      allowedOwnerIds: config.allowedOwnerIds,
+    },
+    structured: parsePlatformAccounts(config.platformAccounts),
+  })
+}
+
+/**
+ * Parse the `platformAccounts` JSON field.
+ *
+ * Malformed input yields `undefined` (so the legacy globals take over) rather
+ * than throwing: a plugin that refuses to mount because one settings field has a
+ * typo is worse than one that falls back and says so in the diagnostics.
+ */
+function parsePlatformAccounts(raw: string): PlatformAccountBinding | undefined {
+  const text = raw.trim()
+  if (text === '') return undefined
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return undefined
+    const value = parsed as { owners?: unknown; aiAccounts?: unknown }
+    return {
+      owners: Array.isArray(value.owners) ? (value.owners as PlatformAccountBinding['owners']) : [],
+      aiAccounts: Array.isArray(value.aiAccounts)
+        ? (value.aiAccounts as PlatformAccountBinding['aiAccounts'])
+        : [],
+    }
+  } catch {
+    return undefined
+  }
 }
 
 /** The persona from configuration. */
@@ -343,8 +416,9 @@ export async function runAnalysis(
 ): Promise<AnalysisOutput> {
   const config = runtime.config()
   const ref = resolveThreadRef(runtime, input.url)
-  const config_ = config
-  const owner = ownerIdentity(config_)
+  // The platform is part of the identity: a user id only identifies someone
+  // inside one platform, so this must run after the URL resolved to one.
+  const owner = ownerIdentity(config, ref.platform)
   if (!owner.userId && !owner.userName) {
     throw new Error('还没有绑定主人：请先调用 debate_bind_owner，或在插件设置里填写主人用户 ID')
   }
@@ -815,7 +889,7 @@ export async function runGeneration(
   })
   assertCollected(collected)
 
-  const owner = ownerIdentity(config)
+  const owner = ownerIdentity(config, session.platform)
   const dispute = analyzeDispute(collected, owner, {
     postId: session.triggerPostId,
     content: buildTimeline(collected).find((entry) => entry.postId === session.triggerPostId)?.content,
@@ -1079,10 +1153,20 @@ export async function runPublish(
                 runtime.platforms!.assertCapability(platform, capability)
               },
             }),
-        // Read live so a changed aiAccountUserId applies to this publish.
+        // Read live so a changed AI account applies to this publish.
+        //
+        // v0.2.2: resolved through the platform's own binding. The AI account is
+        // the identity the reply is posted under, so using another platform's
+        // name here would attribute the post to the wrong account — and the
+        // read-back check would then verify against the wrong expectation, which
+        // is worse than not checking at all.
         config: () => {
           const current = runtime.config()
-          return { aiAccountUserId: current.aiAccountUserId, aiAccountName: current.aiAccountName }
+          const bound = aiAccountFor(bindingsOf(current), session.platform)?.account
+          return {
+            aiAccountUserId: bound?.accountId ?? '',
+            aiAccountName: bound?.displayName ?? '',
+          }
         },
         // Consulted immediately before the network call by the publisher.
         isCancelled: (sessionId) => runtime.store.getSession(sessionId)?.state === 'CANCELLED',
@@ -1268,12 +1352,26 @@ function credentialNamesOf(adapter: object): readonly string[] {
   return typeof probe.describeCookieNames === 'function' ? probe.describeCookieNames() : []
 }
 
-/** Check whether an id may summon. */
-export function isAllowedOwner(config: ResolvedConfig, userId: string | undefined): boolean {
-  const allowed = [config.ownerUserId, ...splitIds(config.allowedOwnerIds)].filter(Boolean)
-  if (allowed.length === 0) return false
+/**
+ * Check whether an account id may summon on a given platform.
+ *
+ * Scoped to the platform because a summon allow-list is a set of people, and a
+ * Tieba user id identifies a different person on Weibo. The old signature had no
+ * platform at all, so a Tieba allow-list silently applied everywhere.
+ */
+export function isAllowedOwner(
+  config: ResolvedConfig,
+  userId: string | undefined,
+  platform: string,
+): boolean {
   if (!userId) return false
-  return allowed.includes(userId)
+  // Read the legacy list through the binding table so there is one interpretation
+  // of "who is allowed", not two that can disagree.
+  const binding = bindingsOf(config)
+  if (isAllowedOwnerOn(binding, platform, userId)) return true
+  // A platform with no explicit binding still honours the legacy list on Tieba,
+  // which is what `bindingsOf` already encodes; nothing else is added here.
+  return false
 }
 
 /** Translate an arbitrary failure into a user-facing sentence. */

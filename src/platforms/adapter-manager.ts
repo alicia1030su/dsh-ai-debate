@@ -22,6 +22,7 @@
 
 import type { PlatformAdapter } from '../types.js'
 import type { PlatformProvider } from './contracts.js'
+import { refBelongsToPlatform } from './credentials.js'
 import type { PlatformRegistry } from './registry.js'
 
 /**
@@ -62,20 +63,12 @@ interface CachedAdapter {
 /**
  * The credential reference a platform may ask for.
  *
- * Every platform's secrets live under `DSH_AI_DEBATE_<PLATFORM>_<WHAT>`, so a
- * reference is *derivable* from the platform id rather than being a free string.
- * That is what makes "a provider cannot read another platform's credential" a
- * property of the code instead of a convention.
+ * Defined in `./credentials.ts` and re-exported here because this is where the
+ * check that uses it lives. v0.2.1 built the reference with a lossy normaliser
+ * and decided ownership with `startsWith`; both were exploitable. See that
+ * module's header for the analysis.
  */
-export function credentialRefFor(platform: string, what: string): string {
-  return `DSH_AI_DEBATE_${platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_${what.toUpperCase()}`
-}
-
-/** True when a reference belongs to the given platform's namespace. */
-export function refBelongsToPlatform(ref: string, platform: string): boolean {
-  const prefix = `DSH_AI_DEBATE_${platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_`
-  return ref.startsWith(prefix)
-}
+export { credentialRefFor, refBelongsToPlatform, validatePlatformId } from './credentials.js'
 
 /** Stable fingerprint of a settings object: sorted keys, JSON-encoded values. */
 function fingerprintOf(settings: Readonly<Record<string, unknown>>): string {

@@ -52,14 +52,12 @@ export interface AdapterManagerDeps {
 /**
  * The credential reference a platform may ask for.
  *
- * Every platform's secrets live under `DSH_AI_DEBATE_<PLATFORM>_<WHAT>`, so a
- * reference is *derivable* from the platform id rather than being a free string.
- * That is what makes "a provider cannot read another platform's credential" a
- * property of the code instead of a convention.
+ * Defined in `./credentials.ts` and re-exported here because this is where the
+ * check that uses it lives. v0.2.1 built the reference with a lossy normaliser
+ * and decided ownership with `startsWith`; both were exploitable. See that
+ * module's header for the analysis.
  */
-export declare function credentialRefFor(platform: string, what: string): string;
-/** True when a reference belongs to the given platform's namespace. */
-export declare function refBelongsToPlatform(ref: string, platform: string): boolean;
+export { credentialRefFor, refBelongsToPlatform, validatePlatformId } from './credentials.js';
 /**
  * Owns one adapter per platform and rebuilds them when their settings move.
  *

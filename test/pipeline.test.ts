@@ -121,10 +121,18 @@ test('splitIds handles Chinese commas, spaces and blanks', () => {
 
 test('an id allow-list gates who may summon', () => {
   const config = resolveConfig({ ownerUserId: 'o1', allowedOwnerIds: 'o2,o3' })
-  assert.equal(isAllowedOwner(config, 'o1'), true)
-  assert.equal(isAllowedOwner(config, 'o2'), true)
-  assert.equal(isAllowedOwner(config, 'stranger'), false)
-  assert.equal(isAllowedOwner(config, undefined), false)
+  // v0.2.2: the allow-list is scoped to a platform. The legacy fields describe
+  // Tieba, so that is where the list applies.
+  assert.equal(isAllowedOwner(config, 'o1', 'tieba'), true)
+  assert.equal(isAllowedOwner(config, 'o2', 'tieba'), true)
+  assert.equal(isAllowedOwner(config, 'stranger', 'tieba'), false)
+  assert.equal(isAllowedOwner(config, undefined, 'tieba'), false)
+  // ...and it grants nothing on another platform, even for the same digits.
+  assert.equal(
+    isAllowedOwner(config, 'o1', 'weibo'),
+    false,
+    '贴吧的召唤白名单不能让同一串数字在微博上获得召唤权',
+  )
 })
 
 test('the full pipeline produces a publishable candidate', async () => {

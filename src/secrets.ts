@@ -40,22 +40,31 @@ export const COOKIE_REF = 'DSH_AI_DEBATE_TIEBA_COOKIE'
 export const LLM_KEY_REF = 'DSH_AI_DEBATE_LLM_API_KEY'
 
 /**
- * Build the credential reference for one platform's secret.
+ * References this plugin owns that belong to **no platform**.
  *
- * Any platform may ask for `credentialRefFor('weibo', 'TOKEN')`; the adapter
- * manager refuses to resolve a reference outside the asking platform's prefix, so
- * the derivation is what puts the boundary in reach of an actual check.
+ * Namespacing was only ever applied to platform secrets, so a plugin-level key
+ * like the model API key sits in the same `DSH_AI_DEBATE_*` space. That is a real
+ * escalation path: a platform whose id is `llm` derives the stem `LLM`, and
+ * `DSH_AI_DEBATE_LLM_API_KEY` then looks exactly like *its* `api_key`. The
+ * namespace check would hand the model key to that adapter.
+ *
+ * A closed set rather than a naming rule, deliberately: a rule would need to
+ * predict every future plugin-level key, while a table only has to list the ones
+ * that exist. Adding a platform ref here would be a bug; adding a plugin key is
+ * one line.
  */
-export function credentialRefFor(platform: string, what: string): string {
-  const normalised = platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')
-  return `DSH_AI_DEBATE_${normalised}_${what.toUpperCase()}`
-}
+export const RESERVED_PLUGIN_REFS: readonly string[] = Object.freeze([COOKIE_REF, LLM_KEY_REF])
 
-/** True when a reference belongs to the given platform's namespace. */
-export function refBelongsToPlatform(ref: string, platform: string): boolean {
-  const prefix = `DSH_AI_DEBATE_${platform.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_`
-  return ref.startsWith(prefix)
-}
+/**
+ * Credential derivation, re-exported from the module that actually owns the rule.
+ *
+ * v0.2.1 had this logic written out twice — once here and once in
+ * `platforms/adapter-manager.ts` — and the two drifted: fixing the collision in
+ * one place left the other still lossy, so `import { credentialRefFor } from
+ * 'secrets'` bypassed the fix entirely. One definition, re-exported, is the only
+ * way that cannot happen again.
+ */
+export { credentialRefFor, refBelongsToPlatform } from './platforms/credentials.js'
 
 /** Every reference this plugin owns, in display order. */
 export const SECRET_REFS: readonly SecretRefName[] = [COOKIE_REF, LLM_KEY_REF]

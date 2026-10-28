@@ -46,12 +46,66 @@ export interface CollectProgress {
   readonly total?: number
 }
 
+/**
+ * The four independent things "complete" used to mean, separated.
+ *
+ * v0.2.1 had one boolean `complete`, and it answered every question at once. The
+ * problem is that they genuinely differ: a thread can be read perfectly from the
+ * platform and then trimmed to the first floor by `maxFloors`, and the old flag
+ * stayed `true` — the data handed to the model was *not* the thread, while the
+ * plugin said the read was complete.
+ *
+ * Reproduced before this change: a platform returns 3 floors, `maxFloors: 1`, and
+ * `complete` was still `true`.
+ *
+ * Keeping them apart is what lets each one be honest:
+ *
+ * | field | question it answers |
+ * | --- | --- |
+ * | `sourceComplete` | did the platform's own evidence prove we saw all of it? |
+ * | `retainedComplete` | did we *keep* everything we read? |
+ * | `analysisComplete` | is the dispute chain we need actually present? |
+ * | `nestedComplete` | were the sub-comments under each floor fully read? |
+ *
+ * `sourceComplete` can be true while `retainedComplete` is false (read 3, kept 1
+ * by cap) — that combination is exactly what v0.2.1 could not express, and it is
+ * the one that matters most: the model must be told that replies exist which it
+ * has not seen, so it cannot invent them.
+ */
+export interface CompletenessReport {
+  /** The platform's evidence proves the floor list was read in full. */
+  readonly sourceComplete: boolean
+  /** Everything read was kept; no cap, trim or sampling dropped anything. */
+  readonly retainedComplete: boolean
+  /** The argument chain needed to answer is present, so publishing is safe. */
+  readonly analysisComplete: boolean
+  /** Every floor's nested replies were read to the platform's declared count. */
+  readonly nestedComplete: boolean
+  /** Floors the platform declares that could not be read (usually deleted). */
+  readonly missingCount?: number
+  /** Floors dropped locally by `maxFloors`, stated so nothing is silently lost. */
+  readonly droppedByCap?: number
+  /** Fraction of declared floors retained, when a total was declared. */
+  readonly retainedRatio?: number
+  /** Why any of the above is false, phrased for a human. */
+  readonly reasons: readonly string[]
+}
+
 /** Everything collected for one thread. */
 export interface CollectedThread {
   readonly thread: Thread
   readonly floors: readonly FloorWithNested[]
-  /** True when every declared floor was read. */
+  /**
+   * True when every declared floor was read *and* kept.
+   *
+   * Kept as a single flag for v0.2.x callers. v0.2.2 made it strictly stronger
+   * than before: it is now the conjunction of `sourceComplete` and
+   * `retainedComplete`, so a capped read no longer reports `true`. New code
+   * should read {@link completeness} instead, which says which part failed.
+   */
   readonly complete: boolean
+  /** The separated verdicts. Always present on a v0.2.2 or later read. */
+  readonly completeness: CompletenessReport
   /** Floors the platform declares but that were not readable (usually deleted). */
   readonly missingCount?: number
   /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -103,6 +157,20 @@ export type StopReason =
   | 'degraded'
   /** The platform reports the content as deleted or unavailable. */
   | 'deleted_or_unavailable'
+  /**
+   * The platform's own pagination signals contradict each other.
+   *
+   * v0.2.2: a platform that declares `declaredTotalPages: 8` and then answers
+   * page 1 with `hasMore: false` used to be taken at its word — the walk stopped
+   * with `pagesRead: 1, complete: true, stopReason: 'confirmed_end'`. Two
+   * mutually exclusive claims ("there are 8 pages" / "page 1 was the last") were
+   * resolved in favour of whichever field the code happened to read first.
+   *
+   * Neither claim can be trusted alone once they conflict, so the read is neither
+   * complete nor failed: it is *inconsistent*, and saying so is the only honest
+   * answer. The data read so far is kept.
+   */
+  | 'inconsistent_pagination'
   /** The walk ended for a reason this module cannot classify. */
   | 'unknown'
 
@@ -119,6 +187,19 @@ export interface FloorWalk {
   readonly stopReason: StopReason
   /** True when more pages were known to remain when the walk stopped. */
   readonly truncated: boolean
+  /**
+   * Human-readable notes about coverage, including signal contradictions.
+   *
+   * v0.2.2: the walk can end while platform signals disagree, and that fact is
+   * worth keeping even though `stopReason` already names it, because the caller
+   * has to be able to tell the user *which* numbers disagreed.
+   */
+  readonly issues: readonly string[]
+}
+
+/** Append a note without repeating one that is already there. */
+function appendIssue(issues: readonly string[], note: string): string[] {
+  return issues.includes(note) ? [...issues] : [...issues, note]
 }
 
 /**
@@ -144,6 +225,10 @@ export async function walkFloors(
   // at the same page number, and only some of them mean "nothing left to read".
   let stopped: StopReason = 'unknown'
   let truncated = false
+  // Contradictions and coverage notes found while walking. Kept here rather than
+  // in `collectThread` because the walk is what observes them, and a caller that
+  // reads `stopReason` needs the explanation next to it.
+  let issues: string[] = []
 
   while (page <= maxPages) {
     let result
@@ -181,8 +266,25 @@ export async function walkFloors(
     // floors exist, reaching that number is proof, and falling short is evidence
     // of a gap. Without one, an empty or repeating page proves only that the walk
     // has stopped producing new data — not that there is none.
+    //
+    // `>` rather than `===` because over-running the declared total is its own
+    // contradiction: a platform that says "10 floors" and then serves 12 has
+    // demonstrated that its own count is wrong, so that count cannot be used to
+    // certify anything. Treating "≥ declared" as proof of completeness would let
+    // the very number that just proved unreliable certify the read.
+    const declaredTotalOverrun =
+      declaredTotal !== undefined && declaredTotal > 0 && seen.size > declaredTotal
+    if (declaredTotalOverrun) {
+      stopped = 'inconsistent_pagination'
+      issues = appendIssue(
+        issues,
+        `平台分页信号自相矛盾：声明共 ${declaredTotal} 楼，实际读到 ${seen.size} 楼。` +
+          '平台给出的楼层总数已经不可信，无法据此断言已读完整；数据保留，完整性不成立。',
+      )
+      break
+    }
     const reachedDeclaredTotal =
-      declaredTotal !== undefined && declaredTotal > 0 && seen.size >= declaredTotal
+      declaredTotal !== undefined && declaredTotal > 0 && seen.size === declaredTotal
 
     if (result.floors.length === 0) {
       stopped = reachedDeclaredTotal ? 'confirmed_end' : 'empty_page'
@@ -194,19 +296,61 @@ export async function walkFloors(
       stopped = reachedDeclaredTotal ? 'confirmed_end' : 'repeated_page'
       break
     }
-    if (reachedDeclaredTotal) {
-      stopped = 'confirmed_end'
-      break
-    }
-    if (totalPages !== undefined && page >= totalPages) {
+    // The two "declared limits reached" branches below are the *reverse* of the
+    // `hasMore: false` conflict further down, and v0.2.2 initially missed them:
+    // the platform says `hasMore: true` ("there is another page") while its own
+    // count says this was the last one. Stopping there and calling it
+    // `confirmed_end` silently dropped the page the platform just promised.
+    //
+    // `hasMore: true` is the more direct claim — it is about the data that
+    // exists right now, whereas a declared total is a summary that can go stale.
+    // So a contradiction is reported rather than resolved: neither signal is
+    // trusted to certify completeness.
+    if (reachedDeclaredTotal || (totalPages !== undefined && page >= totalPages)) {
+      if (result.hasMore) {
+        stopped = 'inconsistent_pagination'
+        issues = appendIssue(
+          issues,
+          `平台分页信号自相矛盾：${reachedDeclaredTotal ? `声明共 ${declaredTotal} 楼` : `声明共 ${totalPages} 页`}，` +
+            `按此已读到最后，但平台同时说还有更多内容。已读取的 ${seen.size} 条保留，` +
+            '但无法断定已读完整（平台承诺的下一页没有读取）。',
+        )
+        break
+      }
       stopped = 'confirmed_end'
       break
     }
     if (!result.hasMore) {
       // `hasMore: false` is the platform's own word that this was the last page.
-      // It is weaker evidence than a declared total (the platform could be wrong,
-      // or the field could be a default), but it *is* the platform stating an end
-      // rather than the walk inferring one from silence.
+      // But it can *contradict* its other declaration: v0.2.1 read this branch
+      // first and returned `complete: true` for a thread the platform had just
+      // described as 8 pages long. Two exclusive claims cannot both be evidence,
+      // so when they disagree the walk reports the disagreement instead of
+      // picking a winner.
+      const contradictsPageCount =
+        totalPages !== undefined && pagesRead < totalPages
+      if (contradictsPageCount) {
+        stopped = 'inconsistent_pagination'
+        issues = appendIssue(
+          issues,
+          `平台分页信号自相矛盾：声明共 ${totalPages} 页，但第 ${pagesRead} 页就报告没有更多了。` +
+            `已读取的 ${seen.size} 条保留，但无法据此断定已读完整。`,
+        )
+        break
+      }
+      // A declared floor total that has not been reached is the same kind of
+      // contradiction one level up: "there are N floors" versus "no more pages".
+      const contradictsFloorTotal =
+        declaredTotal !== undefined && declaredTotal > 0 && seen.size < declaredTotal
+      if (contradictsFloorTotal) {
+        stopped = 'inconsistent_pagination'
+        issues = appendIssue(
+          issues,
+          `平台分页信号自相矛盾：声明共 ${declaredTotal} 层，但读完后只有 ${seen.size} 层且平台说没有更多页了。` +
+            `可能是评论被删除，也可能是分页提前结束；已读取的数据保留，完整性不成立。`,
+        )
+        break
+      }
       stopped = 'confirmed_end'
       break
     }
@@ -227,14 +371,18 @@ export async function walkFloors(
 
   // Completeness requires positive evidence, not merely the absence of an error.
   //
-  // Three independent things must hold:
+  // Every one of these must hold:
   // 1. the walk ended because the platform said so (`confirmed_end`);
   // 2. nothing failed on the way (`failed === undefined`);
-  // 3. where a total was declared, every declared floor is actually here.
+  // 3. where a total was declared, every declared floor is actually here;
+  // 4. the platform's own signals did not contradict each other.
   //
-  // The v0.2.0 rule was `failed === undefined && missingCount === undefined &&
-  // !truncated`, which is satisfied by "read one empty page and stopped" — the
-  // platform had said nothing, and the plugin still claimed a complete read.
+  // (4) is v0.2.2. `confirmed_end` used to be reachable through the `hasMore:
+  // false` branch *even when* the same response had declared eight pages, so a
+  // contradictory response still produced a confident "complete". A contradiction
+  // is now its own stop reason, which is not `confirmed_end`, so this expression
+  // already rejects it — the explicit check below documents the intent and keeps
+  // it from regressing if the branches are ever reordered.
   const complete =
     failed === undefined &&
     stopped === 'confirmed_end' &&
@@ -251,6 +399,7 @@ export async function walkFloors(
     error: failed,
     stopReason: stopped,
     truncated,
+    issues,
   }
 }
 
@@ -413,15 +562,98 @@ export async function collectThread(
 
   options.onProgress?.({ stage: 'done', message: '读取完成' })
 
+  const completeness = buildCompleteness({
+    all,
+    keptFloors: withNested.length,
+    droppedByCap: all.floors.length - withNested.length,
+    nestedIncomplete,
+  })
+
   return {
     thread,
     floors: withNested,
-    complete: all.complete,
+    // v0.2.2: strictly stronger than the old value. `complete` is now the
+    // conjunction of "the platform proved we saw it" and "we kept what we saw",
+    // so a `maxFloors` cap can no longer report `true` for a partial thread.
+    complete: completeness.sourceComplete && completeness.retainedComplete,
+    completeness,
     missingCount: all.missingCount,
     stopReason: all.stopReason,
     truncated: all.truncated,
     nestedIncomplete,
     issues,
+  }
+}
+
+/**
+ * Turn the walk facts into the four separate verdicts.
+ *
+ * Each line below is a distinct question, and the point of this function is that
+ * none of them is allowed to answer for another:
+ *
+ * - **source** asks what the *platform* proved. It is false whenever the walk
+ *   stopped without evidence of an end, including the v0.2.2
+ *   `inconsistent_pagination` case.
+ * - **retained** asks what *we kept*. Only our own trimming can fail it. This is
+ *   the one that was missing: reading 3 floors and cutting to 1 by `maxFloors`
+ *   left the old single `complete` flag at `true`.
+ * - **analysis** asks whether the chain needed to answer is present. It requires
+ *   the source to be complete *and* the floors that hold the dispute to have
+ *   their replies read — a truncated nested walk can hide the argument even when
+ *   every floor was read.
+ * - **nested** is the per-floor roll-up of the same nested facts.
+ */
+function buildCompleteness(input: {
+  all: FloorWalk
+  keptFloors: number
+  droppedByCap: number
+  nestedIncomplete: boolean
+}): CompletenessReport {
+  const { all, keptFloors, droppedByCap, nestedIncomplete } = input
+  const reasons: string[] = []
+
+  const sourceComplete = all.complete
+  if (!sourceComplete) {
+    reasons.push(
+      all.stopReason === 'inconsistent_pagination'
+        ? '平台分页信号自相矛盾，无法证明来源已读完整'
+        : `来源未读完整（${all.stopReason}）`,
+    )
+  }
+
+  const retainedComplete = droppedByCap === 0
+  if (!retainedComplete) {
+    reasons.push(
+      `本地裁剪丢弃了 ${droppedByCap} 条（保留 ${keptFloors} 条）：模型没有看到这些内容，不能当作已读完`,
+    )
+  }
+
+  const nestedComplete = !nestedIncomplete
+  if (!nestedComplete) {
+    reasons.push('部分楼层的楼中楼未读全，争论可能就藏在没读到的回复里')
+  }
+
+  // Analysis completeness is deliberately the strictest of the three: the model
+  // is about to argue using this data, and "I read most of it" is not a basis for
+  // asserting what the opponent did and did not say.
+  const analysisComplete = sourceComplete && retainedComplete && nestedComplete
+  if (sourceComplete && retainedComplete && !nestedComplete) {
+    reasons.push('楼层已读全，但楼中楼缺失会影响对争论链的还原，发表前请确认')
+  }
+
+  const declared = all.declaredTotal
+  const retainedRatio =
+    declared !== undefined && declared > 0 ? Math.min(1, keptFloors / declared) : undefined
+
+  return {
+    sourceComplete,
+    retainedComplete,
+    analysisComplete,
+    nestedComplete,
+    ...(all.missingCount !== undefined ? { missingCount: all.missingCount } : {}),
+    ...(droppedByCap > 0 ? { droppedByCap } : {}),
+    ...(retainedRatio !== undefined ? { retainedRatio } : {}),
+    reasons,
   }
 }
 

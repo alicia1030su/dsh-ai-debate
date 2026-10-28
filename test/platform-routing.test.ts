@@ -327,8 +327,20 @@ function makeRoutedRuntime(input: {
   const client = new ScriptedLlmClient(input.replies.map((text) => ({ text })))
   const config = resolveConfig({
     ...DEFAULT_CONFIG,
-    ownerUserId: 'owner-1',
-    aiAccountUserId: 'board-ai',
+    // v0.2.2: accounts are bound per platform rather than globally. This test
+    // exercises two fake platforms ('board' and 'micro') at once, so each gets
+    // its own owner and AI account — which is the point of the model: a single
+    // global id would have been matched on both.
+    platformAccounts: JSON.stringify({
+      owners: [
+        { platform: 'board', primary: { platform: 'board', accountId: 'owner-1' } },
+        { platform: 'micro', primary: { platform: 'micro', accountId: 'owner-1' } },
+      ],
+      aiAccounts: [
+        { platform: 'board', account: { platform: 'board', accountId: 'board-ai' } },
+        { platform: 'micro', account: { platform: 'micro', accountId: 'micro-ai' } },
+      ],
+    }),
     llmBaseUrl: 'http://127.0.0.1:1/v1',
     llmModel: 'test-model',
     ...input.config,

@@ -21,6 +21,20 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     aiAccountUserId: z<string, string, "volatile-defined">;
     /** Extra owner ids allowed to summon, comma separated. */
     allowedOwnerIds: z<string, string, "volatile-defined">;
+    /**
+     * Per-platform account bindings, as JSON.
+     *
+     * Empty means "derive from the legacy globals above", which keeps existing
+     * profiles working unchanged (the globals describe Tieba, which is what they
+     * always did). Setting it opts into the platform-scoped model, so a Weibo or
+     * Zhihu account can be bound without inventing a second set of global fields.
+     *
+     * Shape: `{ "owners": [...], "aiAccounts": [...] }` — see
+     * `platforms/accounts.ts`. Stored as a string rather than a nested schema
+     * because this field is edited by the settings page, and a malformed value must
+     * degrade to "unbound" rather than prevent the plugin from mounting.
+     */
+    platformAccounts: z<string, string, "volatile-defined">;
     /** A Tieba cookie header copied from a logged-in browser. Never logged. */
     tiebaCookie: z<string, string, "volatile-defined">;
     /** Default persona style. */
@@ -93,6 +107,20 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     aiAccountUserId: z<string, string, "volatile-defined">;
     /** Extra owner ids allowed to summon, comma separated. */
     allowedOwnerIds: z<string, string, "volatile-defined">;
+    /**
+     * Per-platform account bindings, as JSON.
+     *
+     * Empty means "derive from the legacy globals above", which keeps existing
+     * profiles working unchanged (the globals describe Tieba, which is what they
+     * always did). Setting it opts into the platform-scoped model, so a Weibo or
+     * Zhihu account can be bound without inventing a second set of global fields.
+     *
+     * Shape: `{ "owners": [...], "aiAccounts": [...] }` — see
+     * `platforms/accounts.ts`. Stored as a string rather than a nested schema
+     * because this field is edited by the settings page, and a malformed value must
+     * degrade to "unbound" rather than prevent the plugin from mounting.
+     */
+    platformAccounts: z<string, string, "volatile-defined">;
     /** A Tieba cookie header copied from a logged-in browser. Never logged. */
     tiebaCookie: z<string, string, "volatile-defined">;
     /** Default persona style. */
@@ -161,6 +189,7 @@ export declare const DEFAULT_CONFIG: {
     aiAccountName: string;
     aiAccountUserId: string;
     allowedOwnerIds: string;
+    platformAccounts: string;
     tiebaCookie: string;
     personaStyle: "tieba_veteran";
     intensity: number;

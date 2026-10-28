@@ -2,6 +2,157 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.2] — 2026-10-28
+
+跨平台架构收尾。0.2.1 让核心不再依赖楼层号，但**身份层还停在单平台上**，
+完整性也还是一个布尔。这一轮修掉三个已独立复现的缺陷，并把多平台需要的
+数据结构补齐。
+
+### 一、P1：凭据命名空间碰撞（安全）
+
+0.2.1 用「去掉所有非字母数字再大写」生成命名空间，再用 `startsWith` 判归属。
+两边都能被绕开，已逐条复现：
+
+```
+credentialRefFor('foo_bar','cookie') → DSH_AI_DEBATE_FOO_BAR_COOKIE
+refBelongsToPlatform(那个ref,'foo')  → true      ← foo 能读 foo_bar 的凭据
+credentialRefFor('a-b') === credentialRefFor('a_b')        ← 两个平台共用一个命名空间
+'tieba'/'Tieba'/'tie ba'/'tie.ba' 全部塌缩成 TIE_BA
+```
+
+修法两条，缺一不可：
+
+1. **编码改成单射**（新增 `src/platforms/credentials.ts`）：`_`→`__`，
+   其余非法字符→`_<HEX>_`。`a_b` → `A__B`、`a-b` → `A_2D_B`，永不相撞。
+2. **归属判定改成精确比较**，不再是 `startsWith`。平台 id 先过
+   `validatePlatformId`（小写、32 字符内、首字符字母数字、不以分隔符结尾），
+   不合法一律返回 `false` —— 归属不确定时拒绝访问。
+
+顺带修掉两个同源问题：
+
+- **`secrets.ts` 里有第二份实现**，修了一处另一处仍然有洞。现在那份改为
+  re-export，一份定义。
+- **`llm` 平台能读到模型 API Key**：`credentialRefFor('llm','api_key')` 与
+  `LLM_KEY_REF` 字符串完全相同。新增 `RESERVED_STEMS = ['LLM']` 拒绝该 id。
+
+`tieba` 的 `DSH_AI_DEBATE_TIEBA_COOKIE` 通过一个**封闭的** legacy 表保留字面量，
+不是靠规范化规则——否则 `tie_ba` 会顺带继承 `tieba` 的凭据。
+
+### 二、P1：分页矛盾不再算完整
+
+0.2.1 里 `hasMore: false` 分支先于页数检查被读到，于是
+`declaredTotalPages=8` + 第一页 `hasMore=false` 得到
+`pagesRead=1, complete=true, stopReason='confirmed_end'`。新增
+`StopReason = 'inconsistent_pagination'`，四个方向都覆盖：
+
+| 矛盾 | 修前 | 修后 |
+| --- | --- | --- |
+| 声明 8 页，第 1 页说没有更多 | complete=true | inconsistent_pagination |
+| 声明 3 层，读完只有 1 层且说没更多 | complete=true | inconsistent_pagination |
+| 声明 10 楼，实际读到 12 楼 | complete=true | inconsistent_pagination |
+| 声明 1 页但说还有下一页，第 2 页确实存在 | complete=true，静默丢页 | inconsistent_pagination |
+
+最后一条是子智能体在写回归测试时发现的**反向**冲突，我第一版只修了单向。
+`>=` 也改成了 `===`：多读出来的楼层恰好证明平台给的总数不可信，
+不能再用那个数去证明完整。
+
+`FloorWalk` 新增 `issues`，把「哪两个数字互相矛盾」写清楚，而不只是给一个状态码。
+
+### 三、P1：完整性拆成四个问题
+
+一个布尔 `complete` 同时在回答四件事，于是「读了 3 层、按 `maxFloors` 只留 1 层」
+仍然报 `complete=true`——模型没看到的内容被当成看过了。
+
+新增 `CompletenessReport`：
+
+| 字段 | 回答的问题 |
+| --- | --- |
+| `sourceComplete` | 平台的证据是否证明读全了 |
+| `retainedComplete` | 读到的是否全部保留（`droppedByCap` 为 0） |
+| `analysisComplete` | 关键争论链是否在手上 |
+| `nestedComplete` | 楼中楼是否读全 |
+
+外加 `droppedByCap`、`retainedRatio`、`reasons`。`complete` 保留但收紧为
+`sourceComplete && retainedComplete`，所以老调用不会因为裁剪而继续被误导。
+
+### 四、平台账号绑定（任务书第六节）
+
+新增 `src/platforms/accounts.ts`：`PlatformAccountBinding` / `OwnerBinding` /
+`AiAccountBinding`，配 `resolveBindings` / `ownerFor` / `aiAccountFor` /
+`isAllowedOwnerOn`。
+
+**修掉一个严重漏洞**：`ownerIdentity()` 原来不带平台，整个配置里只有一组全局
+账号字段。`analyzer.ts` 用裸 `===` 比较 id，而贴吧 `user_id` 与微博 `uid` 都是
+9–10 位十进制数、互不相干——**一个 id 撞上，插件就会以主人的名义去替陌生人吵架**。
+这正是 `analyzer.ts` 自己的注释里称为「最坏结果」的那种失败，此前只在单平台内
+防住了，跨平台完全没有防线。
+
+现在：`ownerIdentity(config, platform)`、`isAllowedOwner(config, userId, platform)`
+都必填平台；`analyzeDispute` 拒绝「主人绑定在 A 平台、帖子在 B 平台」；
+`ownerFor` 查不到就返回 `undefined`，**绝不回退到别的平台**。
+
+兼容：全局字段一律解释为贴吧的（`config.ts` 原本就写着 "Tieba user id"，
+`store.ts` 对 0.2.0 前的记录也是这个假设）。贴吧用户无感，其它平台从「借用贴吧
+身份」变成「明确未绑定」。新增 `platformAccounts` 配置字段可选择进入新模型；
+**迁移是派生，不写回用户配置**。
+
+### 五、ConversationGraph 与 DebateBrief（任务书第七、八节）
+
+- 新增 `src/conversation.ts`：`ConversationNode` / `ConversationEdge` /
+  `ConversationGraph`，节点管身份与内容，**边管关系**。这样「转发既是一条新内容
+  又是指向原帖的边」能表达，而两层树表达不了。每条边带 `certainty: stated |
+  inferred`，猜出来的关系不许冒充平台声明。
+- 新增 `src/conversation-bridge.ts`：贴吧两层结构到图的投影。**贴吧解析器只填
+  `replyToName` 不填 `replyToPostId`，所以不生成 `replies_to` 边**——按昵称猜
+  回复关系正是会答错人的那条路，缺口写进 `coverage.issues` 而不是静默消失。
+- 新增 `src/brief.ts`：`DebateBrief`，每个论点都必须引用 posts id，
+  `validateBrief` 拒绝「引用没读过的帖子」「把对方的发言当成主人的立场」
+  「单方面说法标成双方确认」。`PersonaConfig` 不在校验参数里——人格负责语气，
+  不能改事实。
+
+### 六、一次性真实发表验收（任务书第五节）
+
+贴吧的 `comment.publish` / `comment.reply` 是 `unverified`，而发表闸门只放行
+`supported`。**不改能力状态**——把 `unverified` 改成 `supported` 让测试证明自己
+成立，正是能力模型要挡的那种谎。
+
+新增 `src/verification.ts`，一条与日常发表**完全分离**的路径：
+
+- 四项授权必填且无默认值：账号、帖子、授权人、预批正文；正文不现场生成，
+  否则观测到的是「模型写了什么」而不是「平台对已知内容做了什么」。
+- 一份授权只发一次，用 `authorizationKey` 去重，不能变成批量发帖机。
+- 只在 `unverified` 时可用；`supported` 无需验，其它状态验了也说明不了什么。
+- 登录账号必须是授权账号，否则就是拿别人的登录态发帖。
+- 升级到 `supported` 要求四项回读证据齐全（帖子出现、作者、正文、父级位置）。
+  「拿到了 post id 但内容对不上」不算证据。
+- 失败即停：403/429/验证码/权限不足都保持 `unverified`。
+
+**这一轮没有执行真实发表**：本机对 `tieba.baidu.com` 持续 403（拦截页标题
+「百度安全验证」，`server: bfe`；同时 `www.baidu.com` 与 `example.com` 均返回
+200，是本机 IP 被标记）。因此两项能力的真实状态仍是 `unverified`，未绕过。
+
+### 七、测试
+
+**518 项全绿**（0.2.1 的 453 项 + 新增 65 项）。新增：
+
+| 文件 | 数量 | 覆盖 |
+| --- | --- | --- |
+| `test/credential-namespace.test.ts` | 12 | 前缀包含、连字符/下划线、大小写、特殊字符、tieba 兼容、`llm` 保留字、双实现检查、fail-closed |
+| `test/pagination-integrity.test.ts` | 23 | 四种信号矛盾、重复页、限流、超时、分页上限、正常路径 |
+| `test/conversation-graph.test.ts` | 8 | 无楼层平台的图投影、回复边只记 stated、覆盖率不自升级、环截断 |
+| `test/debate-brief.test.ts` | 12 | 引用不存在、归错方、单方证据冒充共识、目标不在对话里 |
+| `test/verification.test.ts` | 10 | 只有 unverified 可验、授权必填、一次一授权、账号匹配、四项回读 |
+
+### 未验证
+
+贴吧真实读取与真实发表都未验证（原因同上：本机 IP 403）。分级如下，不混为一谈：
+
+- 单元测试：已跑，全绿
+- 模拟集成测试：已跑，全绿
+- DSH 实际加载测试：已跑（裸目录安装 + 9 工具挂载）
+- 真实贴吧读取测试：**未做**（403）
+- 真实贴吧发表测试：**未做**（403，且能力保持 unverified）
+
 ## [0.2.1] — 2026-10-28
 
 跨平台架构加固。0.2.0 把插件拆成了「通用核心 + 可插拔平台」，但拆完才发现

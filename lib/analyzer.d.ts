@@ -13,7 +13,7 @@
  * came from, so the generator can quote rather than invent, and the validator
  * can check that the reply target exists.
  */
-import type { NestedReply } from './types.js';
+import type { NestedReply, PlatformId } from './types.js';
 import type { CollectedThread, TimelineEntry } from './collector.js';
 /** How the owner was identified. */
 export type OwnerMatchKind = 'id' | 'name';
@@ -89,6 +89,22 @@ export interface TriggerRef {
 }
 /** Owner identity supplied by configuration. */
 export interface OwnerIdentity {
+    /**
+     * The platform this identity belongs to.
+     *
+     * v0.2.2: **required for any id-based match.** A user id is only meaningful
+     * inside one platform — Tieba's `user_id` and Weibo's `uid` are both 9–10 digit
+     * decimals in unrelated namespaces. Before this field existed, a single global
+     * `ownerUserId` was compared against whatever platform the link happened to
+     * point at (`analyzer.ts:345-348` did a bare `===`), so an id collision meant
+     * the plugin would argue **on a stranger's behalf under the owner's name** —
+     * the failure this module's own comment calls "the single worst outcome".
+     *
+     * Optional only so old callers keep compiling; `analyzeDispute` refuses an
+     * id-based match when it is absent, because an id with no platform cannot be
+     * proven to be this owner's.
+     */
+    readonly platform?: PlatformId;
     /** Stable platform id; preferred. */
     readonly userId?: string;
     /** Display name; used only when no id is configured or matched. */
