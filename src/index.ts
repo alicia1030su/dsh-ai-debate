@@ -81,7 +81,7 @@ import {
 } from './settings-routes.js'
 import type { InjectableScope } from './host.js'
 import { CredentialMirror } from './credential-mirror.js'
-import { bindingOf, createApproval, hashText } from './security/approvals.js'
+import { bindingOf, checkApproval, createApproval, hashText } from './security/approvals.js'
 import { aiAccountFor } from './platforms/accounts.js'
 import { bindingsOf } from './runtime.js'
 import {
@@ -1011,13 +1011,7 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
 
     const now = Date.now()
     const config = effectiveConfig()
-    const live = new Set(
-      runtimeView.store
-        .getApprovals()
-        .filter((record) => record.consumedAt === undefined && record.revokedAt === undefined)
-        .filter((record) => now - Date.parse(record.grantedAt) <= 30 * 60 * 1000)
-        .map((record) => `${record.sessionId}\u0000${record.candidateId}`),
-    )
+    const approvals = runtimeView.store.getApprovals()
 
     const out: PendingApprovalView[] = []
     for (const session of runtimeView.store.snapshot().sessions) {
@@ -1035,7 +1029,6 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
       for (const candidate of session.candidates) {
         const verdict = candidate.security?.decision
         if (verdict !== 'allow' && verdict !== 'review') continue
-        if (live.has(`${session.id}\u0000${candidate.replyId}`)) continue
 
         // The expectation is built from stored values only. If any of them is
         // missing the row is still listed (the owner should see the candidate) but
@@ -1055,6 +1048,36 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
                 textHash: hashText(candidate.text),
                 assessmentFingerprint: fingerprint,
               }
+
+        // ## Whether this row is already authorised (v0.2.9)
+        //
+        // v0.2.8 answered that with `sessionId + candidateId`. That is the *identity*
+        // of the row, not the *authorisation*: it cannot tell "this exact text was
+        // approved" from "something with this id was approved at some point". So a
+        // stale approval — granted for the previous body, the previous target, the
+        // previous account, or a superseded assessment — still hid the row, and the
+        // owner saw a candidate with no button while the approve route would have
+        // refused the record it was hiding behind.
+        //
+        // `checkApproval` is the same function the publish path uses, so this list
+        // cannot drift from it: a row is treated as authorised only when the stored
+        // record would actually authorise a publish *right now* — matching text hash,
+        // version, target, platform, account and assessment fingerprint, and still
+        // within its TTL and neither consumed nor revoked.
+        //
+        // When the expectation is unavailable (no fingerprint or no bound account) the
+        // row is listed regardless: there is no binding to compare, and listing it
+        // with the "cannot approve" note is more honest than hiding the candidate.
+        const authorising =
+          expectation === undefined
+            ? undefined
+            : approvals.find(
+                (record) =>
+                  record.sessionId === session.id &&
+                  record.candidateId === candidate.replyId &&
+                  checkApproval(record, expectation, () => now).ok,
+              )
+        if (authorising !== undefined) continue
 
         out.push({
           sessionId: session.id,

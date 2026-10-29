@@ -49,6 +49,9 @@ const INCLUDE = [
   'docs/images/ai-debate-cover.png',
   // The v0.2.8 acceptance report is linked from CHANGELOG.md.
   'docs/v0.2.8-acceptance.md',
+  // Same for v0.2.9. Listed explicitly rather than shipping all of `docs/`: the
+  // historical screenshots there are megabytes of material no installed user opens.
+  'docs/v0.2.9-acceptance.md',
 ]
 const INCLUDE_DIRS = ['lib', 'client']
 
