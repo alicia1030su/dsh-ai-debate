@@ -41,6 +41,14 @@ const INCLUDE = [
   // directory also holds historical acceptance screenshots, which added 1.2 MiB
   // to the archive for images no installed user needs.
   'docs/v0.2.3-security-report.md',
+  // The README's cover image (v0.2.8). Root-relative `docs/images/...` is correct on
+  // GitHub, where the file sits beside README.md in the repository — but the tarball
+  // ships a flat subset, so without this entry the image is a broken link for anyone
+  // reading README.md out of `node_modules`. Listed by exact path for the same reason
+  // as the report above: `docs/` also holds acceptance screenshots no user needs.
+  'docs/images/ai-debate-cover.png',
+  // The v0.2.8 acceptance report is linked from CHANGELOG.md.
+  'docs/v0.2.8-acceptance.md',
 ]
 const INCLUDE_DIRS = ['lib', 'client']
 

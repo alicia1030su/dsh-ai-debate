@@ -17,7 +17,8 @@
  * database would add an install dependency for no benefit at this size.
  */
 
-import { mkdir, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, link, open, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 import type { TargetSnapshot } from './types.js'
@@ -34,14 +35,17 @@ import { pruneApprovals } from './security/approvals.js'
  * than be forgotten.
  */
 export class StoreError extends Error {
-  readonly code: 'read_failed' | 'corrupt' | 'write_failed'
+  readonly code: StoreErrorCode
 
-  constructor(code: 'read_failed' | 'corrupt' | 'write_failed', message: string, options?: { cause?: unknown }) {
+  constructor(code: StoreErrorCode, message: string, options?: { cause?: unknown }) {
     super(message, options)
     this.name = 'StoreError'
     this.code = code
   }
 }
+
+/** The three ways a store operation can fail, each with its own remedy. */
+export type StoreErrorCode = 'read_failed' | 'corrupt' | 'write_failed'
 
 /** Every state a task can be in. */
 export type TaskState =
@@ -366,18 +370,39 @@ const DEFAULT_LOCK_TIMEOUT_MS = 5000
  * sequence has a window between the two calls in which both writers see "no lock"
  * and both proceed — which is the bug, not the fix.
  *
- * ## Staleness
+ * ## Staleness, tokens, and why the pid alone is not enough (v0.2.8)
  *
  * A process that dies while holding the lock would otherwise wedge the store
- * forever. The lock file records `pid` and a timestamp; a lock older than
- * {@link LOCK_STALE_MS} whose owner is gone is broken and retried. The threshold is
- * far longer than any single write, so a live writer is never pre-empted in
- * practice. Breaking is done by rename, not unlink, so two breakers cannot delete
- * each other's freshly created lock.
+ * forever, so a stale lock has to be breakable. v0.2.7 decided staleness from
+ * `at` (a timestamp) and then, in the same expression, exempted `process.pid` from
+ * the liveness check. The audit found the consequence: **a lock whose holder was
+ * still alive but whose timestamp had aged past the threshold was collected**, and
+ * the writer that owned it kept going as if it still held the lock.
+ *
+ * Worse, the lock body carried no holder identity, so `release()` could only
+ * `unlink` — meaning a process that *believed* it held a lock could delete the lock
+ * a different process had since created. Nothing detected that, because there was
+ * nothing to compare.
+ *
+ * The protocol now is:
+ *
+ * 1. **A random token per acquisition**, written into the lock body. The token, not
+ *    the pid, is the identity of "this lock is mine".
+ * 2. **Liveness wins over age.** If the recorded holder is a live process, the lock
+ *    is live no matter how old `at` is — a writer can legitimately run longer than
+ *    any fixed threshold (slow disk, large document, a paused process that has not
+ *    died). Age is only used when liveness cannot be established.
+ * 3. **Breaking is compare-and-swap.** The reader records the exact bytes it judged
+ *    stale, then renames the lock aside and verifies the bytes it moved are still
+ *    those bytes. A peer that replaced the lock between the read and the rename
+ *    loses the race harmlessly; the wrong lock is never deleted.
+ * 4. **Release verifies ownership.** `release()` reads the lock, compares the token,
+ *    and only unlinks on a match. If the token changed, the lock was broken and
+ *    re-acquired by someone else, and this process must not touch it.
  *
  * @param file the state file being written; the lock lives beside it
  * @param timeoutMs how long to keep retrying
- * @returns a release function that is safe to call more than once
+ * @returns a release function that verifies ownership before deleting
  */
 async function acquireLock(file: string, timeoutMs = DEFAULT_LOCK_TIMEOUT_MS): Promise<() => Promise<void>> {
   const lockPath = `${file}.lock`
@@ -385,6 +410,10 @@ async function acquireLock(file: string, timeoutMs = DEFAULT_LOCK_TIMEOUT_MS): P
   let delay = 2
 
   for (;;) {
+    // A fresh token per attempt: it identifies *this acquisition*, so a stale
+    // acquisition's release cannot match a later one with the same pid.
+    const token = randomUUID()
+    const body = JSON.stringify({ pid: process.pid, at: Date.now(), token })
     try {
       // The directory may not exist yet on a first run, and `open(..., 'wx')` does
       // not create parents. Creating it here is also what makes the lock and the
@@ -392,7 +421,7 @@ async function acquireLock(file: string, timeoutMs = DEFAULT_LOCK_TIMEOUT_MS): P
       await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 })
       const handle = await open(lockPath, 'wx', 0o600)
       try {
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }), 'utf8')
+        await handle.writeFile(body, 'utf8')
       } finally {
         await handle.close()
       }
@@ -400,11 +429,22 @@ async function acquireLock(file: string, timeoutMs = DEFAULT_LOCK_TIMEOUT_MS): P
       return async () => {
         if (released) return
         released = true
+        // Only delete the lock if it is still ours. A lock that was broken as stale
+        // and re-acquired by a peer now carries a different token, and unlinking it
+        // here would silently remove that peer's protection.
+        let current: string
+        try {
+          current = await readFile(lockPath, 'utf8')
+        } catch {
+          // Already gone. Releasing a lock that no longer exists is success.
+          return
+        }
+        const currentToken = tokenOf(current)
+        if (currentToken !== token) return
         try {
           await unlink(lockPath)
         } catch {
-          // Already gone (broken by a peer that saw us as stale). Releasing a lock
-          // that no longer exists is success, not failure.
+          // Raced with another release or a break. Nothing to do.
         }
       }
     } catch (error) {
@@ -430,54 +470,114 @@ async function acquireLock(file: string, timeoutMs = DEFAULT_LOCK_TIMEOUT_MS): P
   }
 }
 
-/** A lock older than this, whose owner is gone, is broken. */
+/** How long a lock with an *unknowable* holder is allowed to sit before it is broken. */
 const LOCK_STALE_MS = 30_000
 
+/** The `token` field of a lock body, or `undefined` when absent/unparseable. */
+function tokenOf(raw: string): string | undefined {
+  try {
+    const parsed = JSON.parse(raw) as { token?: unknown }
+    return typeof parsed.token === 'string' && parsed.token !== '' ? parsed.token : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /**
- * Remove a lock left behind by a dead writer.
+ * Remove a lock left behind by a writer that is demonstrably gone.
  *
- * @returns true when this call broke the lock, false when it is still live
+ * ## Liveness beats age
+ *
+ * v0.2.7 gated the liveness check behind the age check, which meant an aged lock
+ * belonging to a *live* process was collected and the owner never learned. Here the
+ * order is inverted: a live holder always wins, and age is only consulted when
+ * liveness cannot be established (no pid recorded, or the pid cannot be probed).
+ *
+ * A paused process (`SIGSTOP`, or a debugger break) counts as alive, because
+ * `process.kill(pid, 0)` succeeds for it. That is deliberate: breaking a moved-along
+ * lock while its owner is merely suspended is how two writers end up inside the same
+ * critical section.
+ *
+ * ## Compare-and-swap, not "read then delete"
+ *
+ * The bytes that were judged stale are captured, and after the rename the moved file
+ * is checked against them. If a peer broke and re-created the lock in the meantime,
+ * the bytes differ and this call restores nothing but also deletes nothing of the
+ * peer's — it simply reports "not broken" and the caller retries the whole loop.
+ *
+ * @returns true when this call actually broke the lock
  */
 async function breakStaleLock(lockPath: string): Promise<boolean> {
-  let raw: string
+  let observed: string
   try {
-    raw = await readFile(lockPath, 'utf8')
+    observed = await readFile(lockPath, 'utf8')
   } catch {
-    // The holder released it between our failed create and this read. Report
-    // "broken" so the caller retries the create immediately.
+    // Released between our failed create and this read. Report "broken" so the
+    // caller retries the create immediately.
     return true
   }
-  let parsed: { pid?: number; at?: number } = {}
+
+  let parsed: { pid?: number; at?: number; token?: string } = {}
   try {
-    parsed = JSON.parse(raw) as { pid?: number; at?: number }
+    parsed = JSON.parse(observed) as { pid?: number; at?: number; token?: string }
   } catch {
-    // A half-written lock body: it is not a valid claim, so treat it as stale once
-    // it is older than the threshold measured from the file's own mtime.
+    // A half-written body is not a valid claim. Fall through to the age check below,
+    // which will only break it once it is older than the threshold.
   }
-  const at = typeof parsed.at === 'number' ? parsed.at : 0
-  if (at !== 0 && Date.now() - at < LOCK_STALE_MS) return false
-  if (at === 0) {
-    // No timestamp: fall back to mtime so a genuinely fresh lock still wins.
-    try {
-      const info = await stat(lockPath)
-      if (Date.now() - info.mtimeMs < LOCK_STALE_MS) return false
-    } catch {
-      return true
+
+  const owner = typeof parsed.pid === 'number' ? parsed.pid : undefined
+
+  // 1. A live holder always wins, regardless of how old the timestamp is.
+  if (owner !== undefined && isProcessAlive(owner)) return false
+
+  // 2. No usable liveness signal: decide by age, using the recorded timestamp when
+  //    there is one and the file's own mtime when there is not.
+  if (owner === undefined || owner === null) {
+    const at = typeof parsed.at === 'number' ? parsed.at : 0
+    if (at !== 0) {
+      if (Date.now() - at < LOCK_STALE_MS) return false
+    } else {
+      try {
+        const info = await stat(lockPath)
+        if (Date.now() - info.mtimeMs < LOCK_STALE_MS) return false
+      } catch {
+        return true
+      }
     }
   }
-  const owner = typeof parsed.pid === 'number' ? parsed.pid : undefined
-  if (owner !== undefined && owner !== process.pid && isProcessAlive(owner)) return false
-  // Rename before unlinking: two peers breaking the same stale lock would otherwise
-  // both `unlink` and one would delete the other's token. Each renames to its own
-  // unique name, so exactly one wins.
-  const graveyard = `${lockPath}.${process.pid}.${Date.now()}.stale`
+  // 3. The holder is a dead pid. Break it — but only if it is still the same lock.
+
+  const graveyard = `${lockPath}.${process.pid}.${randomUUID()}.stale`
   try {
     await rename(lockPath, graveyard)
-    await unlink(graveyard).catch(() => undefined)
-    return true
   } catch {
+    // Someone else moved it first, or it is gone. Either way nothing of ours was
+    // deleted; let the caller retry the acquire loop.
     return false
   }
+
+  // The bytes we just moved must be the bytes we judged stale.
+  let moved: string | undefined
+  try {
+    moved = await readFile(graveyard, 'utf8')
+  } catch {
+    moved = undefined
+  }
+  if (moved !== observed) {
+    // A peer's fresh lock was renamed away by us — a race we must undo rather than
+    // benefit from. Put it back only if the path is free; if it is not, the peer
+    // will notice its own token is gone and re-acquire.
+    try {
+      await link(graveyard, lockPath)
+    } catch {
+      // The path is occupied again; the peer's token check will fail loudly on
+      // release, and no state was written by us. Deleting the moved file is safe.
+    }
+    await unlink(graveyard).catch(() => undefined)
+    return false
+  }
+  await unlink(graveyard).catch(() => undefined)
+  return true
 }
 
 /** Whether a pid is still running. Signal 0 probes without delivering a signal. */
@@ -524,6 +624,26 @@ export class DebateStore {
   private dirty = false
   /** The last write failure, reported until a write succeeds. */
   private lastWriteError: StoreError | undefined
+  /**
+   * Whether this instance has ever seen a document on disk.
+   *
+   * `false` means "a missing file is genuinely a first run". Once true, a missing
+   * file is a disappearance — deleted, moved, or a network path that dropped — and
+   * must not be treated as an empty database (v0.2.8). Set on the first successful
+   * load and on the first successful write, so a store that started empty and then
+   * wrote is afterwards protected too.
+   */
+  private loadedOnce = false
+  /**
+   * Why the cached document may be out of date, when that is known (v0.2.8).
+   *
+   * Set by a failed {@link refreshFromDisk}, cleared by a successful one. The whole
+   * point is that a failed refresh used to be silently ignored: the settings page
+   * then rendered the *cached* session list and reported "no candidate is waiting
+   * for approval", which is indistinguishable from a genuine empty list. A reader
+   * that cannot see the current file must say so, not answer as if it had.
+   */
+  private stale: { reason: string; code?: StoreErrorCode } | undefined
 
   constructor(options: StoreOptions) {
     this.options = options
@@ -571,6 +691,11 @@ export class DebateStore {
    * cached view, not a precondition: a transient read error must not make an
    * otherwise-working status page fail. The cached document is still what the
    * previous successful read observed.
+   *
+   * The swallowed error is *not* discarded (v0.2.8): it becomes {@link staleness},
+   * because "I could not re-read" and "I re-read and nothing is waiting" have to be
+   * distinguishable by whoever renders the result. Show the latter when the former
+   * is true and the owner sees an empty approve list and walks away.
    */
   async refreshFromDisk(): Promise<void> {
     await this.ready()
@@ -583,14 +708,41 @@ export class DebateStore {
     // send something the unsaved record was meant to prevent.
     //
     // The flag is cleared only by a successful write, never by a read.
-    if (this.dirty) return
+    if (this.dirty) {
+      this.stale = { reason: '本实例有尚未写盘的内存改动，磁盘内容比内存旧，因此这次没有用磁盘覆盖内存。' }
+      return
+    }
     try {
       this.data = await this.readCurrentDocument()
       this.lastWriteError = undefined
-    } catch {
-      // Keep the cached document. A caller that needs a guaranteed-fresh read
-      // performs a write (which takes the lock) or reads the file itself.
+      this.stale = undefined
+      this.loadedOnce = true
+    } catch (error) {
+      // Keep the cached document — but remember *why* it is now of unknown age.
+      this.stale = {
+        reason: error instanceof Error ? error.message : String(error),
+        ...(error instanceof StoreError ? { code: error.code } : {}),
+      }
     }
+  }
+
+  /**
+   * How stale {@link snapshot} may be, when that is known.
+   *
+   * `undefined` means the last read succeeded (or nothing has needed a re-read yet),
+   * so the cached document is at least as new as the last successful refresh. A value
+   * means the last attempt to re-read failed or was skipped, and the caller must not
+   * present the cached document as current.
+   *
+   * Read-only and cheap: the settings route calls this on every render.
+   */
+  get staleness(): { readonly reason: string; readonly code?: StoreErrorCode } | undefined {
+    return this.stale
+  }
+
+  /** True when this instance's document could not be refreshed from disk. */
+  get hasStaleView(): boolean {
+    return this.stale !== undefined
   }
 
   /**
@@ -640,6 +792,8 @@ export class DebateStore {
       throw new StoreError('corrupt', `状态文件 ${this.file} ${validated.reason}`, { cause: undefined })
     }
     this.data = validated.data
+    // From here on, "the file is missing" means it disappeared — not a first run.
+    this.loadedOnce = true
   }
 
   /** Keep a copy of an unreadable document next to the live one. */
@@ -719,17 +873,33 @@ export class DebateStore {
         // lost-update window this function exists to close — two writers would both
         // read, both merge against the same base, and the second rename would win.
         //
-        // A read failure is not fatal *here*, by deliberate choice: the merge base
-        // falls back to this instance's copy, the change is still applied, and the
-        // write then fails on its own terms. That keeps the documented contract —
-        // memory shows what was attempted, `hasUnsavedChanges` says it did not land
-        // — instead of turning an unwritable directory into "your change never
-        // existed", which would hide the failure behind a different one.
-        const base = await this.readCurrentDocument().catch(() => this.data)
+        // ## No fallback on a read failure (v0.2.8)
+        //
+        // v0.2.7 wrote `.catch(() => this.data)` here. That swallowed **every**
+        // read error, including `StoreError('corrupt')`, and turned "the file on disk
+        // is damaged" into "use the in-memory copy" — after which the write replaced
+        // the damaged file with that copy. The user's recoverable bytes were gone, and
+        // `mutate` had reported success.
+        //
+        // The reproduction is four steps long and needs no concurrency: initialise,
+        // write once, corrupt the file externally, write again. `mutate` resolved and
+        // the corrupt content disappeared.
+        //
+        // A read failure now aborts the write. The change is still applied to this
+        // instance's copy — the documented `mutate` contract, and what the publish
+        // path needs in order to see `hasUnsavedChanges` and refuse to send — but
+        // nothing is written and the original file is left exactly as it was.
+        const base = await this.readCurrentDocument()
         const next = prune(change(base), this.options)
         this.data = next
         await this.persist(next)
         return next
+      } catch (error) {
+        // Keep the attempted document visible when the merge itself succeeded but the
+        // read or write did not. `hasUnsavedChanges` then reports the truth: memory
+        // and disk disagree, so a publish must not proceed.
+        if (error instanceof StoreError) throw error
+        throw new StoreError('write_failed', `状态写入失败：${(error as Error).message}`, { cause: error })
       } finally {
         await release()
       }
@@ -758,12 +928,115 @@ export class DebateStore {
   }
 
   /**
-   * The document currently on disk, or an empty one when the file is absent.
+   * Read, decide, and write, all inside one lock hold.
    *
-   * Deliberately does **not** fall back to `this.data` on a parse error: writing a
-   * merged document over a file that failed to parse would destroy whatever the
-   * user could still have recovered. A corrupt file inside a write is fatal here,
-   * and the original bytes are left alone.
+   * ## Why this exists (v0.2.8)
+   *
+   * Creating an approval used to be two separate operations:
+   *
+   *   1. `getSession()` — read the candidate from this instance's view and check the
+   *      expected snapshot against it;
+   *   2. `mutate()` — take the lock and append the approval record.
+   *
+   * Between those two steps another process can replace the candidate (the agent
+   * regenerates a reply, the owner re-targets one). The check then validated a
+   * document that no longer existed, and the record was appended describing content
+   * nobody had reviewed — exactly the failure v0.2.7 was supposed to close, moved
+   * from "stale page" to "stale within one request".
+   *
+   * A `mutate` callback cannot fix this on its own: it receives the fresh document,
+   * but it has no way to *refuse* and return a verdict to the caller — it can only
+   * return the next document, so the only ways to say "no" are throwing (which the
+   * store records as a write failure, wrongly) or writing nothing (which looks like
+   * success).
+   *
+   * `transact` gives the callback both abilities: it sees the freshly-read document
+   * and returns a discriminated result. `{ commit, value }` persists and hands `value`
+   * back; `{ abort: value }` leaves the file untouched and hands the same `value`
+   * back. Aborting is not an error — it is the normal outcome of "the thing you
+   * approved is gone".
+   *
+   * `value` is what the caller wants to know: an HTTP status, a verdict, a record.
+   * The callback needs to *both* decide the outcome and, on the happy path, write —
+   * so the two are returned together rather than inferred from a side channel.
+   *
+   * @param decide runs with the on-disk document under the write lock
+   * @returns the callback's value, plus the persisted document when it committed
+   */
+  async transact<T>(
+    decide: (data: StoreData) => { commit: StoreData; value: T } | { abort: T },
+  ): Promise<{ committed: StoreData; value: T } | { aborted: true; value: T }> {
+    await this.ready()
+
+    const run = async (): Promise<{ committed: StoreData; value: T } | { aborted: true; value: T }> => {
+      let release: () => Promise<void>
+      try {
+        release = await acquireLock(this.file, this.options.lockTimeoutMs)
+      } catch (error) {
+        if (error instanceof StoreError) throw error
+        throw new StoreError('write_failed', `状态写入失败：${(error as Error).message}`, { cause: error })
+      }
+      try {
+        const base = await this.readCurrentDocument()
+        const decision = decide(base)
+        if ('abort' in decision) {
+          // Nothing is written, nothing is pruned, and the in-memory copy is left
+          // alone: an aborted decision must not change what other readers see.
+          return { aborted: true, value: decision.abort }
+        }
+        const next = prune(decision.commit, this.options)
+        this.data = next
+        await this.persist(next)
+        return { committed: next, value: decision.value }
+      } catch (error) {
+        if (error instanceof StoreError) throw error
+        throw new StoreError('write_failed', `状态写入失败：${(error as Error).message}`, { cause: error })
+      } finally {
+        await release()
+      }
+    }
+
+    const write = this.writeChain.then(run, run)
+    this.writeChain = write.catch(() => undefined)
+
+    try {
+      const result = await write
+      if ('committed' in result) {
+        this.dirty = false
+        this.lastWriteError = undefined
+      }
+      return result
+    } catch (error) {
+      this.dirty = true
+      const wrapped =
+        error instanceof StoreError
+          ? error
+          : new StoreError('write_failed', `状态写入失败：${(error as Error).message}`, { cause: error })
+      this.lastWriteError = wrapped
+      throw wrapped
+    }
+  }
+
+  /**
+   * The document currently on disk, or an empty one when this really is a first run.
+   *
+   * ## "Absent" is only a first run before the first load (v0.2.8)
+   *
+   * `ENOENT` used to mean "first run" unconditionally. That is right exactly once —
+   * before this instance has ever read the file. Afterwards it means the state file
+   * was *deleted or unmounted* while we were running, and treating that as a fresh
+   * database is the same data loss as overwriting a corrupt file: the in-memory copy
+   * gets written out as a brand-new document, and the publish ledger and approvals
+   * that used to be on disk are gone with no error.
+   *
+   * So the flag is `loadedOnce`: false until the first successful `load()` or write.
+   * After that, a missing file is a `read_failed` and the write is refused.
+   *
+   * ## Corrupt is always fatal
+   *
+   * A parse or schema failure keeps `StoreError('corrupt')` and never falls back to
+   * memory: writing a merged document over it would destroy whatever a human could
+   * still recover from the bytes.
    */
   private async readCurrentDocument(): Promise<StoreData> {
     let raw: string
@@ -771,7 +1044,16 @@ export class DebateStore {
       raw = await readFile(this.file, 'utf8')
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      if (code === 'ENOENT') return emptyStore()
+      if (code === 'ENOENT') {
+        if (!this.loadedOnce) return emptyStore()
+        throw new StoreError(
+          'read_failed',
+          `状态文件 ${this.file} 在插件运行期间消失了（ENOENT）。` +
+            '为避免把内存里的残缺副本当成新数据库写出去、从而丢掉发表台账与人工批准记录，' +
+            '这次写入被拒绝。请确认该文件是否被删除、移动或所在磁盘/网络目录是否掉线；' +
+            '确认安全后再手动处理。',
+        )
+      }
       throw new StoreError('read_failed', `无法读取状态文件 ${this.file}：${(error as Error).message}`, {
         cause: error,
       })
@@ -821,6 +1103,10 @@ export class DebateStore {
         await mkdir(this.options.dir, { recursive: true, mode: 0o700 })
         await writeFile(temp, body, { encoding: 'utf8', mode: 0o600 })
         await rename(temp, this.file)
+        // A successful write means a document now exists, so from here on a missing
+        // file is a disappearance rather than a first run — even for a store that
+        // started against an empty directory.
+        this.loadedOnce = true
         return
       } catch (error) {
         lastError = error

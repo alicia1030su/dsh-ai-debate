@@ -1,5 +1,17 @@
 # AI代吵架 · dsh-ai-debate
 
+<p align="center">
+  <img
+    src="docs/images/ai-debate-cover.png"
+    alt="AI代吵架项目插画：黑发女主人双手抱胸神情从容，白发 Q 版 AI 助手戴着印有 AI 标识的耳机指向前方激烈争辩，蓝黑色科技感背景"
+    width="100%"
+  />
+</p>
+
+<p align="center">
+  <em>主人保持从容，AI 助手负责把话讲清楚。</em>
+</p>
+
 一个 DSH 插件：读取百度贴吧的帖子与楼中楼，还原主人和对手的争论，按选定人格起草接话，**经主人确认后**才发表。
 
 > 用途边界：本插件做的是「把观点讲清楚、把依据要出来」。它不威胁、不做人身攻击、不造谣、不组织围攻、不刷屏。发布默认**手动审核**，任何一条回复都必须由主人看清楚正文再点确认。
@@ -134,17 +146,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.7
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.8
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.7.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.8.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.7.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.8.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -991,7 +1003,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**751 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**772 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1022,7 +1034,7 @@ node scripts/pack.mjs
 | `test/platform-routing.test.ts` | 9 | **路由与闸门**：双平台同 Runtime 各读自己的帖子；未知链接被拒；每平台只见自己的配置与凭据；只读与 unverified 平台在真实发表路径上被拒且适配器未被调用 |
 | `test/no-floor-number.test.ts` | 8 | **核心不依赖楼层号**：整帖无楼层号也能建时间线、认对手、列参与者、压上下文、还原目标；输出不含 `undefined`/`NaN` |
 | `test/publish-credential-gate.test.ts` | 9 | 凭据未证实时不发帖：拒绝在任何网络调用与幂等账之前 |
-| `test/publisher-safety.test.ts` | 59 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
+| `test/publisher-safety.test.ts` | 62 | 发表安全：身份校验、目标快照、幂等、回读、限流 |
 | `test/route-lifecycle.test.ts` | 4 | 路由注册与卸载生命周期 |
 | `test/settings-auth.test.ts` | 18 | 设置读写的授权与越权拒绝 |
 | `test/settings-page.test.ts` | 36 | 设置页七个区域的行为 |
@@ -1039,20 +1051,23 @@ node scripts/pack.mjs
 | `test/test-count.test.ts` | 11 | **统计脚本自测**：TAP 与 spec 两种格式解析一致；非零退出与无法解析都让整体失败；`NODE_TEST_CONTEXT` 继承陷阱 |
 | `test/account-binding-partial.test.ts` | 10 | **部分配置不得崩溃**：只有 AI 账号字段、只有主人字段、完全空、`platformAccounts` 缺失或损坏，都按「未配置」处理；缺字段与空字符串必须等价 |
 | `test/approval-adversarial.test.ts` | 17 | **发表授权对抗测试**：模型自己传 `confirm=true`、正文里伪造「已批准」、批准后换正文/换目标/换账号、并发消费同一份授权、已消费复用、过期、重启、状态文件被篡改、`block` 不可批准 |
-| `test/approval-route.test.ts` | 13 | **批准接口的信任边界**：无会话认证时整体关闭、未登录/校验失败/授权器抛错一律拒绝、只接受 POST、Host 不支持时 501 不假装成功、响应不含凭据 |
+| `test/approval-route.test.ts` | 18 | **批准接口的信任边界**：无会话认证时整体关闭、未登录/校验失败/授权器抛错一律拒绝、只接受 POST、Host 不支持时 501 不假装成功、响应不含凭据 |
 | `test/store-field-preservation.test.ts` | 8 | **状态字段不得被静默丢弃**：`prune()` 与 `validateStore()` 都必须保留 approvals/security；消费状态跨重启保持；`PRESERVED_FIELDS` 覆盖 `StoreData` 全部字段 |
 | `test/v025-defect-repro.test.ts` | 7 | **v0.2.5 缺陷复现**：`review` 候选在 `limited_auto` 无批准时曾能发表；`manual` 模式曾接受调用方自报的 `humanApproved` |
-| `test/client-approval-panel.test.ts` | 11 | **批准面板全链路**：Host JSON→fetch→normalizeView→store→React DOM；正文全文与换行必须显示；只 POST 两个 id；失败显示 Host 原因；进行中禁用；两个挂载面都到得了 |
+| `test/client-approval-panel.test.ts` | 14 | **批准面板全链路**：Host JSON→fetch→normalizeView→store→React DOM；正文全文与换行必须显示；只 POST 两个 id；失败显示 Host 原因；进行中禁用；两个挂载面都到得了 |
 | `test/readback-integrity.test.ts` | 2 | **回读不全不得崩溃也不得假装核实**：平台返回的正文缺失时报告「无法核对内容」而非 `undefined.replace` 崩溃；发表状态如实为 `published`，`verified: false`；平台只调用一次，不会因此重试 |
 | `test/build-runtime-platforms.test.ts` | 7 | **真实入口的平台选择**：两个假平台注册进 `buildRuntime()` 后各自的链接造出各自的适配器、只拿到自己的设置、未知链接被拒；没有贴吧的部署里 `runtime.adapter` / `healthCheck` / `checkLogin` 落到已注册平台而不是抛「tieba 没有注册」；贴吧在场时默认平台仍是贴吧、与注册顺序无关；空注册中心给出可读错误 |
 | `test/v027-multi-store-loss.test.ts` | 3 | **两个 store 共享一个 state.json 不得丢记录**：安全事件、`confirmed` 去重行、批准记录三类交错写入后都必须留在磁盘上（修复前三条全部失败） |
 | `test/v027-approval-snapshot.test.ts` | 16 | **批准必须绑定主人看到的那一条**：不带快照拒绝（`snapshot_required`）、缺字段点名（`snapshot_incomplete`）、正文/目标/账号/版本/评估/平台六种漂移各自 `stale_candidate`、完整一致时通过、候选被重新生成后旧快照失效 |
 | `test/v027-restart-and-rebuild.test.ts` | 6 | **跨重启与适配器重建**：会话在全新实例里仍带自己的平台、不会被改写成默认平台；适配器按配置指纹复用、配置变了必须重建、一个平台重建不影响另一个 |
 | `test/v027-platform-honesty.test.ts` | 4 | **平台区不许把「注册了」显示成「能用了」**：`implemented` 原样透传、未实现平台必须带前置条件、`permission_required` 不得渲染成已实现、平台区不含任何凭据值 |
-| `test/v027-weibo-url.test.ts` | 11 | **微博链接与 ID**：五种链接形状、垃圾输入不抛错、没有帖子 id 时拒绝而不是猜、base62 ↔ numeric mid 双向转换、同一微博两种写法归一到同一 threadId |
+| `test/v027-weibo-url.test.ts` | 15 | **微博链接与 ID**：五种链接形状、垃圾输入不抛错、没有帖子 id 时拒绝而不是猜、base62 ↔ numeric mid 双向转换、同一微博两种写法归一到同一 threadId |
 | `test/v027-weibo-conversation.test.ts` | 12 | **微博结构投影到对话图**：不伪造楼层号、`contains` 是 stated、`replied_to` 平台给 id 才 stated / 只给昵称则 inferred、重名不猜、转发是独立节点与 `reposts` 边而不是父子回复、引用与回复分开 |
 | `test/v027-weibo-provider.test.ts` | 11 | **微博只读的诚实边界**：没有任何能力被声明成 `supported` 或 `unverified`、写能力等授权、艾特明确不可用、每个读方法抛可识别的授权错误而不是空数组、能力闸门 fail-closed |
-| **合计** | **751** | |
+| `test/v028-concurrent-processes.test.ts` | 2 | TODO: 补充覆盖说明 |
+| `test/v028-corrupt-overwrite.test.ts` | 3 | TODO: 补充覆盖说明 |
+| `test/v028-lock-recovery.test.ts` | 2 | TODO: 补充覆盖说明 |
+| **合计** | **772** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 
@@ -1251,9 +1266,17 @@ v0.1.5 **不能**。贴吧没有可用的公开艾特通知接口，`/c/u/feed/a
 6. **`/p/*` 楼中楼接口会被路径级限流**：实测连续读取后该路径族全部返回 403（见上文「关于楼中楼限流的实话」）。插件会熔断并降级到内联副本，**结果会明确标注不完整**。这是平台侧限制，不是 bug，也无法靠重试绕过。
 7. **楼中楼回复关系依赖「回复 X」前缀**：如果平台不渲染这个前缀，关系会被标为不确定，插件不会用文本相似度硬猜。
 8. **上下文压缩是有损的**：预算不够时某些内容会被省略，省略项会明确告诉模型「这里缺了，不要猜」。
-9. **仅单进程**：状态是本地 JSON 文件，不支持多实例共享。并发去重用的是进程内锁，跨进程不保证。
+9. **多实例共享状态文件只做了一半（v0.2.8）**：写入走的是**文件锁 + 读-改-写**，
+   两个独立进程可以安全地交替写入，成功的记录不会互相覆盖（有真实双进程测试）。
+   但**读取**仍可能看到缓存：页面上的计数、会话列表在极端情况下可能比磁盘落后一个
+   写入周期，直到下一次刷新。发表路径不会拿缓存做决定——状态读不到时会**拒绝发表**
+   （`store_unverified`），而不是照旧发出去。
 10. **旧候选必须重新生成**：v0.1.3 起没有目标快照的候选一律拒绝发表。升级后旧会话需要重新生成候选，这是故意的。
-11. **状态文件损坏会停机**：宁可拒绝所有操作，也不静默清空去重记录。损坏文件会备份成 `state.json.corrupt-<时间戳>`，需要人工处理。
+11. **状态文件损坏会停机，且不会覆盖坏文件（v0.2.8）**：宁可拒绝所有操作，也不静默
+    清空去重记录。损坏文件会备份成 `state.json.corrupt-<时间戳>`，需要人工处理。
+    写入前的读取失败（非法 JSON、权限错误、文件在运行期间消失）一律**拒绝写入**，
+    磁盘字节原样保留供抢救——不会用内存副本盖掉它。文件消失也**不会**被当成
+    「首次启动」重新建库，那是两件不同的事。修好文件后插件会自行恢复，不必重启。
 12. **已发表的去重记录不会过期**：会话缓存按 TTL 清理，但「这个召唤已经发过」的记录会一直保留（上限 2000 条，**只报告不删除**），避免同一个召唤被重复回答。
 13. **取消不等于撤回**：`stop_session` 只能拦住还没发出的请求。已经到达平台的那条回复撤不回来，记录会如实保留。
 14. **幂等身份只由平台坐标决定**：`platform:threadId:triggerPostId`。
@@ -1281,6 +1304,14 @@ v0.1.5 **不能**。贴吧没有可用的公开艾特通知接口，`/c/u/feed/a
 21. **没有凭据服务的部署退化成配置文件**：裸 CLI 或裁剪过的组合里没有
     `ctx.credentials` 时，配置页的凭据栏只读，Cookie / API Key 仍须写在配置文件里
     （v0.1.5 的老路径），页面会明确说明这一点。
+22. **状态不可确认时，待批准列表会显示「无法确认」而不是「没有候选」（v0.2.8）**：
+    这是故意的。宿主读不到状态文件时，页面**不能**用一句平静的空列表让人以为
+    「Agent 还没生成东西」——真实原因是文件坏了/被移走了/被判为损坏，需要的是
+    另一个动作。页面会带上宿主给的原因和诊断页里的路径。
+23. **Linux 与远端 CI 本轮未验证（v0.2.8）**：本机只有 Windows，Linux 隔离环境与
+    GitHub Actions 都没有实际跑过，所以相关结论保持空白而不是写成通过。真实贴吧
+    网络链路同样未验证（本机 IP 持续 403），发表闸门的测试用假适配器，断言落在
+    「适配器调用次数为 0」上。
 
 ---
 

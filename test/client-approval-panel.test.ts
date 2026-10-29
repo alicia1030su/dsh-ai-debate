@@ -245,7 +245,12 @@ function loadBundle(responses: {
 function mount(
   Component: (props: Record<string, unknown>) => unknown,
   props: Record<string, unknown> = {},
-): { container: HTMLElement; settle(ms?: number): Promise<void>; unmount(): void } {
+): {
+  container: HTMLElement
+  settle(ms?: number): Promise<void>
+  waitFor(predicate: () => boolean, what?: string): Promise<void>
+  unmount(): void
+} {
   const container = globalThis.document.createElement('div')
   globalThis.document.body.appendChild(container)
   const root = createRoot(container)
@@ -266,6 +271,23 @@ function mount(
     container,
     async settle(ms = 60) {
       await new Promise((resolve) => setTimeout(resolve, ms))
+    },
+    /**
+     * Wait until `predicate` holds, or fail with what was on screen.
+     *
+     * `settle()` waits a fixed 60ms, which is enough on an idle machine and not enough
+     * when the whole suite runs in parallel — the panel test failed once in a full run
+     * and passed every time in isolation. Waiting for the condition instead of a clock
+     * removes that coin flip without weakening the assertion: the assertion still has to
+     * become true, it just gets a bounded chance to.
+     */
+    async waitFor(predicate: () => boolean, what = '条件') {
+      const deadline = Date.now() + 4000
+      while (Date.now() < deadline) {
+        if (predicate()) return
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      throw new Error(`等待「${what}」超时（4s）。屏幕上的文字：${textOf(container).slice(0, 600)}`)
     },
     unmount() {
       root.unmount()
@@ -290,14 +312,21 @@ test('待批准候选经 Host → normalizeView → store → DOM 真的显示�
   const Card = bundle.Card
   const view = mount(Card)
   try {
-    await view.settle()
+    // Wait for the tab strip rather than for a fixed 60ms: the load is a real fetch
+    // through the bundle's own code path, and under a fully parallel suite that can take
+    // longer than any fixed sleep. The assertion below is unchanged — it still has to
+    // find a tab — it just gets a bounded chance to appear.
+    await view.waitFor(
+      () => /发表授权|Authorisation/.test(textOf(view.container)),
+      '页面加载出「发表授权」页签',
+    )
     // Open the approval tab.
     const tab = [...view.container.querySelectorAll('button')].find((button) =>
       /发表授权|Authorisation/.test(textOf(button)),
     )
     assert.ok(tab !== undefined, `没有找到「发表授权」页签：${textOf(view.container).slice(0, 400)}`)
     ;(tab as HTMLButtonElement).click()
-    await view.settle()
+    await view.waitFor(() => /某个争论帖/.test(textOf(view.container)), '待批准列表渲染出来')
 
     const text = textOf(view.container)
     assert.match(text, /某个争论帖/, '列表里应出现帖子标题')
@@ -353,6 +382,67 @@ test('Host 不提供待批准列表时说的是「不提供」，不是「没有
     const text = textOf(view.container)
     // `unavailable` is the key whose text says "this Host version does not provide…".
     assert.doesNotMatch(text, /暂无记录。/, '不能把「不提供」说成「没有」')
+  } finally {
+    view.unmount()
+  }
+})
+
+test('宿主读不到状态文件时，页面说的是「无法确认」，不是「没有待批准」（v0.2.8）', async () => {
+  // The exact collapse this pins: the Host answered 200 with `pendingApprovals: []`
+  // because its state file was corrupt, and the page rendered the same sentence it
+  // renders when the agent simply has not generated anything. The owner then closes the
+  // page believing there is nothing to do, while the real problem needs a different
+  // action entirely.
+  const bundle = loadBundle({
+    settings: payload({
+      pendingApprovals: [],
+      pendingApprovalsState: {
+        status: 'failed',
+        reason: '状态文件已损坏；为避免覆盖掉可恢复的内容，这次写入被拒绝。',
+        code: 'corrupt',
+      },
+    }),
+  })
+  const view = mount(bundle.Card)
+  try {
+    await view.settle()
+    const tab = [...view.container.querySelectorAll('button')].find((button) =>
+      /发表授权|Authorisation/.test(textOf(button)),
+    )
+    assert.ok(tab !== undefined, `没有找到「发表授权」页签：${textOf(view.container).slice(0, 300)}`)
+    ;(tab as HTMLButtonElement).click()
+    await view.settle()
+
+    const text = textOf(view.container)
+    assert.match(text, /无法确认待批准候选/, `必须明说「无法确认」：${text.slice(0, 400)}`)
+    assert.match(text, /损坏/, '要带上宿主给的原因')
+    assert.doesNotMatch(text, /先让 Agent 生成|generate one/, '读失败绝不能渲染成「先生成一条」')
+    assert.doesNotMatch(text, /当前没有待批准候选/, '读失败绝不能渲染成空列表')
+  } finally {
+    view.unmount()
+  }
+})
+
+test('宿主状态为 ready 且计数为 0 时，才说「没有待批准」', async () => {
+  // The positive control for the test above. Without it, "does not match 空列表" could be
+  // satisfied by a page that never says it at all — and then a genuinely empty list would
+  // report as an error, which is its own kind of lie.
+  const bundle = loadBundle({
+    settings: payload({ pendingApprovals: [], pendingApprovalsState: { status: 'ready', count: 0 } }),
+  })
+  const view = mount(bundle.Card)
+  try {
+    await view.settle()
+    const tab = [...view.container.querySelectorAll('button')].find((button) =>
+      /发表授权|Authorisation/.test(textOf(button)),
+    )
+    assert.ok(tab !== undefined)
+    ;(tab as HTMLButtonElement).click()
+    await view.settle()
+
+    const text = textOf(view.container)
+    assert.match(text, /当前没有待批准候选|先让 Agent 生成/, text.slice(0, 300))
+    assert.doesNotMatch(text, /无法确认待批准候选/, '真·空列表不该报错')
   } finally {
     view.unmount()
   }

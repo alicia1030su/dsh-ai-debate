@@ -152,10 +152,16 @@ export interface SettingsRouteDeps {
      * it cannot see, and it must not be told "approve candidate X" by the agent — the list
      * comes from the store, so what the owner sees is what is actually waiting.
      *
-     * Optional so existing route tests keep compiling. When absent the page says there is
-     * nothing to approve rather than inventing an empty success.
+     * Asynchronous since v0.2.8, because a *correct* answer requires re-reading the state
+     * file: a candidate created by another process is invisible in this instance's cache,
+     * and reporting the cache made "nothing is waiting" the default answer for a busy
+     * host. The result carries the failure case explicitly, so an unreadable document
+     * cannot render as an empty list.
+     *
+     * Optional so existing route tests keep compiling. When absent the page says it cannot
+     * report the list rather than inventing an empty success.
      */
-    pendingApprovals?(): readonly PendingApprovalView[];
+    pendingApprovals?(): Promise<PendingApprovalsView>;
     /**
      * Create a human approval for one candidate.
      *
@@ -175,6 +181,31 @@ export interface ApprovalOutcome {
     readonly status: number;
     readonly body: Record<string, unknown>;
 }
+/**
+ * The answer to "what is waiting for my approval".
+ *
+ * ## Why this is not just an array (v0.2.8)
+ *
+ * Three different facts were collapsing into "zero rows": a successful read that found
+ * nothing, a read that failed, and a Host too old to answer. The page rendered all
+ * three as "当前没有待批准候选" — so a corrupt state file, a permissions problem, or a
+ * document held by another writer all looked like a calm empty list, and the owner
+ * walked away believing the agent simply had not generated anything.
+ *
+ * The discriminant makes each one a distinct, renderable outcome. `ok: false` is not
+ * an error the caller can ignore and retry away; it means "the pending set is
+ * unknown", which is a different instruction to a human than "the set is empty".
+ */
+export type PendingApprovalsView = {
+    readonly ok: true;
+    readonly rows: readonly PendingApprovalView[];
+} | {
+    readonly ok: false;
+    /** Already a human-readable sentence: the store writes these for the page. */
+    readonly reason: string;
+    /** `corrupt` / `read_failed` / `write_failed`, when the store named one. */
+    readonly code?: string;
+};
 /**
  * One candidate waiting for approval, as the page renders it.
  *

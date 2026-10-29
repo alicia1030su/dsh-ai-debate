@@ -118,3 +118,62 @@ test('同一微博的两种写法归一化到同一个 threadId', () => {
   const fromMobile = parseWeiboUrl(`https://m.weibo.cn/detail/${numeric}`)
   assert.equal(fromDesktop.threadId, fromMobile.threadId)
 })
+
+// ## v0.2.8: 纯数字单段链接不得猜成帖子
+
+test('纯数字单段 weibo.com/<digits> 必须拒绝：那也可能是用户主页，不能猜', () => {
+  // `weibo.com/1234567890` is what Weibo serves for uid 1234567890's homepage, and
+  // "1234567890" is simultaneously a valid numeric mid. The URL carries nothing that
+  // disambiguates them, so reading it as a post silently points the analysis at a
+  // different post whose id happens to match the uid. Refusing is the only honest
+  // answer; the message has to say *why*, or the owner cannot fix the link.
+  for (const url of [
+    'https://weibo.com/1234567890',
+    'weibo.com/1234567890',
+    'https://www.weibo.com/5012345678901234',
+    'https://weibo.cn/1234567890',
+  ]) {
+    assert.throws(
+      () => parseWeiboUrl(url),
+      /无法判断|用户主页/,
+      `纯数字单段必须拒绝而不是猜：${url}`,
+    )
+  }
+})
+
+test('带字母的单段 base62 仍然识别为帖子（修复不能误伤正常链接）', () => {
+  for (const url of ['https://weibo.com/AbCdEf123', 'weibo.com/AbCdEf123']) {
+    const ref = parseWeiboUrl(url)
+    assert.equal(ref.threadId, toNumericMid('AbCdEf123'), url)
+  }
+})
+
+test('路径本身声明是帖子的数字 mid 仍然接受（只有单段歧义才拒绝）', () => {
+  // The path segment is the disambiguator: `/detail/<mid>` and `/status/<mid>` mean
+  // "this is a post", so a purely numeric mid is unambiguous there and must keep
+  // working. Losing these forms to the ambiguity fix would break every mobile link.
+  for (const url of [
+    'https://m.weibo.cn/detail/5012345678901234',
+    'https://m.weibo.cn/status/5012345678901234',
+    'https://m.weibo.cn/statuses/show?id=5012345678901234',
+  ]) {
+    assert.equal(parseWeiboUrl(url).threadId, '5012345678901234', url)
+  }
+  // uid + mid keeps working, numeric mid included.
+  const pair = parseWeiboUrl('https://weibo.com/1234567890/5012345678901234')
+  assert.equal(pair.threadId, '5012345678901234')
+  assert.equal(pair.uid, '1234567890')
+})
+
+test('微博用户 ID 不得被当成帖子 ID', () => {
+  // The failure this pins: a profile link parsed as a post makes the plugin read a
+  // stranger's timeline as if it were the argument. `/u/<uid>` was already refused;
+  // the bare numeric form was not, and that is the shape Weibo actually hands out.
+  const uid = '1234567890'
+  assert.throws(() => parseWeiboUrl(`https://weibo.com/u/${uid}`), /没有帖子 id/)
+  assert.throws(() => parseWeiboUrl(`https://weibo.com/${uid}`), /无法判断|用户主页/)
+  // And the uid, when present beside a mid, stays a uid.
+  const ref = parseWeiboUrl(`https://weibo.com/${uid}/AbCdEf123`)
+  assert.equal(ref.uid, uid)
+  assert.notEqual(ref.threadId, uid, 'threadId 必须是 mid，不能是 uid')
+})

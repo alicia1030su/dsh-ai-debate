@@ -297,6 +297,10 @@ window.__ModuleLoader__.load({
       approveRefreshing: '读取中…',
       approveLoading: '正在读取待批准候选…',
       approveLoadFailed: '读取待批准候选失败：{reason}',
+      approveUnreadable: '无法确认待批准候选：{reason}',
+      approveUnreadableWhy:
+        '这不是「没有候选」。宿主无法读取状态文件（可能已损坏、被移动，或正被其他进程占用），所以现在只能确定「不知道」。' +
+        '请先按诊断页给出的路径检查该文件，恢复后点「刷新候选」。在此之前不要根据这个页面判断有没有待批准内容。',
       approveEmpty: '当前没有待批准候选。',
       approveStale: '你看到的候选已经变了，已为你重新读取。请确认最新内容后再批准。',
 
@@ -520,6 +524,10 @@ window.__ModuleLoader__.load({
       approveRefreshing: 'Reading…',
       approveLoading: 'Reading candidates awaiting approval…',
       approveLoadFailed: 'Could not read candidates awaiting approval: {reason}',
+      approveUnreadable: 'Cannot determine the candidates awaiting approval: {reason}',
+      approveUnreadableWhy:
+        'This is not "nothing is waiting". The host could not read its state file (corrupt, moved, or held by another process), so the only honest answer right now is "unknown". ' +
+        'Check the path shown on the diagnostics tab and reload once it is repaired. Do not use this page to decide whether anything is pending until then.',
       approveEmpty: 'No candidate is waiting for approval.',
       approveStale: 'The candidate you were looking at has changed. It has been reloaded — check it again before approving.',
 
@@ -697,8 +705,37 @@ window.__ModuleLoader__.load({
         // version cannot report them" from "nothing is waiting", because those need
         // different words on screen.
         pendingApprovals: Array.isArray(raw.pendingApprovals) ? raw.pendingApprovals : undefined,
+        // The read outcome behind that array (v0.2.8).
+        //
+        // The array alone cannot say "the read failed": a failed read and an empty list
+        // are the same three characters. The Host therefore sends this beside it, and the
+        // section prefers it — a corrupt state file must read as "无法确认" on screen, not
+        // as a calm "没有待批准候选".
+        pendingApprovalsState: normalizeApprovalsState(raw.pendingApprovalsState),
         capabilities: raw.capabilities || { settingsService: false, credentialService: false },
       }
+    }
+
+    /**
+     * The pending-approval read outcome, normalised to one of three shapes.
+     *
+     * `ready` and `failed` come from the Host; `unknown` means the field was absent, so
+     * this is an older Host whose array may or may not be trustworthy. Collapsing
+     * `unknown` into `ready` would re-create the bug for every older build.
+     */
+    function normalizeApprovalsState(raw) {
+      if (!raw || typeof raw !== 'object') return { status: 'unknown' }
+      if (raw.status === 'ready') {
+        return { status: 'ready', count: typeof raw.count === 'number' ? raw.count : undefined }
+      }
+      if (raw.status === 'failed') {
+        return {
+          status: 'failed',
+          reason: typeof raw.reason === 'string' && raw.reason ? raw.reason : '',
+          code: typeof raw.code === 'string' ? raw.code : undefined,
+        }
+      }
+      return { status: 'unknown' }
     }
 
     /** Read one secret row by reference. */
@@ -2296,6 +2333,9 @@ window.__ModuleLoader__.load({
 
       const rows = Array.isArray(pending) ? pending : []
       const read = state.approveState || { state: 'idle' }
+      // The Host's own verdict on whether the list could be read (v0.2.8).
+      // `unknown` = older Host, so fall back to whether the array arrived at all.
+      const hostRead = state.view.pendingApprovalsState || { status: 'unknown' }
       const reading = read.state === 'loading'
 
       const header = h(
@@ -2319,6 +2359,24 @@ window.__ModuleLoader__.load({
       // "Reading", "failed" and "genuinely empty" all have zero rows, and telling
       // the owner "no candidate is waiting" when the read blew up is the failure
       // mode this section is required not to have.
+      //
+      // The Host's verdict is checked before this client's own, because it is the one
+      // that knows *why*: the store could not re-read the state file, so the answer is
+      // unknown even though the HTTP request succeeded (v0.2.8).
+      if (hostRead.status === 'failed') {
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          header,
+          h(
+            'p',
+            { className: 'dsd-hint dsd-hint-error', role: 'status' },
+            t('approveUnreadable').replace('{reason}', hostRead.reason || t('unavailable')),
+          ),
+          h('p', { className: 'dsd-hint' }, t('approveUnreadableWhy')),
+        )
+      }
+
       if (read.state === 'failed') {
         return h(
           'div',

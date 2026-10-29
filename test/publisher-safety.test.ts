@@ -2001,3 +2001,114 @@ test('a target that moved still blocks the whole session', async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// v0.2.8: a store that could not be re-read must refuse to publish
+// ---------------------------------------------------------------------------
+
+test('状态文件损坏后：发表被拒绝，网络发送次数为 0（v0.2.8）', async () => {
+  // `checkPublishPolicy` 的每条拒绝都在问账本一个问题：「这条发过了吗」「上一次
+  // 发表有结论了吗」「帖子额度用完没」。这些问题只有在读得到当前文档时才有答案。
+  //
+  // 文件损坏时 `refreshFromDisk` 会保留缓存（那是页面读取的正确取舍），但缓存里的
+  // 答案可能是别人写进 `confirmed` 之前的版本。照着它放行就是一条无法撤回的重复
+  // 回帖，所以发表路径必须把「读不到」当成拒绝理由。断言落在发表次数上，因为那
+  // 是唯一能证明真的没发出去的证据。
+  resetInFlight()
+  const { store, dir } = tempStore()
+  try {
+    const text = '状态不可确认时，这条绝不能发出去。'
+    const session = readySession({ id: 's-unv', triggerPostId: 'p-unv', candidateText: text })
+    await store.mutate((data) => ({ ...data, sessions: [session] }))
+    // 批准必须在破坏文件**之前**签发：它本身要写盘。否则测试失败的原因会变成
+    // 「grantApproval 写不进去」，而不是这里要证明的「发表路径拒绝了」。
+    await grantApproval(store, { sessionId: 's-unv', candidateId: 's-unv-c1', config: BOUND_ACCOUNT })
+    assert.equal(store.hasStaleView, false, '刚开始不该有 staleness')
+
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(join(dir, 'state.json'), '{ broken json, data may still be recoverable', 'utf8')
+    await store.refreshFromDisk()
+
+    const stale = store.staleness
+    assert.notEqual(stale, undefined, 'refresh 失败必须被记下来，不能悄悄保留缓存')
+    assert.equal(stale?.code, 'corrupt', '原因里要带 store 的错误码')
+
+    const fixture = threePartyThread()
+    const adapter = new FakeAdapter({
+      thread: fixture.thread,
+      floors: fixture.floors,
+      nested: fixture.nested,
+      publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
+    })
+
+    const report = await publishCandidate(
+      { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
+      { sessionId: 's-unv', candidateId: 's-unv-c1', approvedText: text },
+    )
+    assert.equal(report.ok, false, '状态不可确认时不得发表')
+    assert.equal(report.errorCode, 'store_unverified')
+    assert.equal(adapter.publishes.length, 0, '网络发送次数必须是 0')
+  } finally {
+    resetInFlight()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('状态文件消失后：同样拒绝发表，而不是当成首次启动照发（v0.2.8）', async () => {
+  resetInFlight()
+  const { store, dir } = tempStore()
+  try {
+    const text = '文件消失时，这条绝不能发出去。'
+    const session = readySession({ id: 's-gone', triggerPostId: 'p-gone', candidateText: text })
+    await store.mutate((data) => ({ ...data, sessions: [session] }))
+    // 批准先签发（它要写盘），再让文件消失。
+    await grantApproval(store, { sessionId: 's-gone', candidateId: 's-gone-c1', config: BOUND_ACCOUNT })
+
+    rmSync(join(dir, 'state.json'))
+    await store.refreshFromDisk()
+    assert.equal(store.staleness?.code, 'read_failed', '消失是 read_failed，不是「空库」')
+
+    const fixture = threePartyThread()
+    const adapter = new FakeAdapter({
+      thread: fixture.thread,
+      floors: fixture.floors,
+      nested: fixture.nested,
+      publish: () => ({ status: 'confirmed', postId: 'should-not-happen' }),
+    })
+    const report = await publishCandidate(
+      { adapter, store, policy: { ...DEFAULT_POLICY, mode: 'manual' as const }, config: BOUND_ACCOUNT },
+      { sessionId: 's-gone', candidateId: 's-gone-c1', approvedText: text },
+    )
+    assert.equal(report.ok, false)
+    assert.equal(report.errorCode, 'store_unverified')
+    assert.equal(adapter.publishes.length, 0)
+  } finally {
+    resetInFlight()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('修好文件后 staleness 会被清掉，不必重启才能继续（v0.2.8）', async () => {
+  // 反面对照。如果 staleness 一旦置上就永不清除，用户修好文件后只能重启插件，
+  // 「安全拒绝」就变成了「永久罢工」，同样不可接受。
+  resetInFlight()
+  const { store, dir } = tempStore()
+  try {
+    await store.ready()
+    await store.mutate((data) => ({ ...data, security: [] }))
+    const { writeFileSync, readFileSync } = await import('node:fs')
+    const healthy = readFileSync(join(dir, 'state.json'), 'utf8')
+
+    writeFileSync(join(dir, 'state.json'), 'not json', 'utf8')
+    await store.refreshFromDisk()
+    assert.notEqual(store.staleness, undefined)
+
+    writeFileSync(join(dir, 'state.json'), healthy, 'utf8')
+    await store.refreshFromDisk()
+    assert.equal(store.staleness, undefined, '读回来之后必须清掉，否则用户只能重启')
+    assert.equal(store.hasStaleView, false)
+  } finally {
+    resetInFlight()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

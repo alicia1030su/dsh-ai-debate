@@ -31,6 +31,17 @@ const SKIP_DIRS = new Set(['node_modules', '.git', '.plugin-manager', 'probe-out
 /** Path prefixes (relative, posix) never included. */
 const SKIP_PREFIXES = ['debate-stage', 'tmp-']
 
+/**
+ * Delivery artifacts generated *after* this archive, so they must not be inside it
+ * (v0.2.8).
+ *
+ * `SHA256SUMS.txt` holds the hash of this very ZIP. Including it makes the archive
+ * depend on its own digest: every run produced a different file, and the published
+ * checksum was stale the moment it was written. I watched that happen three times
+ * before finding it — excluding the file is what makes the build reproducible.
+ */
+const SKIP_FILES = new Set(['SHA256SUMS.txt'])
+
 /** Extensions that are build output we do not want to ship as source. */
 const SKIP_FILE = /\.(tgz|zip|log)$/
 
@@ -47,6 +58,7 @@ async function walk(dir, acc = []) {
     }
     if (!entry.isFile()) continue
     if (SKIP_PREFIXES.some((prefix) => rel.startsWith(prefix))) continue
+    if (SKIP_FILES.has(rel)) continue
     if (SKIP_FILE.test(entry.name)) continue
     acc.push(rel)
   }
@@ -76,12 +88,21 @@ function crc32(buffer) {
   return (crc ^ 0xffffffff) >>> 0
 }
 
-/** Convert a JS date to the DOS date/time pair ZIP uses. */
-function dosDateTime(date) {
-  const time = ((date.getHours() & 0x1f) << 11) | ((date.getMinutes() & 0x3f) << 5) | ((date.getSeconds() / 2) & 0x1f)
-  const day = (((date.getFullYear() - 1980) & 0x7f) << 9) | (((date.getMonth() + 1) & 0x0f) << 5) | (date.getDate() & 0x1f)
-  return { time, day }
-}
+/**
+ * Convert a JS date to the DOS date/time pair ZIP uses.
+ *
+ * ## Why the date is pinned (v0.2.8)
+ *
+ * The archive used each file's `mtime`. Two consecutive runs therefore produced
+ * different bytes for identical content, because the previous step had just rewritten
+ * one of the files — the SHA-256 changed every time the release was rebuilt, so a
+ * published checksum was stale the moment anyone re-ran the script.
+ *
+ * The value below is the ZIP epoch (1980-01-01 00:00). Content determines the archive
+ * now, not the clock: same tree in, same bytes out. Reproducibility is worth more here
+ * than "the archive shows when each file was last touched".
+ */
+const PINNED_DOS = { time: 0, day: (1 << 5) | 1 }
 
 const LOCAL_HEADER = Buffer.alloc(30)
 const CENTRAL_HEADER = Buffer.alloc(46)
@@ -97,7 +118,10 @@ for (const rel of files) {
   const compressed = deflateRawSync(raw, { level: 9 })
   const nameBytes = Buffer.from(rel, 'utf8')
   const crc = crc32(raw)
-  const { time, day } = dosDateTime(info.mtime)
+  // Pinned, not `info.mtime`: see PINNED_DOS. The `stat` above stays for its size and
+  // existence check (a file deleted mid-walk should fail loudly, not vanish silently).
+  void info
+  const { time, day } = PINNED_DOS
 
   LOCAL_HEADER.writeUInt32LE(0x04034b50, 0)
   LOCAL_HEADER.writeUInt16LE(20, 4) // version needed

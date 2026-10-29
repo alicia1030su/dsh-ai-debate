@@ -28,11 +28,13 @@ import type { ApprovalRecord } from './security/approvals.js';
  * than be forgotten.
  */
 export declare class StoreError extends Error {
-    readonly code: 'read_failed' | 'corrupt' | 'write_failed';
-    constructor(code: 'read_failed' | 'corrupt' | 'write_failed', message: string, options?: {
+    readonly code: StoreErrorCode;
+    constructor(code: StoreErrorCode, message: string, options?: {
         cause?: unknown;
     });
 }
+/** The three ways a store operation can fail, each with its own remedy. */
+export type StoreErrorCode = 'read_failed' | 'corrupt' | 'write_failed';
 /** Every state a task can be in. */
 export type TaskState = 'DETECTED' | 'AUTHORIZED' | 'COLLECTING' | 'ANALYZING' | 'GENERATING' | 'REVIEWING' | 'READY' | 'PUBLISHING' | 'PUBLISHED' | 'FAILED' | 'PAUSED' | 'CANCELLED' | 'NEEDS_CONFIRMATION';
 /** States from which no further automatic progress happens. */
@@ -348,6 +350,26 @@ export declare class DebateStore {
     private dirty;
     /** The last write failure, reported until a write succeeds. */
     private lastWriteError;
+    /**
+     * Whether this instance has ever seen a document on disk.
+     *
+     * `false` means "a missing file is genuinely a first run". Once true, a missing
+     * file is a disappearance — deleted, moved, or a network path that dropped — and
+     * must not be treated as an empty database (v0.2.8). Set on the first successful
+     * load and on the first successful write, so a store that started empty and then
+     * wrote is afterwards protected too.
+     */
+    private loadedOnce;
+    /**
+     * Why the cached document may be out of date, when that is known (v0.2.8).
+     *
+     * Set by a failed {@link refreshFromDisk}, cleared by a successful one. The whole
+     * point is that a failed refresh used to be silently ignored: the settings page
+     * then rendered the *cached* session list and reported "no candidate is waiting
+     * for approval", which is indistinguishable from a genuine empty list. A reader
+     * that cannot see the current file must say so, not answer as if it had.
+     */
+    private stale;
     constructor(options: StoreOptions);
     /** Path of the backing file, for diagnostics. */
     get path(): string;
@@ -377,8 +399,29 @@ export declare class DebateStore {
      * cached view, not a precondition: a transient read error must not make an
      * otherwise-working status page fail. The cached document is still what the
      * previous successful read observed.
+     *
+     * The swallowed error is *not* discarded (v0.2.8): it becomes {@link staleness},
+     * because "I could not re-read" and "I re-read and nothing is waiting" have to be
+     * distinguishable by whoever renders the result. Show the latter when the former
+     * is true and the owner sees an empty approve list and walks away.
      */
     refreshFromDisk(): Promise<void>;
+    /**
+     * How stale {@link snapshot} may be, when that is known.
+     *
+     * `undefined` means the last read succeeded (or nothing has needed a re-read yet),
+     * so the cached document is at least as new as the last successful refresh. A value
+     * means the last attempt to re-read failed or was skipped, and the caller must not
+     * present the cached document as current.
+     *
+     * Read-only and cheap: the settings route calls this on every render.
+     */
+    get staleness(): {
+        readonly reason: string;
+        readonly code?: StoreErrorCode;
+    } | undefined;
+    /** True when this instance's document could not be refreshed from disk. */
+    get hasStaleView(): boolean;
     /**
      * Load from disk.
      *
@@ -428,12 +471,73 @@ export declare class DebateStore {
      */
     mutate(change: (data: StoreData) => StoreData): Promise<StoreData>;
     /**
-     * The document currently on disk, or an empty one when the file is absent.
+     * Read, decide, and write, all inside one lock hold.
      *
-     * Deliberately does **not** fall back to `this.data` on a parse error: writing a
-     * merged document over a file that failed to parse would destroy whatever the
-     * user could still have recovered. A corrupt file inside a write is fatal here,
-     * and the original bytes are left alone.
+     * ## Why this exists (v0.2.8)
+     *
+     * Creating an approval used to be two separate operations:
+     *
+     *   1. `getSession()` — read the candidate from this instance's view and check the
+     *      expected snapshot against it;
+     *   2. `mutate()` — take the lock and append the approval record.
+     *
+     * Between those two steps another process can replace the candidate (the agent
+     * regenerates a reply, the owner re-targets one). The check then validated a
+     * document that no longer existed, and the record was appended describing content
+     * nobody had reviewed — exactly the failure v0.2.7 was supposed to close, moved
+     * from "stale page" to "stale within one request".
+     *
+     * A `mutate` callback cannot fix this on its own: it receives the fresh document,
+     * but it has no way to *refuse* and return a verdict to the caller — it can only
+     * return the next document, so the only ways to say "no" are throwing (which the
+     * store records as a write failure, wrongly) or writing nothing (which looks like
+     * success).
+     *
+     * `transact` gives the callback both abilities: it sees the freshly-read document
+     * and returns a discriminated result. `{ commit, value }` persists and hands `value`
+     * back; `{ abort: value }` leaves the file untouched and hands the same `value`
+     * back. Aborting is not an error — it is the normal outcome of "the thing you
+     * approved is gone".
+     *
+     * `value` is what the caller wants to know: an HTTP status, a verdict, a record.
+     * The callback needs to *both* decide the outcome and, on the happy path, write —
+     * so the two are returned together rather than inferred from a side channel.
+     *
+     * @param decide runs with the on-disk document under the write lock
+     * @returns the callback's value, plus the persisted document when it committed
+     */
+    transact<T>(decide: (data: StoreData) => {
+        commit: StoreData;
+        value: T;
+    } | {
+        abort: T;
+    }): Promise<{
+        committed: StoreData;
+        value: T;
+    } | {
+        aborted: true;
+        value: T;
+    }>;
+    /**
+     * The document currently on disk, or an empty one when this really is a first run.
+     *
+     * ## "Absent" is only a first run before the first load (v0.2.8)
+     *
+     * `ENOENT` used to mean "first run" unconditionally. That is right exactly once —
+     * before this instance has ever read the file. Afterwards it means the state file
+     * was *deleted or unmounted* while we were running, and treating that as a fresh
+     * database is the same data loss as overwriting a corrupt file: the in-memory copy
+     * gets written out as a brand-new document, and the publish ledger and approvals
+     * that used to be on disk are gone with no error.
+     *
+     * So the flag is `loadedOnce`: false until the first successful `load()` or write.
+     * After that, a missing file is a `read_failed` and the write is refused.
+     *
+     * ## Corrupt is always fatal
+     *
+     * A parse or schema failure keeps `StoreError('corrupt')` and never falls back to
+     * memory: writing a merged document over it would destroy whatever a human could
+     * still recover from the bytes.
      */
     private readCurrentDocument;
     /**

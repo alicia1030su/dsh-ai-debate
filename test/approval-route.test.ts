@@ -20,7 +20,7 @@
  */
 
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -292,7 +292,7 @@ test('设置视图透传待批准列表', async () => {
       reason: '需要人工确认',
     },
   ]
-  const { deps, dir } = makeDeps({ pendingApprovals: () => pending })
+  const { deps, dir } = makeDeps({ pendingApprovals: async () => ({ ok: true, rows: pending }) })
   try {
     const routes = makeSettingsRoutes(deps)
     const route = routes.find((entry) => entry.path === '/api/dsh-ai-debate/settings')!
@@ -312,8 +312,101 @@ test('设置视图透传待批准列表', async () => {
       } as never,
       response,
     )
-    const view = JSON.parse(payload) as { pendingApprovals?: unknown }
+    const view = JSON.parse(payload) as {
+      pendingApprovals?: unknown
+      pendingApprovalsState?: { status?: string; count?: number }
+    }
     assert.deepEqual(view.pendingApprovals, pending)
+    // The state field is what tells a renderer the read actually happened; without it
+    // an array is indistinguishable from "we could not read".
+    assert.equal(view.pendingApprovalsState?.status, 'ready')
+    assert.equal(view.pendingApprovalsState?.count, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('读取失败时不得渲染成空列表：状态字段必须是 failed 且带原因（v0.2.8）', async () => {
+  // The failure this pins: a corrupt/vanished state file made the read fail, the route
+  // answered `pendingApprovals: []`, and the page told the owner "当前没有待批准候选".
+  // A calm empty list is the single most misleading thing to show here, because the
+  // correct action (go fix the state file) is the opposite of what the page suggests.
+  const { deps, dir } = makeDeps({
+    pendingApprovals: async () => ({
+      ok: false,
+      reason: '状态文件已损坏；为避免覆盖掉可恢复的内容，这次写入被拒绝。',
+      code: 'corrupt',
+    }),
+  })
+  try {
+    const routes = makeSettingsRoutes(deps)
+    const route = routes.find((entry) => entry.path === '/api/dsh-ai-debate/settings')!
+    let payload = ''
+    const response = {
+      writeHead: () => response,
+      end: (chunk?: string) => {
+        payload = typeof chunk === 'string' ? chunk : ''
+        return response
+      },
+    } as never
+    await route.handler(
+      {
+        method: 'GET',
+        socket: { remoteAddress: '127.0.0.1' },
+        headers: { host: '127.0.0.1:51271', origin: 'http://127.0.0.1:51271' },
+      } as never,
+      response,
+    )
+    const view = JSON.parse(payload) as {
+      pendingApprovals?: unknown
+      pendingApprovalsState?: { status?: string; reason?: string; code?: string }
+    }
+    assert.equal(view.pendingApprovalsState?.status, 'failed')
+    assert.match(String(view.pendingApprovalsState?.reason), /损坏/)
+    assert.equal(view.pendingApprovalsState?.code, 'corrupt')
+    // The legacy array stays empty rather than absent, so a v0.2.7 client renders
+    // "nothing to approve" instead of crashing on `undefined.length`.
+    assert.deepEqual(view.pendingApprovals, [])
+    // The rest of the view still renders: a failed pending list must not take the
+    // whole settings page down with it.
+    assert.equal((view as Record<string, unknown>).status, 'ready')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('pendingApprovals 抛异常也不得变成 500：降级为 failed 状态（v0.2.8）', async () => {
+  const { deps, dir } = makeDeps({
+    pendingApprovals: async () => {
+      throw new Error('模拟底层读取器崩溃')
+    },
+  })
+  try {
+    const routes = makeSettingsRoutes(deps)
+    const route = routes.find((entry) => entry.path === '/api/dsh-ai-debate/settings')!
+    let payload = ''
+    const response = {
+      writeHead: () => response,
+      end: (chunk?: string) => {
+        payload = typeof chunk === 'string' ? chunk : ''
+        return response
+      },
+    } as never
+    await route.handler(
+      {
+        method: 'GET',
+        socket: { remoteAddress: '127.0.0.1' },
+        headers: { host: '127.0.0.1:51271', origin: 'http://127.0.0.1:51271' },
+      } as never,
+      response,
+    )
+    const view = JSON.parse(payload) as {
+      status?: string
+      pendingApprovalsState?: { status?: string; reason?: string }
+    }
+    assert.equal(view.status, 'ready', '其余设置仍应可用')
+    assert.equal(view.pendingApprovalsState?.status, 'failed')
+    assert.match(String(view.pendingApprovalsState?.reason), /崩溃/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -369,6 +462,97 @@ test('一个全新的 store 读得到空的批准列表', async () => {
     const store = new DebateStore({ dir })
     await store.ready()
     assert.deepEqual(store.getApprovals(), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// v0.2.8: 事务化批准 —— 并发与原子性
+// ---------------------------------------------------------------------------
+
+test('并发批准同一候选，只留一条有效记录（v0.2.8）', async () => {
+  // v0.2.7 先在事务外读候选、核对快照，再 mutate() 追加。两个请求同时到达时，两次
+  // 都读到同一个「尚无记录」的状态，于是两条记录都被写下 —— 主人只看到一个按钮，
+  // 却签出了两份授权。现在核对与写入在同一个锁持有内完成，未消费的旧记录会被替换，
+  // 所以「一次点击只能对应一份有效授权」是结构性的，不靠时序运气。
+  const dir = mkdtempSync(join(tmpdir(), 'dsd-approve-race-'))
+  try {
+    const store = new DebateStore({ dir })
+    await store.ready()
+
+    // 直接压 store 层：这里验证的是并发语义，不是路由。
+    const record = (id: string) => ({
+      id,
+      sessionId: 's-race',
+      candidateId: 's-race-c1',
+      platform: 'tieba',
+      targetPostId: 'n5',
+      publishingAccount: '1001',
+      textHash: 'h',
+      candidateVersion: 1,
+      assessmentFingerprint: 'f',
+      grantedBy: 'owner',
+      grantedAt: new Date().toISOString(),
+    })
+    const write = async (tag: string) =>
+      store.transact((data) => ({
+        commit: {
+          ...data,
+          approvals: [
+            // 与 index.ts 里的规则一致：已消费的留作历史，未消费的全部替换。
+            ...(data.approvals ?? []).filter((row) => row.consumedAt !== undefined),
+            record(tag),
+          ],
+        },
+        value: tag,
+      }))
+
+    await Promise.all([write('ap-a'), write('ap-b')])
+    const live = store.getApprovals().filter((row) => row.consumedAt === undefined)
+    assert.equal(live.length, 1, `并发后只该有一条未消费记录，实际 ${live.length} 条`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('transact 的 abort 不写盘、不改内存（v0.2.8）', async () => {
+  // `mutate` 无法表达「拒绝」：它只能返回下一份文档，想说「不」就只能抛错，而抛错
+  // 会被 store 记成一次写盘失败（dirty），于是页面显示「状态写不进去」——一个本来
+  // 只是「你看到的内容已经过期」的正常结果，被渲染成了磁盘故障。
+  // `transact` 的 abort 是一次干净的否决：文件不动、内存不动、dirty 不变。
+  const dir = mkdtempSync(join(tmpdir(), 'dsd-transact-abort-'))
+  try {
+    const store = new DebateStore({ dir })
+    await store.ready()
+    await store.mutate((data) => ({ ...data, security: [] }))
+    const before = readFileSync(join(dir, 'state.json'), 'utf8')
+
+    const outcome = await store.transact(() => ({ abort: 'refused' as const }))
+    assert.equal('aborted' in outcome, true)
+    assert.equal((outcome as { value: string }).value, 'refused')
+
+    const after = readFileSync(join(dir, 'state.json'), 'utf8')
+    assert.equal(after, before, 'abort 不得改动磁盘')
+    assert.equal(store.hasUnsavedChanges, false, 'abort 不是写盘失败，不该标 dirty')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('transact 的 commit 同时带回持久化结果与裁决（v0.2.8）', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsd-transact-commit-'))
+  try {
+    const store = new DebateStore({ dir })
+    await store.ready()
+    const outcome = await store.transact((data) => ({
+      commit: { ...data, security: [] },
+      value: { status: 200 as const, body: { approved: true } },
+    }))
+    assert.equal('committed' in outcome, true)
+    const value = (outcome as { value: { status: number } }).value
+    assert.equal(value.status, 200, 'commit 的 value 必须原样交还调用方')
+    JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
