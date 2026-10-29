@@ -52,6 +52,8 @@ const INCLUDE = [
   // Same for v0.2.9. Listed explicitly rather than shipping all of `docs/`: the
   // historical screenshots there are megabytes of material no installed user opens.
   'docs/v0.2.9-acceptance.md',
+  // And v0.2.10 (the cover replacement).
+  'docs/v0.2.10-acceptance.md',
 ]
 const INCLUDE_DIRS = ['lib', 'client']
 

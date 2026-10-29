@@ -3,13 +3,13 @@
 <p align="center">
   <img
     src="docs/images/ai-debate-cover.png"
-    alt="AI代吵架：黑发主人与白发 AI 助手的动漫项目插画 —— 主人双手抱胸神情从容，白发 Q 版 AI 助手戴着印有 AI 标识的耳机、周身缠绕蓝色闪电指向前方激烈争辩"
+    alt="AI代吵架项目封面：黑发女主人身穿黑金色服装双手抱胸，白发 AI 小女孩佩戴蓝色科技耳机、指向前方激烈辩论"
     width="420"
   />
 </p>
 
 <p align="center">
-  <em>主人保持从容，AI 助手负责把话讲清楚。</em>
+  <em>主人负责优雅，AI 负责接话。</em>
 </p>
 
 一个 DSH 插件：读取百度贴吧的帖子与楼中楼，还原主人和对手的争论，按选定人格起草接话，**经主人确认后**才发表。
@@ -146,17 +146,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.9
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.10
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.9.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.10.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.9.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.10.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
