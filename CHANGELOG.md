@@ -2,6 +2,137 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.7] — 2026-10-29
+
+状态一致性、批准快照、微博只读。**核心变化：两个 store 不再互相覆盖，批准必须
+绑定主人看到的那一条。**
+
+这一版没有重写采集/分析/生成/去重/发表，没有删除任何已有防护，也没有为了兼容
+旧客户端留下一条无快照的批准入口。
+
+### 一、状态一致性：丢失更新（P0）
+
+**缺陷**：`buildRuntime()` 里 `new DebateStore(...)`，而 `currentRuntime()` 在配置或
+凭据变化时会重新调用 `buildRuntime()`。于是同一个进程里同时存在两个指向同一个
+`state.json` 的 store，各自持有一份私有文档。谁后写，谁就覆盖掉对方刚加的东西。
+
+丢掉的正好是最不能丢的两种记录：
+
+- `confirmed` 去重行 —— 丢了就意味着**可能重复发帖**；
+- 批准记录 —— 丢了要么让真实批准失效，要么让旧批准看起来仍然有效。
+
+**复现**（`test/v027-multi-store-loss.test.ts`，修复前三条全部失败）：
+
+```
+✖ 两个 store 交错写同一文件，后写的覆盖先写的       actual: ['evt-from-b']
+✖ 两个 store 交错写去重台账，confirmed 记录被覆盖   actual: false
+✖ 批准记录被另一个实例的写入冲掉                    actual: false
+```
+
+**修法三层**，按「优先单一权威写入者」的要求：
+
+1. **进程内只有一个 store**。`buildRuntime` 新增 `store` 注入点，`apply()` 用一个
+   `storeFor(config)` 惰性创建并复用，重建 runtime 时把同一个实例递过去。`storeDir`
+   变了才换库——那是另一个数据库，不是重新绑定。
+2. **跨进程用文件锁**。`mutate` 现在在**锁内**重新读盘、合并、再写：
+   `open(path, 'wx')` 原子创建，超时即抛错而不是无锁写入；锁文件记 `pid` 与时间戳，
+   持有者已死才由 rename 抢占（先 rename 再 unlink，避免两个抢锁者互删）。
+   `lockTimeoutMs` 默认 5000。
+3. **脏数据不被读操作洗白**。`refreshFromDisk()` 在 `dirty` 为真时**直接返回**：
+   磁盘此刻比内存旧，用它覆盖内存会丢掉那条「写不进去」的记录，然后调用方会看到
+   「没有会话」「没有去重行」并据此做出错误决定。`dirty` 只由成功写入清除。
+
+另外发布路径在决策前 `refreshFromDisk()`：所有「已经发过」「上次没结果」「额度用完了」
+都是关于**持久流水账**的陈述，从缓存里读只有在自己是唯一写入者时才成立。
+
+**没有做的事**：没有用「定时读文件」替代并发保护（任务书明确禁止），也没有在锁失败
+时静默忽略写入——拿不到锁就抛 `write_failed`，脏标记置位，发布被拒。
+
+### 二、批准快照：主人批准的是他看到的那一条（P0）
+
+**缺陷**：`POST /approve` 只接受 `{sessionId, candidateId}`，服务端把记录绑到
+**请求时刻存储里的候选**。一个十秒没刷新的页面，可以让主人批准一条他没看过的正文；
+记录本身完全自洽，下游无从发现。
+
+`checkReassessment` 也是同一类问题：`requested === undefined` 时直接 `{ ok: true }`，
+等于「不说明看到什么」反而比「说明」更容易通过。
+
+**修法**：
+
+- `PendingApprovalView` 新增 `assessmentFingerprint` 与 **`expected`** 整块快照
+  （sessionId / candidateId / candidateVersion / platform / targetPostId /
+  publishingAccount / textHash / assessmentFingerprint），全部是 Host 自己的数据；
+- 客户端 `approve()` 原样回传，页面**不计算**任何一项；
+- 服务端 `readExpectation` 校验形状（缺 → `snapshot_required` / `snapshot_incomplete`），
+  `checkExpectation` 逐字段比对（任何漂移 → `409 stale_candidate`，并指名是哪一项）；
+- 没有 `expected` 的请求**一律拒绝**，不留兼容通道；
+- 没有快照的行照常列出但按钮禁用并写明原因——隐藏它会让「读不到」看起来像「没有」。
+
+新增 16 项测试覆盖：不带快照、缺字段、`candidateVersion` 是字符串、快照与请求串了、
+正文/目标/账号/版本/评估/平台六种漂移、完整一致时通过、候选被重新生成后旧快照失效。
+
+### 三、待批准列表刷新（P1）
+
+`setTab('approve')` 现在会重新读取。这是**唯一**会因为别处的工作而变化的一栏——
+Agent 在另一个会话里生成候选——所以页面加载时读的那份，到主人看的时候已经是旧的了。
+
+新增刷新按钮与四态显示：`loading` / `failed` / 空 / 有待批准。**读取失败不显示成空列表**：
+「没有待批准」和「读失败了」对主人的含义完全不同。刷新走 `install()`，未保存的普通配置
+草稿不会被丢弃（只有服务端值已相同的草稿才会被清掉）。
+
+### 四、微博只读接入（P1）
+
+**先说没有做到的**：没有取得微博开放平台授权，从未对线上接口发过请求，因此
+**没有 OAuth 客户端、没有接口路径、没有 scope 字符串**。编一份看起来能跑的调用代码，
+是这一版最不该做的事。
+
+**做到的**（可离线验证，且是最容易错的部分）：
+
+- `src/platforms/weibo/url.ts`：五种链接形状；`threadId` 一律规范化为 **numeric mid**；
+  base62 ↔ numeric mid 双向转换（微博按从右每 4 位分组的 base62 编码）。
+  一个 base62 显示 id 与一个 numeric mid 若被当成两条微博，pipeline 会安静地读错帖子。
+- `src/platforms/weibo/conversation.ts`：投影到 `ConversationGraph`。**不伪造楼层号**
+  （`displayIndex` 从不出现在微博节点上）。`contains` 是 stated；`replies_to` 平台给了
+  评论 id 才是 stated，只给昵称则是 `inferred` 并写明依据；昵称重名时不猜，写进
+  `coverage.issues`；**转发是独立节点 + `reposts` 边，不是父子回复**；引用与回复分开。
+- `src/platforms/weibo/provider.ts`：注册进注册中心，链接能被正确识别（不再是「未知链接
+  回落到贴吧」），能力矩阵**没有任何一行是 `supported` 或 `unverified`**，每个网络方法
+  抛可识别的 `WeiboNotAuthorisedError` 而不是返回空数组（空数组会让「读不到」和
+  「本来就没有」无法区分）。
+
+**顺带修掉一个会撒谎的显示**：`describePlatforms` 原来对任何已注册 provider 都写
+`implemented: true`。微博一注册，设置页就会把它画成绿色「已实现」——而它一个请求都发不出去。
+现在 `implemented` 由能力矩阵推导（存在 `supported`/`unverified` 才算），并在注册但未实现时
+把 manifest 的研究阶段与前置条件合并进同一行。
+
+### 五、补齐两条覆盖缺口
+
+v0.2.6 的 CHANGELOG 里记了「会话跨重启恢复平台」「适配器按配置指纹重建」两项**行为正确
+但没有测试**——是我用临时脚本实测的。临时脚本不是回归测试：它不在 CI 里，下一个人改动时
+没有任何东西会失败。现在补进 `test/v027-restart-and-rebuild.test.ts`（6 项）。
+
+顺带说明一个测试自身的问题：第一版夹具让 `createAdapter` 每次返回**同一个** adapter 实例，
+于是 `assert.notEqual(before, after)` 在重建成功时也成立不了。夹具改成每次新建实例后，
+断言才有意义——这类「测试永远绿」的写法比没有测试更糟。
+
+### 六、测试
+
+**751 项全绿**，Node 24.22.1 与 **Node 22.18.0** 各自实测（两版都 751/751）。
+`node scripts/verify.mjs` 全流程通过：类型检查、全部测试、打包、裸目录安装验证。
+
+新增 7 个测试文件，56 项：多 store 丢失更新 3、批准快照 16、重启与重建 6、
+平台诚实性 4、微博 URL 11、微博对话图 12、微博 provider 11。
+
+### 未验证
+
+- **微博**：任何网络能力都未验证，也没有可验证的凭据。能力矩阵如实反映这一点。
+- **贴吧真实发帖**：本机对 `tieba.baidu.com` 持续 403（「百度安全验证」），未绕过。
+  `comment.publish` 仍是 `unverified`。
+- **Windows 与 Linux 的文件锁行为**：只在 Windows 上实测过。锁的实现只用了
+  `open(..., 'wx')` / `rename` / `unlink` / `process.kill(pid, 0)` 这些跨平台语义，
+  但没有在 Linux 上跑过，因此**不能声称双平台已验证**。
+- **远端 GitHub Actions**：本机无 git/token，推不上去，不能声称远端 CI 全绿。
+
 ## [0.2.6] — 2026-10-29
 
 跨平台回落的最后一处「其实还是单平台」。**核心变化：`runtime.adapter` 不再回答

@@ -15,6 +15,7 @@
  */
 import { Config, DEFAULT_CONFIG, resolveConfig } from './config.js';
 import { loggerOf, type PluginContext } from './host.js';
+import { DebateStore } from './store.js';
 import { type Runtime } from './runtime.js';
 import { PlatformRegistry } from './platforms/registry.js';
 /** Stable Loader identity; matches the row id in `cordis.patch.yml`. */
@@ -47,6 +48,23 @@ export declare function buildRuntime(resolve: () => ReturnType<typeof resolveCon
      * its own namespace.
      */
     resolveCredential?: (platform: string, ref: string) => Promise<string | undefined>;
+    /**
+     * Share an existing store instead of opening the file again.
+     *
+     * ## Why this exists (v0.2.7)
+     *
+     * `buildRuntime` is called on every config or credential change, and each call
+     * used to construct its own `DebateStore`. Two objects then pointed at the same
+     * `state.json` and each held a private copy of the document, so whichever wrote
+     * second overwrote whatever the first had added — including `confirmed` dedupe
+     * rows (the double-post guard) and approval records (the publish authorisation).
+     *
+     * The single-writer rule fixes that at the source: within one process there is
+     * exactly one store per directory, and a rebuild hands the new runtime the
+     * existing instance. Cross-process writers are handled separately by the
+     * advisory lock in `mutate`.
+     */
+    store?: DebateStore;
 }): Runtime;
 /**
  * Mount the plugin.

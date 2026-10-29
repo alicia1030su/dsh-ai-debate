@@ -292,6 +292,13 @@ window.__ModuleLoader__.load({
       approveVerdict: '安全判定',
       approveReviewNote: '这条候选被标记为「需要人工确认」，必须由你批准后才能发表。',
       approveAllowNote: '这条候选通过了自动检查；当前是人工审核模式，同样需要你批准。',
+      approveNotSnapshotted: '无法批准：缺少快照',
+      approveRefresh: '刷新候选',
+      approveRefreshing: '读取中…',
+      approveLoading: '正在读取待批准候选…',
+      approveLoadFailed: '读取待批准候选失败：{reason}',
+      approveEmpty: '当前没有待批准候选。',
+      approveStale: '你看到的候选已经变了，已为你重新读取。请确认最新内容后再批准。',
 
       statusTitle: '运行状态',
       dshVersion: 'DSH 版本',
@@ -508,6 +515,13 @@ window.__ModuleLoader__.load({
       approveVerdict: 'Security verdict',
       approveReviewNote: 'This candidate is flagged "needs a human"; it cannot be published until you approve it.',
       approveAllowNote: 'This candidate passed the automatic checks. Review mode is manual, so it still needs your approval.',
+      approveNotSnapshotted: 'Cannot approve: no snapshot',
+      approveRefresh: 'Reload candidates',
+      approveRefreshing: 'Reading…',
+      approveLoading: 'Reading candidates awaiting approval…',
+      approveLoadFailed: 'Could not read candidates awaiting approval: {reason}',
+      approveEmpty: 'No candidate is waiting for approval.',
+      approveStale: 'The candidate you were looking at has changed. It has been reloaded — check it again before approving.',
 
       statusTitle: 'Runtime',
       dshVersion: 'DSH version',
@@ -777,6 +791,17 @@ window.__ModuleLoader__.load({
         this.probes = {}
         this.status = null
         this.previews = null
+        /**
+         * Progress of the approval-list read, kept apart from `failed`.
+         *
+         * `failed` is about the whole configuration document. The approval list has
+         * its own three-way answer — `idle` (never read / not applicable),
+         * `loading`, `ready`, `failed` — and collapsing any of them into "empty
+         * list" is the bug this exists to prevent: an owner who reads "nothing
+         * waiting" when the read actually failed will conclude the agent has not
+         * generated anything and go looking in the wrong place.
+         */
+        this.approveState = { state: 'idle' }
         this.listeners = new Set()
         this.store = createSnapshotStore(this.projection())
       }
@@ -818,6 +843,7 @@ window.__ModuleLoader__.load({
           probes: this.probes,
           status: this.status,
           previews: this.previews,
+          approveState: this.approveState,
         }
       }
 
@@ -873,8 +899,47 @@ window.__ModuleLoader__.load({
         this.publish()
       }
 
+      /**
+       * Open one section.
+       *
+       * Switching to the approval section re-reads the Host (v0.2.7). The approval
+       * list is the one thing on this page that changes because of work happening
+       * *elsewhere* — the agent generates a candidate in a different conversation —
+       * so a list read at page load is exactly the wrong list by the time the owner
+       * looks at it. Every other section shows configuration, which only this page
+       * can change.
+       *
+       * The re-read is fire-and-forget on purpose: `setTab` stays synchronous so the
+       * tab strip responds instantly, and the section renders its own loading state
+       * while `approveState` says `loading`. Staged edits are preserved because
+       * `install` only drops a draft whose value the server already matches.
+       */
       setTab(tab) {
         this.tab = tab
+        this.publish()
+        if (tab === 'approve') this.refreshApprovals()
+      }
+
+      /**
+       * Re-read the served view for the approval list.
+       *
+       * Distinct from `load()` only in that it reports its own progress, so the
+       * section can tell "still reading" from "read, empty" from "read failed" —
+       * three states that must never collapse into an empty list, because the last
+       * two look identical to a button that simply has nothing to show.
+       */
+      async refreshApprovals() {
+        this.approveState = { state: 'loading' }
+        this.publish()
+        try {
+          this.install(normalizeView(await callJson(ROUTE_SETTINGS)))
+          this.approveState = { state: 'ready' }
+        } catch (error) {
+          this.approveState = {
+            state: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+          }
+        }
         this.publish()
       }
 
@@ -1035,14 +1100,22 @@ window.__ModuleLoader__.load({
        * showed "approved" before the write landed would teach the owner to trust a
        * record that may not exist.
        */
-      async approve(sessionId, candidateId) {
+      async approve(sessionId, candidateId, expected) {
         const key = `approve:${sessionId}:${candidateId}`
         this.probes = { ...this.probes, [key]: { state: 'running' } }
         this.publish()
         try {
           const result = await callJson(ROUTE_APPROVE, {
             method: 'POST',
-            body: JSON.stringify({ sessionId, candidateId }),
+            // v0.2.7: the expectation travels with the request.
+            //
+            // It is the Host's own data, echoed back unmodified — not something this
+            // page computes. That is what lets the Host prove the owner is approving
+            // the candidate currently stored rather than one this tab remembers. A
+            // request without it is refused with `snapshot_required`, deliberately:
+            // keeping a snapshotless path "for old clients" would keep the hole open
+            // for anything that can POST.
+            body: JSON.stringify({ sessionId, candidateId, expected }),
           })
           this.probes = { ...this.probes, [key]: { state: 'done', result } }
           this.publish()
@@ -2222,13 +2295,51 @@ window.__ModuleLoader__.load({
       const [outcome, setOutcome] = useState(null)
 
       const rows = Array.isArray(pending) ? pending : []
+      const read = state.approveState || { state: 'idle' }
+      const reading = read.state === 'loading'
 
       const header = h(
         'div',
         { className: 'dsd-sect-head' },
         h('span', { className: 'dsd-sect-title', style: { margin: 0 } }, t('approveTitle')),
         h('span', { className: 'dsd-badge' }, String(rows.length)),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsd-btn',
+            disabled: reading,
+            onClick: () => store.refreshApprovals(),
+          },
+          reading ? t('approveRefreshing') : t('approveRefresh'),
+        ),
       )
+
+      // Order matters below: the read state is checked *before* the row count.
+      // "Reading", "failed" and "genuinely empty" all have zero rows, and telling
+      // the owner "no candidate is waiting" when the read blew up is the failure
+      // mode this section is required not to have.
+      if (read.state === 'failed') {
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          header,
+          h(
+            'p',
+            { className: 'dsd-hint dsd-hint-error', role: 'status' },
+            t('approveLoadFailed').replace('{reason}', read.reason || t('unavailable')),
+          ),
+        )
+      }
+
+      if (reading && rows.length === 0) {
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          header,
+          h('p', { className: 'dsd-hint', role: 'status' }, t('approveLoading')),
+        )
+      }
 
       if (!Array.isArray(pending)) {
         // A Host that cannot report the list must not render as "nothing waiting":
@@ -2254,7 +2365,7 @@ window.__ModuleLoader__.load({
         const key = row.candidateId
         setBusy(key)
         setOutcome(null)
-        Promise.resolve(store.approve(row.sessionId, row.candidateId)).then(
+        Promise.resolve(store.approve(row.sessionId, row.candidateId, row.expected)).then(
           (result) => {
             setBusy('')
             // Re-read so the row disappears for the right reason: the Host now holds a
@@ -2264,7 +2375,12 @@ window.__ModuleLoader__.load({
           },
           (error) => {
             setBusy('')
-            setOutcome({ ok: false, error: error instanceof Error ? error.message : String(error) })
+            const message = error instanceof Error ? error.message : String(error)
+            // `stale_candidate` means the page is behind the store. Re-read now so the
+            // row the owner is looking at is refreshed before they try again; leaving
+            // a stale body on screen after telling them to refresh would be cruel.
+            if (/stale_candidate|已经变了|刷新设置页/.test(message)) store.load()
+            setOutcome({ ok: false, error: message })
           },
         )
       }
@@ -2308,16 +2424,27 @@ window.__ModuleLoader__.load({
               // containing newlines is shown as it would be posted.
               h('p', { className: 'dsd-approve-text' }, h('strong', null, `${t('approveCandidateText')}：`), row.text),
               h('p', { className: 'dsd-approve-target' }, `${t('approveTarget')}：${row.targetPostId}`),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  className: 'dsd-btn',
-                  disabled: busy === row.candidateId,
-                  onClick: () => onClickApprove(row),
-                },
-                busy === row.candidateId ? t('approveWorking') : t('approveAction'),
-              ),
+              // A row the Host could not snapshot (no account bound, or an old
+              // candidate with no assessment) is listed but not approvable. Showing
+              // it disabled with the reason is honest; hiding it would look like
+              // "nothing is waiting" and sending a broken button would look like the
+              // click did nothing.
+              row.expected
+                ? h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsd-btn',
+                      disabled: busy === row.candidateId,
+                      onClick: () => onClickApprove(row),
+                    },
+                    busy === row.candidateId ? t('approveWorking') : t('approveAction'),
+                  )
+                : h(
+                    'button',
+                    { type: 'button', className: 'dsd-btn', disabled: true },
+                    t('approveNotSnapshotted'),
+                  ),
             ),
           ),
         ),

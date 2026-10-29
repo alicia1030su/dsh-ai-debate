@@ -305,6 +305,15 @@ export interface StoreOptions {
      * count so a user sees the cap approaching instead of discovering it as a re-post.
      */
     readonly maxDedupeRows?: number;
+    /**
+     * How long to wait for the cross-process write lock before giving up.
+     *
+     * Defaults to 5000 ms. A store whose lock cannot be taken in that window throws
+     * rather than writing anyway: an unlocked write is how one instance erases
+     * another's approval or publish record, and a visible failure is strictly better
+     * than a silent lost update.
+     */
+    readonly lockTimeoutMs?: number;
 }
 /**
  * The persisted store.
@@ -349,6 +358,28 @@ export declare class DebateStore {
     /** Load once; safe to call from every entry point. */
     ready(): Promise<void>;
     /**
+     * Re-read the document from disk before a decision that depends on it.
+     *
+     * ## Why a reader needs this at all
+     *
+     * `mutate` now merges against the on-disk document, so writes are safe. Reads are
+     * a different problem: this instance's `data` is a cache, and another writer may
+     * have replaced the file since it was last refreshed. A reader that decides
+     * "this trigger has no dedupe record, so publish it" from a stale cache is exactly
+     * the double-post the ledger exists to prevent — the record it needed was written
+     * by the other instance a moment earlier.
+     *
+     * Callers use it at the few points where staleness changes behaviour: before
+     * claiming a dedupe key, before consuming an approval, and before composing the
+     * publish decision. Ordinary UI reads do not need it and stay cheap.
+     *
+     * Failures are swallowed on purpose. A refresh is an *improvement* over the
+     * cached view, not a precondition: a transient read error must not make an
+     * otherwise-working status page fail. The cached document is still what the
+     * previous successful read observed.
+     */
+    refreshFromDisk(): Promise<void>;
+    /**
      * Load from disk.
      *
      * A missing file is a normal first run. A file that exists but fails validation
@@ -365,12 +396,46 @@ export declare class DebateStore {
     /**
      * Apply a change atomically and persist it.
      *
-     * The change is applied in memory, written, and only then returned. If the
-     * write fails the in-memory document stays changed (so the caller can inspect
-     * what it meant to do) but the store is marked dirty and the error is thrown —
-     * the caller must not treat a rejected promise as a saved record.
+     * ## Why this re-reads under the lock (v0.2.7)
+     *
+     * A `change` function receives the *current* document and returns the next one.
+     * Applying it to whatever this instance happens to hold in memory is only correct
+     * while this instance is the sole writer. It is not: `buildRuntime()` constructs a
+     * store, and `currentRuntime()` constructs another one on every config or
+     * credential change — same directory, same `state.json`. Any operation still
+     * holding the older instance then writes a document that was loaded *before* the
+     * newer instance's writes, silently discarding them.
+     *
+     * That loss is not cosmetic. The records it eats are exactly the ones that must
+     * survive: a `confirmed` dedupe row means "this reply was already sent" (losing it
+     * re-posts), and an approval record means "the owner authorised this" (losing it
+     * either blocks a real approval or, if a stale one survived, authorises the wrong
+     * thing).
+     *
+     * So the change is applied to the document **as it is on disk right now**, inside
+     * an advisory lock, rather than to this instance's private copy. The in-memory
+     * copy is then replaced with the merged result, which also refreshes it for
+     * readers.
+     *
+     * The `change` function must therefore be *pure with respect to the passed
+     * document*: it may only look at its argument, never at `this.data`. Every caller
+     * already is, because that is what the parameter is for.
+     *
+     * @param change a function from the current document to the next one
+     * @returns the persisted next document
+     * @throws StoreError when the lock cannot be taken or the write fails; the caller
+     *   must not treat a rejected promise as a saved record
      */
     mutate(change: (data: StoreData) => StoreData): Promise<StoreData>;
+    /**
+     * The document currently on disk, or an empty one when the file is absent.
+     *
+     * Deliberately does **not** fall back to `this.data` on a parse error: writing a
+     * merged document over a file that failed to parse would destroy whatever the
+     * user could still have recovered. A corrupt file inside a write is fatal here,
+     * and the original bytes are left alone.
+     */
+    private readCurrentDocument;
     /**
      * Write to disk via a temp file plus rename.
      *

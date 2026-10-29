@@ -86,8 +86,10 @@ export function isApprovable(candidate: ApprovableCandidate): Approvable {
  * Whether the fingerprint a caller wants to approve against is still current.
  *
  * A caller that does not send one is asking to approve *now*, against whatever the
- * stored assessment is — the common case, and safe: the binding records that exact
- * fingerprint, so a later re-assessment invalidates the record normally.
+ * stored assessment is. Since v0.2.7 the approve route never takes that path — it
+ * requires a snapshot — but this function keeps accepting `undefined` because it
+ * answers a narrower question ("is this fingerprint current?") and other callers
+ * legitimately have nothing to compare.
  *
  * A caller that does send one is asserting which assessment they are looking at. If
  * that is not the stored one, their page is stale and the approval they are about to
@@ -117,6 +119,150 @@ export function checkReassessment(
   }
   return { ok: true }
 }
+
+/** The snapshot a page must send back when it asks to approve one candidate. */
+export interface ApprovalExpectation {
+  readonly sessionId: string
+  readonly candidateId: string
+  readonly candidateVersion: number
+  readonly platform: string
+  readonly targetPostId: string
+  readonly publishingAccount: string
+  /** Hash of the body the page displayed. */
+  readonly textHash: string
+  readonly assessmentFingerprint: string
+}
+
+/** What the store actually holds for one candidate right now. */
+export interface ApprovalActual {
+  readonly sessionId: string
+  readonly candidateId: string
+  readonly candidateVersion: number
+  readonly platform: string
+  readonly targetPostId: string
+  readonly publishingAccount: string
+  readonly textHash: string
+  readonly assessmentFingerprint: string
+}
+
+/** The fields a caller must supply; kept separate from values so the error names them. */
+const EXPECTATION_KEYS = [
+  'sessionId',
+  'candidateId',
+  'candidateVersion',
+  'platform',
+  'targetPostId',
+  'publishingAccount',
+  'textHash',
+  'assessmentFingerprint',
+] as const
+
+export type ExpectationCheck =
+  | { readonly ok: true; readonly expectation: ApprovalExpectation }
+  | {
+      readonly ok: false
+      readonly status: 400 | 409
+      readonly code: 'snapshot_required' | 'snapshot_incomplete' | 'stale_candidate'
+      readonly reason: string
+    }
+
+/**
+ * Validate the raw `expected` block from a request body.
+ *
+ * Split from the comparison so the two failure kinds stay distinguishable: a request
+ * that never had a snapshot is a *client bug* (400), while a snapshot that no longer
+ * matches is a *race the owner must see* (409). Collapsing them would let a broken
+ * page look like a stale one, and the instruction to the user is different.
+ *
+ * @param raw the `expected` field, unvalidated, from the request body
+ * @param sessionId the id the request also named at top level
+ * @param candidateId the id the request also named at top level
+ */
+export function readExpectation(
+  raw: unknown,
+  sessionId: string,
+  candidateId: string,
+): ExpectationCheck {
+  if (raw === undefined || raw === null || typeof raw !== 'object') {
+    return {
+      ok: false,
+      status: 400,
+      code: 'snapshot_required',
+      reason:
+        '批准请求必须携带预期快照（expected）。这是为了确保你批准的是页面上看到的那一条候选；' +
+        '请刷新设置页后重新批准。',
+    }
+  }
+  const source = raw as Record<string, unknown>
+  const missing = EXPECTATION_KEYS.filter((key) => {
+    const value = source[key]
+    if (key === 'candidateVersion') return typeof value !== 'number' || !Number.isFinite(value)
+    return typeof value !== 'string' || value.trim() === ''
+  })
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      status: 400,
+      code: 'snapshot_incomplete',
+      reason: `预期快照缺少字段：${missing.join('、')}。请刷新设置页后重新批准。`,
+    }
+  }
+
+  const expectation: ApprovalExpectation = {
+    sessionId: String(source['sessionId']).trim(),
+    candidateId: String(source['candidateId']).trim(),
+    candidateVersion: source['candidateVersion'] as number,
+    platform: String(source['platform']).trim(),
+    targetPostId: String(source['targetPostId']).trim(),
+    publishingAccount: String(source['publishingAccount']).trim(),
+    textHash: String(source['textHash']).trim(),
+    assessmentFingerprint: String(source['assessmentFingerprint']).trim(),
+  }
+
+  // The snapshot has to describe the candidate the request names. A body that says
+  // "approve c1" with c2's snapshot is either a buggy page or a probe; either way
+  // there is nothing to compare it against honestly.
+  if (expectation.sessionId !== sessionId || expectation.candidateId !== candidateId) {
+    return {
+      ok: false,
+      status: 409,
+      code: 'stale_candidate',
+      reason: '预期快照与请求的候选不一致，可能是页面数据串了。请刷新设置页后重新批准。',
+    }
+  }
+  return { ok: true, expectation }
+}
+
+/**
+ * Compare the page's snapshot with what the store holds.
+ *
+ * Every field the binding uses is compared, so a change to any of them — a
+ * regenerated body, a re-targeted reply, a switched account, a re-assessed
+ * candidate — invalidates the approval instead of authorising something the owner
+ * did not read. Reported as one code because the remedy is the same: re-read, look
+ * again, approve again.
+ */
+export function checkExpectation(
+  expectation: ApprovalExpectation,
+  actual: ApprovalActual,
+): { readonly ok: true } | { readonly ok: false; readonly code: 'stale_candidate'; readonly reason: string } {
+  const drifted: string[] = []
+  if (expectation.platform !== actual.platform) drifted.push('平台')
+  if (expectation.targetPostId !== actual.targetPostId) drifted.push('回复目标')
+  if (expectation.publishingAccount !== actual.publishingAccount) drifted.push('发帖账号')
+  if (expectation.candidateVersion !== actual.candidateVersion) drifted.push('候选版本')
+  if (expectation.textHash !== actual.textHash) drifted.push('正文内容')
+  if (expectation.assessmentFingerprint !== actual.assessmentFingerprint) drifted.push('安全评估')
+  if (drifted.length === 0) return { ok: true }
+  return {
+    ok: false,
+    code: 'stale_candidate',
+    reason:
+      `你看到的候选已经变了（${drifted.join('、')}）。` +
+      '为了避免批准一条你没看过的回复，这次批准被拒绝。请刷新设置页，确认最新内容后再批准。',
+  }
+}
+
 
 /** Narrow a stored candidate to the fields {@link isApprovable} reads. */
 export function approvableOf(candidate: StoredCandidate): ApprovableCandidate {

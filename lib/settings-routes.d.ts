@@ -199,6 +199,43 @@ export interface PendingApprovalView {
     readonly createdAt: string;
     /** Why this needs a human, already formatted for display. */
     readonly reason: string;
+    /**
+     * The fingerprint of the security assessment shown with this row.
+     *
+     * Sent back on approval so the Host can prove it is minting a record for the
+     * assessment the owner actually saw (v0.2.7). Without it, the approval route had
+     * no way to tell "the page is current" from "the page is three regenerations old"
+     * and silently bound the record to whatever was stored *now*.
+     */
+    readonly assessmentFingerprint?: string;
+    /**
+     * The whole expected snapshot, echoed back verbatim on approval.
+     *
+     * One field rather than eight so a new bound field (a publishing account, a
+     * content hash) becomes a change here and in `bindingOf` only — not in the client,
+     * the route and every test. It is data the page was given, never data it computed.
+     */
+    readonly expected?: PendingApprovalExpectation;
+}
+/**
+ * What the page promises it is showing when it asks for an approval.
+ *
+ * Every field is a value the Host sent in the `PendingApprovalView`, so a mismatch
+ * means the page and the store disagree — the owner is looking at something that no
+ * longer exists. The route answers `409 stale_candidate` and asks for a re-read
+ * rather than binding an approval to content nobody reviewed.
+ */
+export interface PendingApprovalExpectation {
+    readonly sessionId: string;
+    readonly candidateId: string;
+    readonly candidateVersion: number;
+    readonly platform: string;
+    readonly targetPostId: string;
+    /** The account that would post it; a switch invalidates the expectation. */
+    readonly publishingAccount: string;
+    /** Hash of the body the page displayed. */
+    readonly textHash: string;
+    readonly assessmentFingerprint: string;
 }
 /**
  * One platform, as the settings page shows it.

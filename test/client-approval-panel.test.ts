@@ -83,6 +83,19 @@ const PENDING = {
   verdict: 'review',
   createdAt: '2026-10-28T09:00:00.000Z',
   reason: '安全闸门把它标记为「需要人工确认」。',
+  assessmentFingerprint: 'fp-abc',
+  // v0.2.7: the Host sends the whole expectation and the page echoes it back. A row
+  // without it renders a disabled button rather than a request that would be refused.
+  expected: {
+    sessionId: 's-1',
+    candidateId: 's-1-c1',
+    candidateVersion: 2,
+    platform: 'tieba',
+    targetPostId: 'n5',
+    publishingAccount: '900',
+    textHash: 'a'.repeat(64),
+    assessmentFingerprint: 'fp-abc',
+  },
 }
 
 /** The payload a v0.2.5 Host sends. */
@@ -368,10 +381,14 @@ test('没有待批准候选时给的是「先生成一条」的指引', async ()
 // The click does the right thing
 // ---------------------------------------------------------------------------
 
-test('点「批准这一条」会 POST 到 /approve，并且只带 sessionId 与 candidateId', async () => {
-  // The request body is part of the security story: if the page sent the text or the
-  // account, a compromised page could approve a body it invented. The Host rebuilds the
-  // binding from storage, so the only correct request is the two ids.
+test('点「批准这一条」会 POST 到 /approve，并把页面看到的快照原样带上', async () => {
+  // The request body is part of the security story, in both directions.
+  //
+  // v0.2.5 sent only the two ids and the Host bound the approval to *whatever was
+  // stored at that moment*. That let a page which had not been reloaded approve a
+  // candidate the owner never read: the record was internally consistent, so
+  // nothing downstream could notice. v0.2.7 requires the expectation, and the page
+  // must echo the Host's own data rather than invent any of it.
   const bundle = loadBundle({
     settings: payload(),
     approve: { approved: true, approvalId: 'ap-1', expiresAt: '2026-10-28T09:30:00.000Z' },
@@ -395,10 +412,59 @@ test('点「批准这一条」会 POST 到 /approve，并且只带 sessionId 与
     const call = bundle.calls.find((entry) => entry.url.endsWith('/approve'))
     assert.ok(call !== undefined, '没有发出批准请求')
     assert.equal(call!.method, 'POST')
-    assert.deepEqual(JSON.parse(call!.body ?? '{}'), {
-      sessionId: 's-1',
-      candidateId: 's-1-c1',
-    })
+    const body = JSON.parse(call!.body ?? '{}') as {
+      sessionId?: string
+      candidateId?: string
+      expected?: Record<string, unknown>
+      text?: unknown
+      publishingAccount?: unknown
+    }
+    assert.equal(body.sessionId, 's-1')
+    assert.equal(body.candidateId, 's-1-c1')
+
+    // The expectation is required and must be the Host's data, field for field.
+    assert.ok(body.expected !== undefined, '请求必须带 expected 快照')
+    assert.deepEqual(body.expected, PENDING.expected)
+
+    // And it must not smuggle in anything the Host did not hand the page. The body
+    // is still just ids plus the echo: a page cannot assert its own text or account.
+    assert.equal(body.text, undefined, '页面不能自己编正文')
+    assert.equal(body.publishingAccount, undefined, '页面不能自己编发帖账号')
+  } finally {
+    view.unmount()
+  }
+})
+
+test('没有快照的候选：按钮禁用，不会发出一个注定被拒的请求', async () => {
+  // A row the Host could not snapshot (no AI account bound, or a pre-0.2.3 candidate
+  // with no assessment) is still listed so the owner can see it and read why. The
+  // failure this guards against is a *live* button that always fails: it looks like
+  // a bug in the plugin rather than a missing prerequisite.
+  const unsnapshot = { ...PENDING, expected: undefined }
+  const bundle = loadBundle({
+    settings: payload({ pendingApprovals: [unsnapshot] }),
+    approve: { approved: true, approvalId: 'ap-1' },
+  })
+  const view = mount(bundle.Card)
+  try {
+    await view.settle()
+    const tab = [...view.container.querySelectorAll('button')].find((button) =>
+      /发表授权|Authorisation/.test(textOf(button)),
+    )
+    ;(tab as HTMLButtonElement).click()
+    await view.settle()
+
+    const text = textOf(view.container)
+    assert.match(text, /无法批准|Cannot approve/, '要说明为什么不能批准')
+    const anyLiveApprove = [...view.container.querySelectorAll('button')].some(
+      (button) =>
+        /批准这一条|Approve this reply/.test(textOf(button)) &&
+        (button as HTMLButtonElement).disabled === false,
+    )
+    assert.equal(anyLiveApprove, false, '没有快照时不能留下一个可点的批准按钮')
+
+    const call = bundle.calls.find((entry) => entry.url.endsWith('/approve'))
+    assert.equal(call, undefined, '禁用状态下不应发出请求')
   } finally {
     view.unmount()
   }
@@ -501,8 +567,13 @@ test('批准进行中时按钮禁用并显示进行中文案，双击不会发�
   })
   try {
     await view.settle(20)
-    const button = view.container.querySelector('button') as HTMLButtonElement
-    assert.ok(button !== null, '找不到批准按钮')
+    // Not `querySelector('button')`: the section header also carries a "reload
+    // candidates" button since v0.2.7, and picking the first button would test that
+    // one instead of the approval control.
+    const button = [...view.container.querySelectorAll('button')].find(
+      (element) => (element as HTMLButtonElement).textContent === 'approveAction',
+    ) as HTMLButtonElement | undefined
+    assert.ok(button !== undefined, '找不到批准按钮')
 
     button.click()
     await view.settle(20)

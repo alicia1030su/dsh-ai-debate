@@ -134,17 +134,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.6
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.7
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.6.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.7.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.6.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.7.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -991,7 +991,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**687 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**751 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.21 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1045,7 +1045,14 @@ node scripts/pack.mjs
 | `test/client-approval-panel.test.ts` | 11 | **批准面板全链路**：Host JSON→fetch→normalizeView→store→React DOM；正文全文与换行必须显示；只 POST 两个 id；失败显示 Host 原因；进行中禁用；两个挂载面都到得了 |
 | `test/readback-integrity.test.ts` | 2 | **回读不全不得崩溃也不得假装核实**：平台返回的正文缺失时报告「无法核对内容」而非 `undefined.replace` 崩溃；发表状态如实为 `published`，`verified: false`；平台只调用一次，不会因此重试 |
 | `test/build-runtime-platforms.test.ts` | 7 | **真实入口的平台选择**：两个假平台注册进 `buildRuntime()` 后各自的链接造出各自的适配器、只拿到自己的设置、未知链接被拒；没有贴吧的部署里 `runtime.adapter` / `healthCheck` / `checkLogin` 落到已注册平台而不是抛「tieba 没有注册」；贴吧在场时默认平台仍是贴吧、与注册顺序无关；空注册中心给出可读错误 |
-| **合计** | **687** | |
+| `test/v027-multi-store-loss.test.ts` | 3 | **两个 store 共享一个 state.json 不得丢记录**：安全事件、`confirmed` 去重行、批准记录三类交错写入后都必须留在磁盘上（修复前三条全部失败） |
+| `test/v027-approval-snapshot.test.ts` | 16 | **批准必须绑定主人看到的那一条**：不带快照拒绝（`snapshot_required`）、缺字段点名（`snapshot_incomplete`）、正文/目标/账号/版本/评估/平台六种漂移各自 `stale_candidate`、完整一致时通过、候选被重新生成后旧快照失效 |
+| `test/v027-restart-and-rebuild.test.ts` | 6 | **跨重启与适配器重建**：会话在全新实例里仍带自己的平台、不会被改写成默认平台；适配器按配置指纹复用、配置变了必须重建、一个平台重建不影响另一个 |
+| `test/v027-platform-honesty.test.ts` | 4 | **平台区不许把「注册了」显示成「能用了」**：`implemented` 原样透传、未实现平台必须带前置条件、`permission_required` 不得渲染成已实现、平台区不含任何凭据值 |
+| `test/v027-weibo-url.test.ts` | 11 | **微博链接与 ID**：五种链接形状、垃圾输入不抛错、没有帖子 id 时拒绝而不是猜、base62 ↔ numeric mid 双向转换、同一微博两种写法归一到同一 threadId |
+| `test/v027-weibo-conversation.test.ts` | 12 | **微博结构投影到对话图**：不伪造楼层号、`contains` 是 stated、`replied_to` 平台给 id 才 stated / 只给昵称则 inferred、重名不猜、转发是独立节点与 `reposts` 边而不是父子回复、引用与回复分开 |
+| `test/v027-weibo-provider.test.ts` | 11 | **微博只读的诚实边界**：没有任何能力被声明成 `supported` 或 `unverified`、写能力等授权、艾特明确不可用、每个读方法抛可识别的授权错误而不是空数组、能力闸门 fail-closed |
+| **合计** | **751** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

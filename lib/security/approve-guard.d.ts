@@ -70,8 +70,10 @@ export declare function isApprovable(candidate: ApprovableCandidate): Approvable
  * Whether the fingerprint a caller wants to approve against is still current.
  *
  * A caller that does not send one is asking to approve *now*, against whatever the
- * stored assessment is — the common case, and safe: the binding records that exact
- * fingerprint, so a later re-assessment invalidates the record normally.
+ * stored assessment is. Since v0.2.7 the approve route never takes that path — it
+ * requires a snapshot — but this function keeps accepting `undefined` because it
+ * answers a narrower question ("is this fingerprint current?") and other callers
+ * legitimately have nothing to compare.
  *
  * A caller that does send one is asserting which assessment they are looking at. If
  * that is not the stored one, their page is stale and the approval they are about to
@@ -82,6 +84,67 @@ export declare function checkReassessment(candidate: ApprovableCandidate, reques
 } | {
     readonly ok: false;
     readonly code: 'fingerprint_stale';
+    readonly reason: string;
+};
+/** The snapshot a page must send back when it asks to approve one candidate. */
+export interface ApprovalExpectation {
+    readonly sessionId: string;
+    readonly candidateId: string;
+    readonly candidateVersion: number;
+    readonly platform: string;
+    readonly targetPostId: string;
+    readonly publishingAccount: string;
+    /** Hash of the body the page displayed. */
+    readonly textHash: string;
+    readonly assessmentFingerprint: string;
+}
+/** What the store actually holds for one candidate right now. */
+export interface ApprovalActual {
+    readonly sessionId: string;
+    readonly candidateId: string;
+    readonly candidateVersion: number;
+    readonly platform: string;
+    readonly targetPostId: string;
+    readonly publishingAccount: string;
+    readonly textHash: string;
+    readonly assessmentFingerprint: string;
+}
+export type ExpectationCheck = {
+    readonly ok: true;
+    readonly expectation: ApprovalExpectation;
+} | {
+    readonly ok: false;
+    readonly status: 400 | 409;
+    readonly code: 'snapshot_required' | 'snapshot_incomplete' | 'stale_candidate';
+    readonly reason: string;
+};
+/**
+ * Validate the raw `expected` block from a request body.
+ *
+ * Split from the comparison so the two failure kinds stay distinguishable: a request
+ * that never had a snapshot is a *client bug* (400), while a snapshot that no longer
+ * matches is a *race the owner must see* (409). Collapsing them would let a broken
+ * page look like a stale one, and the instruction to the user is different.
+ *
+ * @param raw the `expected` field, unvalidated, from the request body
+ * @param sessionId the id the request also named at top level
+ * @param candidateId the id the request also named at top level
+ */
+export declare function readExpectation(raw: unknown, sessionId: string, candidateId: string): ExpectationCheck;
+/**
+ * Compare the page's snapshot with what the store holds.
+ *
+ * Every field the binding uses is compared, so a change to any of them — a
+ * regenerated body, a re-targeted reply, a switched account, a re-assessed
+ * candidate — invalidates the approval instead of authorising something the owner
+ * did not read. Reported as one code because the remedy is the same: re-read, look
+ * again, approve again.
+ */
+export declare function checkExpectation(expectation: ApprovalExpectation, actual: ApprovalActual): {
+    readonly ok: true;
+} | {
+    readonly ok: false;
+    readonly code: 'stale_candidate';
     readonly reason: string;
 };
 /** Narrow a stored candidate to the fields {@link isApprovable} reads. */
