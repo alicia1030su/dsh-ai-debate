@@ -46,9 +46,31 @@ import { parseWeiboUrl, weiboCanHandleUrl } from './url.js'
 
 const PLATFORM: PlatformId = 'weibo'
 
-/** Why every row is what it is. One place, so the page and the docs cannot drift. */
-const AUTH_REASON =
-  '微博开放平台需要注册应用、开发者资质与显式 scope 授权；本构建没有这些凭据，也从未对线上接口发过请求。'
+/**
+ * Why the read rows say what they say (v0.2.11).
+ *
+ * Two separate facts, and the task book asks for them to stay separate:
+ *
+ * 1. **The CLI adapter exists.** `cli.ts` can detect the binary, discover commands,
+ *    parse JSON, classify failures, scrub credentials and enforce a timeout. That is
+ *    code, and it has tests.
+ * 2. **No read has ever run against the live platform.** This machine has no
+ *    `weibo-cli`, no developer qualification and no OAuth login. So none of the read
+ *    rows may say `supported`.
+ *
+ * `unverified` is exactly the state that means "implemented, never confirmed against a
+ * real account" — which is the truth for the read path as of this version, and it is a
+ * deliberate change from v0.2.10's blanket `permission_required`: the permission story
+ * is now concrete (a CLI login plus a service entitlement), not a hypothetical.
+ */
+const READ_REASON =
+  '微博只读接入走官方 weibo-cli。本机构建尚未安装 CLI、也没有开发者认证与 OAuth 登录，' +
+  '所以这条读取路径的代码已经存在但从未对真实接口执行过——状态是「已实现、未验证」，不是「可用」。'
+
+/** Why nothing can be written: no write scope, and the AI-content labelling rule. */
+const WRITE_REASON =
+  '微博的写能力需要评论写入授权，且平台要求对 AI 生成内容做显式标识；' +
+  '本版明确不开放微博真实发表。'
 
 function row(state: CapabilityDeclaration['state'], reason: string, extra: Partial<CapabilityDeclaration> = {}): CapabilityDeclaration {
   return { state, reason, ...extra }
@@ -57,47 +79,53 @@ function row(state: CapabilityDeclaration['state'], reason: string, extra: Parti
 /**
  * The capability matrix.
  *
- * Ordering of severity matters: nothing here is `supported`, because nothing here has
- * been exercised against the live platform. `unverified` is also deliberately absent —
- * that state means "code exists and would run, but no real account proved it", and
- * there is no code that would run.
+ * ## The four distinct states now in use
+ *
+ * - `unverified` — code exists (a CLI adapter plus projection), never run against the
+ *   platform. The honest label for every read row.
+ * - `permission_required` — nothing can be done from code alone: a developer
+ *   qualification and a service entitlement are required first.
+ * - `unavailable` — the platform genuinely does not expose it to third parties.
+ * - `degraded` — would work, but returns less than the platform has.
+ *
+ * Nothing is `supported`. That word has one meaning in this project — exercised against
+ * the real platform — and no Weibo call has been.
  */
 function describeCapabilities(): PlatformCapabilityMatrix {
   const capabilities: Record<CapabilityName, CapabilityDeclaration> = {
-    'thread.read': row('permission_required', `${AUTH_REASON}读取正文需要 statuses:read 一类的读取授权。`, {
-      requiredPermissions: ['微博开放平台的读取授权'],
+    'thread.read': row('unverified', `${READ_REASON}读取单条微博正文是第一步。`, {
+      requiredPermissions: ['weibo-cli OAuth 登录', '开发者认证 + 服务开通（体验或积分包）'],
+      limits: ['体验服务按接口限次（读取类通常 5 次/接口），正式服务按积分计费'],
     }),
-    'comment.list': row('permission_required', `${AUTH_REASON}读取评论需要评论读取权限。`, {
-      requiredPermissions: ['评论读取授权'],
+    'comment.list': row('unverified', `${READ_REASON}评论列表读取同样只到代码层。`, {
+      requiredPermissions: ['weibo-cli OAuth 登录', '服务开通'],
+      limits: ['体验服务读取类通常 5 次/接口'],
     }),
-    'comment.paginate': row('permission_required', `${AUTH_REASON}分页读取同样受读取权限与配额限制。`, {
-      requiredPermissions: ['评论读取授权'],
-      limits: ['微博接口配额按应用计算，分页会成倍放大请求数'],
+    'comment.paginate': row('unverified', `${READ_REASON}分页逻辑按官方 CLI 的 page/cursor 语义实现。`, {
+      requiredPermissions: ['weibo-cli OAuth 登录', '服务开通'],
+      limits: ['官方说明：关系类分页不是快照，total_number 不等于去重后可见条数；必须按 idstr 去重'],
     }),
-    'comment.nested': row('permission_required', `${AUTH_REASON}读取评论回复需要评论读取权限。`, {
-      requiredPermissions: ['评论读取授权'],
+    'comment.nested': row('unverified', `${READ_REASON}评论下的回复读取依赖同一条命令的回复参数。`, {
+      requiredPermissions: ['weibo-cli OAuth 登录', '服务开通'],
     }),
-    'comment.locate': row('permission_required', `${AUTH_REASON}按 id 定位单条评论需要评论读取权限。`, {
-      requiredPermissions: ['评论读取授权'],
+    'comment.locate': row('unverified', `${READ_REASON}按 id 定位单条评论依赖读取命令的筛选参数。`, {
+      requiredPermissions: ['weibo-cli OAuth 登录', '服务开通'],
     }),
-    'identity.verify': row('permission_required', `${AUTH_REASON}确认登录账号需要用户信息授权。`, {
-      requiredPermissions: ['用户信息读取授权'],
+    'identity.verify': row('unverified', '确认登录账号走 weibo-cli 的账号命令；本机未登录，故未验证。', {
+      requiredPermissions: ['weibo-cli OAuth 登录'],
     }),
-    'event.mentions': row('unavailable', '微博的艾特通知接口不对外开放给第三方应用读取；请让主人手动提供微博链接。'),
-    'comment.publish': row(
-      'permission_required',
-      `${AUTH_REASON}发表评论需要写权限，且平台对 AI 生成内容有标识要求。`,
-      { requiredPermissions: ['评论写入授权', 'AI 生成内容标识'], limits: ['未经授权时不会尝试任何发送'] },
-    ),
-    'comment.reply': row(
-      'permission_required',
-      `${AUTH_REASON}回复评论需要写权限，且平台对 AI 生成内容有标识要求。`,
-      { requiredPermissions: ['评论写入授权', 'AI 生成内容标识'] },
-    ),
-    'publish.verify': row('unavailable', '没有写入能力，回读验证无从谈起。'),
+    'event.mentions': row('unavailable', '微博的艾特通知不对外开放给第三方读取；请让主人手动提供微博链接。'),
+    'comment.publish': row('permission_required', `${WRITE_REASON}评论发表本版不开放。`, {
+      requiredPermissions: ['评论写入授权', 'AI 生成内容标识'],
+      limits: ['未经授权时不会尝试任何发送'],
+    }),
+    'comment.reply': row('permission_required', `${WRITE_REASON}回复评论本版同样不开放。`, {
+      requiredPermissions: ['评论写入授权', 'AI 生成内容标识'],
+    }),
+    'publish.verify': row('unavailable', `${WRITE_REASON}没有写入能力，回读验证无从谈起。`),
     'media.read': row('unavailable', '本构建不解析图片与视频内容，只保留它们的地址。'),
-    'user.profile': row('permission_required', `${AUTH_REASON}读取用户资料需要用户信息授权。`, {
-      requiredPermissions: ['用户信息读取授权'],
+    'user.profile': row('unverified', `${READ_REASON}作者资料读取走同一条 CLI 链路。`, {
+      requiredPermissions: ['weibo-cli OAuth 登录', '服务开通'],
     }),
   }
   return { platform: PLATFORM, declaredAt: new Date().toISOString(), capabilities }

@@ -37,12 +37,43 @@ test('没有任何能力被声明为 supported（没有真实验证就没有这�
   }
 })
 
-test('也没有任何能力被声明为 unverified（那意味着有能跑的代码）', () => {
-  // `unverified` means "the code exists and would run, nobody proved it against a
-  // real account". There is no network code here at all, so claiming `unverified`
-  // would be the same lie one step quieter.
-  for (const [name, row] of Object.entries(MATRIX.capabilities)) {
-    assert.notEqual(row.state, 'unverified', `${name} 不能是 unverified：没有可运行的发帖/读取实现`)
+test('读取能力是 unverified，写入能力不是（v0.2.11 起分开）', () => {
+  // ## Why this test changed in v0.2.11
+  //
+  // v0.2.7 asserted that **no** row could be `unverified`, because there was no runnable
+  // code at all: the adapter threw on every method. That was the right assertion then.
+  //
+  // v0.2.11 adds a real CLI adapter (`platforms/weibo/cli.ts`): it detects the binary,
+  // discovers commands, parses JSON, classifies failures and scrubs credentials. That is
+  // code which *would* run — so `unverified` ("implemented, never confirmed against the
+  // platform") is now the accurate label for reads, and `permission_required` would
+  // understate it.
+  //
+  // What must NOT happen is a row silently becoming `supported`. That is still asserted
+  // above, and the write rows are still `permission_required` because no write code
+  // exists at all.
+  const reads: CapabilityName[] = [
+    'thread.read',
+    'comment.list',
+    'comment.paginate',
+    'comment.nested',
+    'comment.locate',
+    'identity.verify',
+    'user.profile',
+  ]
+  for (const name of reads) {
+    assert.equal(
+      MATRIX.capabilities[name].state,
+      'unverified',
+      `${name} 有 CLI 适配代码但从未真跑，应是 unverified`,
+    )
+  }
+  for (const name of ['comment.publish', 'comment.reply'] as CapabilityName[]) {
+    assert.notEqual(
+      MATRIX.capabilities[name].state,
+      'unverified',
+      `${name} 没有任何写入实现，不能标成 unverified`,
+    )
   }
 })
 
@@ -121,6 +152,16 @@ test('注册中心的能力闸门对微博写能力 fail-closed', () => {
   registry.register(weiboProvider)
   // The gate treats anything that is not `supported` as a refusal. Asserting this is
   // the concrete form of "没有取得权限的功能不会被假装为已实现".
-  assert.throws(() => registry.assertCapability('weibo', 'comment.publish'), /不能|尚未|权限/)
-  assert.throws(() => registry.assertCapability('weibo', 'comment.reply'), /不能|尚未|权限/)
+  //
+  // Match on `授权` too: the gate's own prefix is "需要授权", and the reason text is
+  // allowed to phrase the requirement as an authorisation rather than a prohibition.
+  // v0.2.11's reason says "需要评论写入授权", which is a refusal in the same sense —
+  // pinning only 不能/尚未 made this test reject a correct message.
+  for (const name of ['comment.publish', 'comment.reply'] as const) {
+    assert.throws(
+      () => registry.assertCapability('weibo', name),
+      /不能|尚未|权限|授权/,
+      `${name} 必须被闸门拒绝`,
+    )
+  }
 })

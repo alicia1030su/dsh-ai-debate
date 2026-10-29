@@ -129,11 +129,31 @@ const finish = (rawId: string, uid: string | undefined): WeiboRef => {
       `无法把「${rawId}」规范化成微博的 numeric mid：它既不是纯数字，也不是合法的 base62 微博 id。`,
     )
   }
-  const author = uid === undefined ? '' : `${uid}/`
+  // ## The canonical link must parse back into the same thread (v0.2.11)
+  //
+  // v0.2.10 always built `https://weibo.com/<mid>`, using the *numeric* mid. Its own
+  // parser rejects a bare numeric segment on purpose — `weibo.com/1234567890` is also a
+  // user profile, so that shape is ambiguous and refusing it is right. The bug was
+  // producing that shape, not refusing it: `parseWeiboUrl(parseWeiboUrl(x).url)` failed
+  // for every mobile link, which means the field that exists so "a human can open what
+  // was stored" pointed at something the plugin itself would not accept.
+  //
+  // Two unambiguous shapes, chosen by what the input actually told us:
+  //
+  // - **uid known**: `weibo.com/<uid>/<base62>` — a real desktop permalink. The mid is
+  //   rendered in base62 so the path is a post, not a numeric profile id.
+  // - **uid unknown**: `m.weibo.cn/detail/<mid>` — the mobile detail URL. It states its
+  //   own intent in the path, so a purely numeric mid is unambiguous there.
+  //
+  // Neither invents a uid: when the link did not carry one, the canonical URL has none.
+  const url =
+    uid === undefined
+      ? `https://m.weibo.cn/detail/${mid}`
+      : `https://weibo.com/${uid}/${toBase62(mid) ?? mid}`
   return {
     platform: 'weibo',
     threadId: mid,
-    url: `https://weibo.com/${author}${mid}`,
+    url,
     ...(uid === undefined ? {} : { uid }),
     rawId,
   }
@@ -142,10 +162,24 @@ const finish = (rawId: string, uid: string | undefined): WeiboRef => {
 /**
  * Convert a Weibo id to its numeric mid.
  *
- * Pure decimal ids pass through. A base62 id is decoded the way Weibo builds it: the
- * numeric mid is split into 4-character base-62 groups counted from the right, so
- * decoding walks the string from the right in groups of four, each contributing
- * `value × 62^(4k)`.
+ * ## The segmented scheme (v0.2.11)
+ *
+ * A Weibo base62 id is **not** one big base62 integer. The numeric mid is split into
+ * seven-digit groups counted from the right, each group is encoded to base62
+ * independently, and every group except the leftmost is padded to four base62
+ * characters. Decoding is the mirror image: four characters at a time from the right,
+ * each turned into decimal, every group except the leftmost padded to seven digits.
+ *
+ * v0.2.10 treated the whole string as a single base62 number. That is wrong in a way
+ * that looks plausible — it round-trips against itself, so self-encoding tests passed —
+ * and it only shows up against an id somebody else computed. Verified against external
+ * samples (they disagree with the old code in the high digits, which is exactly where a
+ * positional error lives):
+ *
+ *   `Hd1N2qpta` ↔ `4331051486294436`
+ *   `I1IGF4Ud1` ↔ `4404101091169383`
+ *
+ * Pure decimal ids pass through unchanged.
  *
  * @returns the numeric mid, or `undefined` when the input cannot be one
  */
@@ -154,49 +188,76 @@ export function toNumericMid(raw: string): string | undefined {
   if (/^\d+$/.test(trimmed)) return trimmed
   if (!/^[0-9A-Za-z]+$/.test(trimmed)) return undefined
 
-  let result = 0n
-  // Right-to-left in groups of four; each group is a base-62 number times 62^(4k).
-  let group = 0
+  // Right-to-left in groups of four.
+  const groups: string[] = []
   for (let end = trimmed.length; end > 0; end -= 4) {
-    const start = Math.max(0, end - 4)
-    const chunk = trimmed.slice(start, end)
+    groups.unshift(trimmed.slice(Math.max(0, end - 4), end))
+  }
+  const parts: string[] = []
+  for (let index = 0; index < groups.length; index += 1) {
     let value = 0n
-    for (const character of chunk) {
+    for (const character of groups[index]!) {
       const digit = ALPHABET.indexOf(character)
       if (digit < 0) return undefined
       value = value * 62n + BigInt(digit)
     }
-    result += value * 62n ** BigInt(4 * group)
-    group += 1
+    const decimal = value.toString()
+    if (index === 0) {
+      // The leftmost group is the most significant one and carries no padding.
+      parts.push(decimal)
+    } else {
+      // Every other group is a full seven-digit block. A longer value means the input
+      // was not produced by this scheme, so refusing beats emitting a nonsense mid.
+      if (decimal.length > 7) return undefined
+      parts.push(decimal.padStart(7, '0'))
+    }
   }
-  return result.toString()
+  return parts.join('')
 }
 
 /**
  * Convert a numeric mid to Weibo's base62 display id.
  *
- * The inverse of {@link toNumericMid}, used only for building human-facing links and
- * for asserting round-trip stability in tests.
+ * The inverse of {@link toNumericMid}. The digits are split into seven-digit groups
+ * counted from the right, each group is encoded to base62 on its own, and every group
+ * except the leftmost is padded to four characters.
+ *
+ * v0.2.10 divided the whole number by 62⁴ repeatedly, which is the general base62
+ * encoding — a different function. It happened to invert the old (also wrong) decoder,
+ * so round-trip tests passed while both directions were wrong. `Hd1N2qpta` and
+ * `4331051486294436` are the external check that pins both.
  */
 export function toBase62(mid: string): string | undefined {
   if (!/^\d+$/.test(mid)) return undefined
-  let remaining = BigInt(mid)
-  if (remaining === 0n) return '0'
-  const chunks: string[] = []
-  const base = 62n ** 4n
-  while (remaining > 0n) {
-    let chunk = remaining % base
-    remaining /= base
-    let text = ''
-    for (let index = 0; index < 4; index += 1) {
-      text = ALPHABET[Number(chunk % 62n)]! + text
-      chunk /= 62n
-    }
-    chunks.unshift(text)
+
+  // Right-to-left in groups of seven digits.
+  const groups: string[] = []
+  for (let end = mid.length; end > 0; end -= 7) {
+    groups.unshift(mid.slice(Math.max(0, end - 7), end))
   }
-  // Drop the leading zero padding of the most significant group.
-  const joined = chunks.join('')
-  return joined.replace(/^0+/, '') || '0'
+  const parts: string[] = []
+  for (let index = 0; index < groups.length; index += 1) {
+    let remaining = BigInt(groups[index]!)
+    if (remaining === 0n) {
+      parts.push(index === 0 ? '0' : '0000')
+      continue
+    }
+    let text = ''
+    while (remaining > 0n) {
+      text = ALPHABET[Number(remaining % 62n)]! + text
+      remaining /= 62n
+    }
+    if (index === 0) {
+      // The leftmost group carries no padding.
+      parts.push(text)
+    } else {
+      // Every other group is a four-character block. A wider value cannot occur: a
+      // seven-digit number is below 62⁴, so this is a guarantee, not a guess.
+      if (text.length > 4) return undefined
+      parts.push(text.padStart(4, '0'))
+    }
+  }
+  return parts.join('')
 }
 
 /** Extract the lowercase host, or `undefined` for anything that is not a URL-ish string. */

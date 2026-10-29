@@ -74,6 +74,26 @@ export interface Dispute {
     readonly ownerStatements: readonly Statement[];
     /** Questions from the opponent the owner has not answered. */
     readonly openQuestions: readonly Statement[];
+    /**
+     * Everyone else who spoke in this floor (v0.2.11).
+     *
+     * ## Why this is a first-class field rather than a note
+     *
+     * The exchange is deliberately narrowed to two participants, and that narrowing is what
+     * makes the reconstruction readable. The cost was invisible: a third party who said
+     * "actually he's right about the price" was dropped from the picture entirely, so an
+     * analysis could describe a two-person argument that in fact had a chorus — and the
+     * generated reply would then answer one person while ignoring that others had already
+     * taken sides.
+     *
+     * These entries are *not* part of the dispute. They are context the analyzer must show
+     * so the owner (and the model) can tell "the opponent is alone" from "the opponent has
+     * support", which are different situations calling for different replies.
+     *
+     * Ordered by how much they said, descending — the loudest bystander first, because that
+     * is the one most likely to matter.
+     */
+    readonly bystanders: readonly Participant[];
     /** True when the opponent could not be identified with confidence. */
     readonly needsConfirmation: boolean;
     /** Human-readable reasons for `needsConfirmation`, or for the choice made. */

@@ -88,6 +88,25 @@ export interface BriefUncertainty {
 /** What kind of reply this brief suggests. */
 export type BriefDirection = 'rebut' | 'analyse' | 'humour'
 
+/** A third party who spoke inside the argument's floor (v0.2.11). */
+export interface BriefBystander {
+  /** Display name as the platform rendered it. Not an identity. */
+  readonly displayName: string
+  /** How many times they spoke in this floor. */
+  readonly postCount: number
+  /**
+   * Which side they appear to back, if their words make it explicit.
+   *
+   * `undefined` is the common case and the honest one: most third parties say something
+   * without endorsing anyone. Filling this in from tone would be an inference dressed as
+   * a fact, so it is only set when the collected text contains an explicit alignment and
+   * a post id can be cited for it.
+   */
+  readonly leaning?: 'owner' | 'opponent'
+  /** Post ids backing the leaning, when one was determined. */
+  readonly evidence?: readonly string[]
+}
+
 /** The whole brief. */
 export interface DebateBrief {
   readonly platform: PlatformId
@@ -108,6 +127,26 @@ export interface DebateBrief {
   readonly directions: readonly BriefDirection[]
   /** Risks a human should know before approving, in plain language. */
   readonly risks: readonly string[]
+  /**
+   * Third parties who spoke in the same floor (v0.2.11).
+   *
+   * Not part of the dispute — deliberately. They are here because "the opponent is alone"
+   * and "three people already agreed with the opponent" call for different replies, and
+   * the exchange list alone cannot tell those apart: it is narrowed to two participants by
+   * design.
+   *
+   * ## Optional, and the two ways it can be empty mean different things
+   *
+   * - **absent** — this brief was assembled by a path that did not collect bystanders
+   *   (an older caller, or a platform whose floor model has no such notion). Nothing is
+   *   claimed about who else spoke.
+   * - **`[]`** — collected, and nobody else spoke.
+   *
+   * Collapsing the two would let "we did not look" render as "the opponent stands alone",
+   * which is exactly the kind of quiet falsehood this project keeps having to remove. The
+   * renderer therefore prints the section only when the array is present *and* non-empty.
+   */
+  readonly bystanders?: readonly BriefBystander[]
 }
 
 /**
@@ -252,6 +291,48 @@ export function validateBrief(
     }
   }
 
+  // Bystanders (v0.2.11).
+  //
+  // Two rules, both about not promoting a third party into a side:
+  //
+  // 1. A `leaning` must be backed by a post that was actually read — same citation rule
+  //    as every other claim here.
+  // 2. That post must belong to **neither** the owner nor the chosen opponent. A
+  //    bystander whose "evidence" is one of the opponent's own posts is not a third party
+  //    agreeing with them; it is the opponent, double-counted. Catching this keeps the
+  //    supporter count from being inflated by the participant the reply is aimed at.
+  for (const [index, bystander] of (brief.bystanders ?? []).entries()) {
+    if (bystander.leaning === undefined) {
+      if (bystander.evidence !== undefined && bystander.evidence.length > 0) {
+        problems.push({
+          field: `bystanders[${index}]`,
+          reason: '没有说明站队却给了证据：要么说明站哪边，要么不要把证据挂在不站队的人身上',
+        })
+      }
+      continue
+    }
+    const evidence = bystander.evidence ?? []
+    if (evidence.length === 0) {
+      problems.push({
+        field: `bystanders[${index}]`,
+        reason: '声称某个路人有明确立场，却没有引用任何一条发言',
+      })
+      continue
+    }
+    for (const postId of evidence) {
+      checkCitation(`bystanders[${index}]`, postId)
+      if (
+        sources.ownerPostIds.has(postId) ||
+        sources.opponentPostIds.has(postId)
+      ) {
+        problems.push({
+          field: `bystanders[${index}]`,
+          reason: `把 ${postId} 当作路人的话，但那一条属于争论的一方（主人或对手）`,
+        })
+      }
+    }
+  }
+
   if (brief.directions.length === 0) {
     problems.push({ field: 'directions', reason: '没有给出任何推荐回应方向' })
   }
@@ -327,6 +408,31 @@ export function renderBrief(brief: DebateBrief): string {
   }
 
   lines.push(`推荐方向：${brief.directions.join(' / ')}`)
+
+  // Third parties who spoke in the same floor (v0.2.11).
+  //
+  // This block exists so the model can tell "the opponent stands alone" from "several
+  // people backed the opponent". Left out when empty rather than printed as "无", because
+  // a heading followed by "none" reads like a finding.
+  if (brief.bystanders !== undefined && brief.bystanders.length > 0) {
+    lines.push('')
+    lines.push('## 同一层里的其他参与者')
+    lines.push('这些人不是争论的任何一方，只是也在这一层发过言。不要把他们的话当成交锋对象，也不要把他们当成对手。')
+    for (const bystander of brief.bystanders) {
+      const leaning =
+        bystander.leaning === undefined
+          ? '不站队'
+          : bystander.leaning === 'owner'
+            ? '明确支持主人'
+            : '明确支持对方'
+      const cite =
+        bystander.evidence === undefined || bystander.evidence.length === 0
+          ? ''
+          : `（${bystander.evidence.join('、')}）`
+      lines.push(`- ${bystander.displayName}：发言 ${bystander.postCount} 次，${leaning}${cite}`)
+    }
+  }
+
   if (brief.risks.length > 0) {
     lines.push('')
     lines.push('## 发表前的风险提示')

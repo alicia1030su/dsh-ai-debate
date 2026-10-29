@@ -80,6 +80,24 @@ export interface BriefUncertainty {
 }
 /** What kind of reply this brief suggests. */
 export type BriefDirection = 'rebut' | 'analyse' | 'humour';
+/** A third party who spoke inside the argument's floor (v0.2.11). */
+export interface BriefBystander {
+    /** Display name as the platform rendered it. Not an identity. */
+    readonly displayName: string;
+    /** How many times they spoke in this floor. */
+    readonly postCount: number;
+    /**
+     * Which side they appear to back, if their words make it explicit.
+     *
+     * `undefined` is the common case and the honest one: most third parties say something
+     * without endorsing anyone. Filling this in from tone would be an inference dressed as
+     * a fact, so it is only set when the collected text contains an explicit alignment and
+     * a post id can be cited for it.
+     */
+    readonly leaning?: 'owner' | 'opponent';
+    /** Post ids backing the leaning, when one was determined. */
+    readonly evidence?: readonly string[];
+}
 /** The whole brief. */
 export interface DebateBrief {
     readonly platform: PlatformId;
@@ -100,6 +118,26 @@ export interface DebateBrief {
     readonly directions: readonly BriefDirection[];
     /** Risks a human should know before approving, in plain language. */
     readonly risks: readonly string[];
+    /**
+     * Third parties who spoke in the same floor (v0.2.11).
+     *
+     * Not part of the dispute — deliberately. They are here because "the opponent is alone"
+     * and "three people already agreed with the opponent" call for different replies, and
+     * the exchange list alone cannot tell those apart: it is narrowed to two participants by
+     * design.
+     *
+     * ## Optional, and the two ways it can be empty mean different things
+     *
+     * - **absent** — this brief was assembled by a path that did not collect bystanders
+     *   (an older caller, or a platform whose floor model has no such notion). Nothing is
+     *   claimed about who else spoke.
+     * - **`[]`** — collected, and nobody else spoke.
+     *
+     * Collapsing the two would let "we did not look" render as "the opponent stands alone",
+     * which is exactly the kind of quiet falsehood this project keeps having to remove. The
+     * renderer therefore prints the section only when the array is present *and* non-empty.
+     */
+    readonly bystanders?: readonly BriefBystander[];
 }
 /**
  * Everything a brief is allowed to cite.

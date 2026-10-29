@@ -172,15 +172,38 @@ export function projectWeiboThread(payload: WeiboThreadPayload): ConversationGra
   }
 
   // --- quotes ---------------------------------------------------------------
+  //
+  // ## A quote points at a *post*, never at a comment (v0.2.11)
+  //
+  // v0.2.10 wrote `to: comment:<quotedMid>` whenever the quoted id differed from the
+  // thread's own mid. That is the wrong namespace: `quotedMid` is a weibo **post** id.
+  // Two consequences, both bad: the edge named a comment node that does not exist, and
+  // any downstream code that walked `quotes` looking for a post found nothing — while
+  // the *certainty* said `stated`, so the wrong target carried full confidence.
+  //
+  // The quoted post usually is not in this read (we fetched one post and its comments),
+  // so the edge legitimately points at a node that is absent. That is a dangling
+  // reference, and it is recorded as one: the graph must not invent a node for content
+  // nobody read, and it must not quietly drop the relationship either.
   const quoted = payload.post.quotedMid?.trim()
   if (quoted !== undefined && quoted !== '') {
+    const targetId = `post:${quoted}`
     edges.push({
       platform: PLATFORM,
       kind: 'quotes',
       from: `post:${threadId}`,
-      to: quoted === threadId ? `post:${threadId}` : `comment:${quoted}`,
+      to: targetId,
       certainty: 'stated',
     })
+    // A self-quote (a post quoting itself) is a real payload shape and resolves inside
+    // the graph; anything else is external unless a later read added it.
+    const present = quoted === threadId
+    if (!present) {
+      issues.push(
+        `这条微博引用了另一条微博（mid ${quoted}），但本次只读取了这一条；` +
+          '引用目标是图中不存在的外部帖子，正文未读取。不要假设它的内容。',
+      )
+    }
   }
 
   // --- comments -------------------------------------------------------------

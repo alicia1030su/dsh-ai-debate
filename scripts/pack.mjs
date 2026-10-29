@@ -54,6 +54,8 @@ const INCLUDE = [
   'docs/v0.2.9-acceptance.md',
   // And v0.2.10 (the cover replacement).
   'docs/v0.2.10-acceptance.md',
+  // And v0.2.11 (Weibo read path + bystanders).
+  'docs/v0.2.11-acceptance.md',
 ]
 const INCLUDE_DIRS = ['lib', 'client']
 

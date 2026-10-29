@@ -81,6 +81,26 @@ export interface Dispute {
   readonly ownerStatements: readonly Statement[]
   /** Questions from the opponent the owner has not answered. */
   readonly openQuestions: readonly Statement[]
+  /**
+   * Everyone else who spoke in this floor (v0.2.11).
+   *
+   * ## Why this is a first-class field rather than a note
+   *
+   * The exchange is deliberately narrowed to two participants, and that narrowing is what
+   * makes the reconstruction readable. The cost was invisible: a third party who said
+   * "actually he's right about the price" was dropped from the picture entirely, so an
+   * analysis could describe a two-person argument that in fact had a chorus — and the
+   * generated reply would then answer one person while ignoring that others had already
+   * taken sides.
+   *
+   * These entries are *not* part of the dispute. They are context the analyzer must show
+   * so the owner (and the model) can tell "the opponent is alone" from "the opponent has
+   * support", which are different situations calling for different replies.
+   *
+   * Ordered by how much they said, descending — the loudest bystander first, because that
+   * is the one most likely to matter.
+   */
+  readonly bystanders: readonly Participant[]
   /** True when the opponent could not be identified with confidence. */
   readonly needsConfirmation: boolean
   /** Human-readable reasons for `needsConfirmation`, or for the choice made. */
@@ -205,6 +225,31 @@ export function analyzeDispute(
 
   const openQuestions = findOpenQuestions(floorTimeline, ownerKey, opponentPick.opponentKey, keyOf)
 
+  // Everyone in this floor who is neither the owner nor the chosen opponent (v0.2.11).
+  //
+  // Built from the *floor* timeline, not the whole thread: an argument happens inside the
+  // floor it started in, and pulling in speakers from other floors would make a reply to
+  // one exchange look like it owed an answer to strangers.
+  //
+  // `participants` holds the identity-resolved view (display name → account, mixed handles
+  // merged), so grouping by `keyOf(entry)` and then looking the key up keeps one person as
+  // one bystander even when the platform omitted their handle on some posts.
+  const bystanderKeys = new Set<string>()
+  for (const entry of floorTimeline) {
+    const key = keyOf(entry)
+    if (key === ownerKey || key === opponentPick.opponentKey) continue
+    // `resolveKey` falls back to the literal `'未知'` for a post with no author name and
+    // no id, which is not a participant — it is an absence. Counting it as a bystander
+    // would report "an unnamed third party joined the argument", a claim about the thread
+    // that the data does not support.
+    if (key === '' || key === '未知') continue
+    bystanderKeys.add(key)
+  }
+  const bystanders = [...bystanderKeys]
+    .map((key) => participants.get(key))
+    .filter((entry): entry is Participant => entry !== undefined)
+    .sort((a, b) => b.postCount - a.postCount || a.lastSpokeIndex - b.lastSpokeIndex)
+
   return {
     floorNumber: container.floor.floorNumber,
     floorPostId: container.floor.postId,
@@ -214,6 +259,7 @@ export function analyzeDispute(
     exchange,
     ownerStatements,
     openQuestions,
+    bystanders,
     needsConfirmation: opponentPick.ambiguous,
     notes,
   }

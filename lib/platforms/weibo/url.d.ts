@@ -63,10 +63,24 @@ export declare function parseWeiboUrl(input: string): WeiboRef;
 /**
  * Convert a Weibo id to its numeric mid.
  *
- * Pure decimal ids pass through. A base62 id is decoded the way Weibo builds it: the
- * numeric mid is split into 4-character base-62 groups counted from the right, so
- * decoding walks the string from the right in groups of four, each contributing
- * `value × 62^(4k)`.
+ * ## The segmented scheme (v0.2.11)
+ *
+ * A Weibo base62 id is **not** one big base62 integer. The numeric mid is split into
+ * seven-digit groups counted from the right, each group is encoded to base62
+ * independently, and every group except the leftmost is padded to four base62
+ * characters. Decoding is the mirror image: four characters at a time from the right,
+ * each turned into decimal, every group except the leftmost padded to seven digits.
+ *
+ * v0.2.10 treated the whole string as a single base62 number. That is wrong in a way
+ * that looks plausible — it round-trips against itself, so self-encoding tests passed —
+ * and it only shows up against an id somebody else computed. Verified against external
+ * samples (they disagree with the old code in the high digits, which is exactly where a
+ * positional error lives):
+ *
+ *   `Hd1N2qpta` ↔ `4331051486294436`
+ *   `I1IGF4Ud1` ↔ `4404101091169383`
+ *
+ * Pure decimal ids pass through unchanged.
  *
  * @returns the numeric mid, or `undefined` when the input cannot be one
  */
@@ -74,8 +88,14 @@ export declare function toNumericMid(raw: string): string | undefined;
 /**
  * Convert a numeric mid to Weibo's base62 display id.
  *
- * The inverse of {@link toNumericMid}, used only for building human-facing links and
- * for asserting round-trip stability in tests.
+ * The inverse of {@link toNumericMid}. The digits are split into seven-digit groups
+ * counted from the right, each group is encoded to base62 on its own, and every group
+ * except the leftmost is padded to four characters.
+ *
+ * v0.2.10 divided the whole number by 62⁴ repeatedly, which is the general base62
+ * encoding — a different function. It happened to invert the old (also wrong) decoder,
+ * so round-trip tests passed while both directions were wrong. `Hd1N2qpta` and
+ * `4331051486294436` are the external check that pins both.
  */
 export declare function toBase62(mid: string): string | undefined;
 //# sourceMappingURL=url.d.ts.map

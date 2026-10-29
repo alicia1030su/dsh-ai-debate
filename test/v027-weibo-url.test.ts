@@ -50,7 +50,14 @@ test('桌面版带 uid 的链接：uid 与 mid 分开取，threadId 是 numeric 
   assert.equal(ref.rawId, 'AbCdEf123')
   assert.match(ref.threadId, /^\d+$/, 'threadId 必须是 numeric mid')
   assert.equal(ref.threadId, toNumericMid('AbCdEf123'))
-  assert.match(ref.url, /^https:\/\/weibo\.com\/1234567890\/\d+$/)
+  // v0.2.11: the canonical desktop permalink carries the **base62** mid, because that
+  // is the shape Weibo actually serves for `<uid>/<mid>`. v0.2.10 emitted the numeric
+  // mid here; that still parsed, but it is not what the platform's permalinks look
+  // like, and it made the canonical URL disagree with the id it stood for.
+  assert.match(ref.url, /^https:\/\/weibo\.com\/1234567890\/[0-9A-Za-z]+$/)
+  assert.equal(ref.url, 'https://weibo.com/1234567890/AbCdEf123')
+  // And it must re-parse to the same thread — the contract §三 is about.
+  assert.equal(parseWeiboUrl(ref.url).threadId, ref.threadId)
 })
 
 test('移动版 detail / status：numeric mid 原样作为 threadId', () => {
