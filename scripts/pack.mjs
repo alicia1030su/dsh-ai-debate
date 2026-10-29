@@ -56,6 +56,8 @@ const INCLUDE = [
   'docs/v0.2.10-acceptance.md',
   // And v0.2.11 (Weibo read path + bystanders).
   'docs/v0.2.11-acceptance.md',
+  // And v0.2.12 (Weibo read path wiring + the brief entering the generation pipeline).
+  'docs/v0.2.12-acceptance.md',
 ]
 const INCLUDE_DIRS = ['lib', 'client']
 

@@ -58,22 +58,50 @@ test('调用 CLI 时不得经过 shell：源码里不出现 shell:true 或字符
     false,
     '不能用 exec（只能用 execFile）',
   )
-  assert.match(CODE, /execFile\(\s*\n?\s*BINARY/, '必须用固定可执行文件 + 参数数组')
+  // v0.2.12 renamed the first argument so tests can point the layer at a fake binary. The
+  // property that matters is the *form* — a file expression plus an array literal — so the
+  // assertion checks that instead of the old literal name.
+  assert.match(
+    CODE,
+    /execFile\(\s*\n?\s*[\w.]*[Ff]ile,\s*\n?\s*\[/,
+    '必须用文件表达式 + 参数数组调用 execFile',
+  )
 })
 
-test('可执行文件名是固定常量，不接受外部输入', () => {
-  // If the binary were configurable, a payload could point it at anything. Assert on the
-  // *assignment values* rather than on a regex with a lookahead: the lookahead version
-  // used here first back-tracked over the trailing space and matched its own happy path.
+test('可执行文件名默认写死为 weibo-cli，外部无法通过配置改掉', () => {
+  // If the binary were configurable through settings or the environment, a payload could
+  // point it at any program on the machine. v0.2.12 introduced a test-only override; the
+  // security property is that the **default** stays the hardcoded literal and that no
+  // config or env path reaches the override.
   const assignments = [...CODE.matchAll(/\bBINARY\s*=\s*([^\n]+)/g)].map((match) => match[1]!.trim())
   assert.equal(assignments.length, 1, `应当只有一个 BINARY 赋值，实际 ${assignments.length}`)
   assert.equal(assignments[0], `'weibo-cli'`, `可执行文件名必须写死为 'weibo-cli'，实际 ${assignments[0]}`)
+
+  assert.match(
+    CODE,
+    /DEFAULT_INVOCATION[^=]*=\s*\{\s*file:\s*BINARY/,
+    '默认调用必须指向 BINARY 常量',
+  )
+  assert.match(
+    CODE,
+    /export function __setCliInvocation/,
+    '覆盖入口必须是 __ 前缀的测试专用函数',
+  )
+  assert.equal(
+    /process\.env\.[A-Z_]*CLI[A-Z_]*\s*=/.test(CODE),
+    false,
+    '不得通过环境变量改可执行文件',
+  )
 })
 
 test('参数以数组传给 execFile，而不是拼成一个字符串', () => {
-  // `[...args]` spread into the argv position is the shape that makes shell
-  // metacharacters inert. A joined string (`args.join(' ')`) would not be.
-  assert.match(CODE, /execFile\(\s*\n?\s*BINARY,\s*\n?\s*\[\.\.\.args\]/, 'argv 必须是数组展开')
+  // An array literal in the argv position is what makes shell metacharacters inert — even
+  // when the array is assembled by spreading. A joined string (`args.join(' ')`) is not.
+  assert.match(
+    CODE,
+    /execFile\(\s*\n?\s*[\w.]*[Ff]ile,\s*\n?\s*\[[^\]]*\.\.\.args/,
+    'argv 必须是包含 ...args 的数组字面量',
+  )
   assert.equal(/args\.join\(/.test(CODE), false, '不能把参数 join 成字符串')
 })
 

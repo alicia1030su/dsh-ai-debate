@@ -99,26 +99,74 @@ test('每一行都有非空理由（supported 没有证据就只是猜测）', (
   }
 })
 
-test('每个读方法都抛 WeiboNotAuthorisedError，而不是返回空数据', async () => {
+test('每个读方法都失败并给出可识别的错误码，而不是返回空数据', async () => {
+  // ## What this test used to assert, and why it changed in v0.2.12
+  //
+  // v0.2.7–v0.2.11 threw `WeiboNotAuthorisedError` (`weibo_not_authorised`) from every
+  // method, unconditionally. The **property** that test protected is still the important
+  // one: a read must fail loudly, never return `[]`, because an empty list makes "we could
+  // not read it" indistinguishable from "there is nothing there".
+  //
+  // v0.2.12 wires the adapter to the CLI layer, so on a machine without `weibo-cli` the
+  // code is now `cli_missing` — which is *more* accurate: it tells the owner to install a
+  // tool rather than to obtain a permission that would not help. Pinning the old literal
+  // would have frozen the less useful message.
+  //
+  // So the assertion is on the property: every read rejects, and every rejection carries a
+  // code from the known set. `publishReply` keeps its own class, because writing is not a
+  // missing-read situation.
   const adapter = weiboProvider.createAdapter({ settings: {} })
-  const calls = [
-    () => adapter.checkAuthentication(),
+  const reads = [
     () => adapter.getThread({ platform: 'weibo', threadId: '1' } as never),
     () => adapter.getReplies({ platform: 'weibo', threadId: '1' } as never, 1),
     () => adapter.getNestedReplies({ platform: 'weibo', threadId: '1' } as never, { platform: 'weibo', postId: 'c1' } as never, 1),
     () => adapter.getUserProfile('u1'),
     () => adapter.getMentions(),
     () => adapter.getReplyContext({ platform: 'weibo', threadId: '1' } as never, 'c1'),
-    () => adapter.publishReply({ platform: 'weibo', threadId: '1' } as never, 'nested', 'x'),
   ]
-  for (const call of calls) {
+  const KNOWN = [
+    'cli_missing',
+    'not_authenticated',
+    'service_inactive',
+    'quota_exhausted',
+    'command_unavailable',
+    'malformed_response',
+    'failed',
+  ]
+  for (const call of reads) {
     await assert.rejects(call, (error: unknown) => {
-      assert.ok(error instanceof WeiboNotAuthorisedError, '必须是可识别的授权错误，不是随便的 Error')
-      assert.equal((error as WeiboNotAuthorisedError).code, 'weibo_not_authorised')
-      assert.match((error as Error).message, /不会尝试/)
+      const code = (error as { code?: string }).code
+      assert.equal(
+        KNOWN.includes(code ?? ''),
+        true,
+        `读失败必须带可识别错误码，实际 code=${code} message=${(error as Error).message}`,
+      )
       return true
     })
   }
+
+  // Writing is a different refusal, and it must not drift into "temporarily unavailable":
+  // this build has no Weibo write path at all.
+  await assert.rejects(
+    () => adapter.publishReply({ platform: 'weibo', threadId: '1' } as never, 'nested', 'x'),
+    (error: unknown) => {
+      assert.ok(error instanceof WeiboNotAuthorisedError, '发表必须是授权错误，不是别的')
+      assert.equal((error as WeiboNotAuthorisedError).code, 'weibo_not_authorised')
+      return true
+    },
+  )
+})
+
+test('登录检查返回状态，不抛异常（v0.2.12：它现在是探测，不是拒绝）', async () => {
+  // `checkAuthentication` used to throw. It is a read-only probe of the local CLI, and a
+  // caller asking "am I logged in?" needs the answer `false` with a reason, not an
+  // exception — that is what the settings page renders.
+  const adapter = weiboProvider.createAdapter({ settings: {} })
+  const state = await adapter.checkAuthentication()
+  assert.equal(typeof state.authenticated, 'boolean')
+  assert.equal(state.authenticated, false, '本机没有 CLI，未认证')
+  assert.equal(typeof state.reason, 'string', '必须说明为什么')
+  assert.match(state.reason ?? '', /CLI|cli|安装|授权/, `原因应可读：${state.reason}`)
 })
 
 test('适配器自己的能力牌是「全都不能」，与矩阵一致', () => {

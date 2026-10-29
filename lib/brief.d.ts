@@ -111,7 +111,20 @@ export interface DebateBrief {
     readonly agreedFacts: readonly BriefAgreedFact[];
     readonly arguments: readonly BriefArgument[];
     readonly challenges: readonly BriefChallenge[];
-    /** Questions the owner asked that the opponent left unanswered. */
+    /**
+     * Questions the **opponent** put to the owner that the owner never answered.
+     *
+     * ## Direction matters, and this comment used to have it backwards (v0.2.12 audit)
+     *
+     * The source is `Dispute.openQuestions`, which `analyzer.ts` documents as "Questions from
+     * the opponent the owner has not answered". This comment claimed the opposite, and
+     * `renderBrief` printed the heading "对方没有回答的问题" — so the model was told the
+     * *opponent* was evading, when in fact the owner was.
+     *
+     * That inverts the entire rhetorical direction: a reply built on it would demand "answer my
+     * question" from someone who never dodged anything. The field, its source and its rendered
+     * heading now all say the same thing.
+     */
     readonly openQuestions: readonly string[];
     readonly uncertainties: readonly BriefUncertainty[];
     /** Which reply shapes would fit, most suitable first. */

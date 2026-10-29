@@ -75,6 +75,15 @@ export interface GenerateOptions {
     /** Extra guidance the owner typed in the summon. */
     readonly ownerInstruction?: string;
     /**
+     * The rendered `DebateBrief` (v0.2.12).
+     *
+     * Optional so existing callers keep compiling, but the production path always supplies it:
+     * `runtime.runGeneration` builds the brief, validates it, and **refuses to call the model
+     * at all** when validation fails. The presence of this field in the prompt is therefore a
+     * consequence of a passed check, not a hint the model may ignore.
+     */
+    readonly brief?: string;
+    /**
      * Sampling temperature.
      *
      * Defaults low on purpose: this task needs the right target and stable JSON far

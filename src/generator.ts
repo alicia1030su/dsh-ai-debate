@@ -99,6 +99,15 @@ export interface GenerateOptions {
   /** Extra guidance the owner typed in the summon. */
   readonly ownerInstruction?: string
   /**
+   * The rendered `DebateBrief` (v0.2.12).
+   *
+   * Optional so existing callers keep compiling, but the production path always supplies it:
+   * `runtime.runGeneration` builds the brief, validates it, and **refuses to call the model
+   * at all** when validation fails. The presence of this field in the prompt is therefore a
+   * consequence of a passed check, not a hint the model may ignore.
+   */
+  readonly brief?: string
+  /**
    * Sampling temperature.
    *
    * Defaults low on purpose: this task needs the right target and stable JSON far
@@ -159,6 +168,21 @@ export function buildGenerationPrompt(options: GenerateOptions): string {
   )
   if (options.ownerInstruction) {
     lines.push(`主人的附加要求：${options.ownerInstruction}`)
+  }
+
+  // --- the structured brief (v0.2.12) --------------------------------------------
+  //
+  // This section is what makes the brief more than a test artefact. It carries the
+  // *structure* — both positions with their citations, the unresolved challenges, who else
+  // spoke — and it is rendered from data that already passed `validateBrief`.
+  //
+  // Kept separate from the raw context below on purpose: the context quotes the posts a
+  // reviewer checks, while the brief states the relationships. Merging them would bury the
+  // structure inside the transcript, which is where the model used to lose it.
+  if (options.brief !== undefined) {
+    lines.push('')
+    lines.push('## 争论简报（已通过证据校验）')
+    lines.push(options.brief)
   }
 
   lines.push('')

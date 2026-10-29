@@ -1,0 +1,456 @@
+/**
+ * Build a `DebateBrief` from what was actually collected.
+ *
+ * ## Why this file had to be written in v0.2.12
+ *
+ * `brief.ts` had a type, a validator and a renderer — and **no builder**. So the brief could
+ * be validated and rendered in tests while the production generation path went on using
+ * `compressContext()` alone. That is the gap the task book calls out: `validateBrief()` was
+ * "只存在于测试文件".
+ *
+ * This module closes it by deriving the brief from `Dispute` — the reconstruction the
+ * analyzer already produces from real collected data. Every field it fills cites post ids,
+ * and every field it cannot support is left as an explicit uncertainty rather than a guess.
+ *
+ * ## The three rules it follows
+ *
+ * 1. **Evidence or nothing.** A position, an argument or an agreed fact is only emitted with
+ *    the post ids that support it. `validateBrief` then re-checks that those ids exist and
+ *    belong to the side being described.
+ * 2. **The reply target is not a model choice.** `targetPostId` comes from the opponent's
+ *    verified last post, exactly as the publish path already requires. A builder that let a
+ *    later stage change it would hand the model the one decision the design keeps away from
+ *    it.
+ * 3. **Uncertainty is stated, not smoothed over.** Missing nested replies, an inferred
+ *    reply edge, a name-only opponent — each becomes an entry in `uncertainties`, because a
+ *    reply written on top of a silent assumption is the failure mode this project keeps
+ *    having to remove.
+ */
+
+import type { Dispute, Participant, Statement } from './analyzer.js'
+import { extractClaims, isSubstantive } from './analyzer.js'
+import type {
+  BriefAgreedFact,
+  BriefArgument,
+  BriefBystander,
+  BriefChallenge,
+  BriefDirection,
+  BriefPosition,
+  BriefSources,
+  BriefUncertainty,
+  DebateBrief,
+} from './brief.js'
+import type { CollectedThread } from './collector.js'
+import type { PlatformId } from './types.js'
+
+/** Everything the builder is allowed to look at. */
+export interface BuildBriefInput {
+  readonly platform: PlatformId
+  readonly threadId: string
+  readonly collected: CollectedThread
+  readonly dispute: Dispute
+}
+
+/**
+ * Collapse a statement's content into one readable sentence.
+ *
+ * Quotes are trimmed to a length a human can check at a glance. The full text stays in the
+ * graph; a brief that quoted four hundred characters would make the review step skippable,
+ * and the review step is the safety mechanism.
+ */
+function summarise(content: string, limit = 80): string {
+  const flat = content.replace(/\s+/g, ' ').trim()
+  if (flat.length <= limit) return flat
+  return `${flat.slice(0, limit)}…`
+}
+
+/** The post ids of a set of statements, in order, de-duplicated. */
+function idsOf(statements: readonly Statement[]): string[] {
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const statement of statements) {
+    if (statement.postId === '' || seen.has(statement.postId)) continue
+    seen.add(statement.postId)
+    ids.push(statement.postId)
+  }
+  return ids
+}
+
+/** Statements from the owner, newest first, for building the owner's position. */
+function ownerStatements(dispute: Dispute): readonly Statement[] {
+  return dispute.ownerStatements
+}
+
+/** Statements from the opponent, derived from the dispute exchange. */
+function opponentStatements(dispute: Dispute): readonly Statement[] {
+  const opponentKey = dispute.opponent?.key
+  if (opponentKey === undefined) return []
+  return dispute.exchange.filter((statement) => statement.authorKey === opponentKey)
+}
+
+/**
+ * Which side a statement belongs to, by author key.
+ *
+ * Used to keep a bystander's words out of both positions — the specific mistake that makes
+ * a third party look like a participant in the argument.
+ */
+function sideOf(statement: Statement, ownerKey: string, opponentKey: string | undefined): 'owner' | 'opponent' | 'third' {
+  if (statement.authorKey === ownerKey) return 'owner'
+  if (opponentKey !== undefined && statement.authorKey === opponentKey) return 'opponent'
+  return 'third'
+}
+
+/**
+ * Facts both sides stated.
+ *
+ * ## How "agreed" is decided without a language model
+ *
+ * This is deliberately conservative: it looks for a substantive statement from the owner and
+ * one from the opponent that share a **distinctive** token — a number, or a proper-looking
+ * term of four or more characters. Two people both saying "这个" is not agreement.
+ *
+ * Anything not matched this way simply does not become an agreed fact. Missing one is a
+ * quality loss; inventing one is a lie about what the other side conceded, and the validator
+ * would reject it anyway since it requires evidence from both sides.
+ */
+function agreedFacts(
+  owner: readonly Statement[],
+  opponent: readonly Statement[],
+  limit = 3,
+): BriefAgreedFact[] {
+  const facts: BriefAgreedFact[] = []
+  const tokenise = (text: string): Set<string> => {
+    const tokens = new Set<string>()
+    // Numbers (prices, counts, dates) and Latin terms are the least ambiguous shared facts.
+    for (const match of text.matchAll(/\d+(?:\.\d+)?%?/g)) tokens.add(match[0])
+    for (const match of text.matchAll(/[A-Za-z][A-Za-z0-9_-]{2,}/g)) tokens.add(match[0].toLowerCase())
+    return tokens
+  }
+
+  for (const mine of owner) {
+    if (!isSubstantive(mine.content)) continue
+    const mineTokens = tokenise(mine.content)
+    if (mineTokens.size === 0) continue
+    for (const theirs of opponent) {
+      if (!isSubstantive(theirs.content)) continue
+      const theirTokens = tokenise(theirs.content)
+      const shared = [...mineTokens].filter((token) => theirTokens.has(token))
+      if (shared.length === 0) continue
+      facts.push({
+        statement: `双方都提到了 ${shared.slice(0, 2).join('、')}`,
+        evidence: [mine.postId, theirs.postId],
+      })
+      if (facts.length >= limit) return facts
+      break
+    }
+  }
+  return facts
+}
+
+/**
+ * The opponent's unanswered challenges.
+ *
+ * `dispute.openQuestions` already carries the analyzer's finding. Each becomes a
+ * `BriefChallenge` with the opponent's own words, because "he asked about X" is checkable
+ * and "he was evasive" is not.
+ */
+function challenges(dispute: Dispute): BriefChallenge[] {
+  const out: BriefChallenge[] = []
+  for (const question of dispute.openQuestions) {
+    if (question.postId === '') continue
+    out.push({
+      quote: summarise(question.content, 120),
+      evidence: question.postId,
+      // The analyzer only records questions the owner did not answer, so `no_reply` is the
+      // accurate label. `reply_did_not_address` would need proof that a reply existed and
+      // failed to address it, which this builder cannot establish from text alone.
+      unanswered: 'no_reply',
+    })
+  }
+  return out
+}
+
+/**
+ * Bystanders, projected from the analyzer's participant list.
+ *
+ * No `leaning` is inferred. Deciding who a third party supports from tone is exactly the
+ * kind of guess that turns a casual "我倒觉得他说得有道理" into "an ally", and the validator
+ * would reject a leaning without a cited post anyway. The count and the name are facts; the
+ * side is not, so it stays absent.
+ */
+function bystanders(dispute: Dispute): BriefBystander[] {
+  const out: BriefBystander[] = []
+  for (const person of dispute.bystanders) {
+    out.push({ displayName: person.displayName, postCount: person.postCount })
+  }
+  return out
+}
+
+/**
+ * What this brief must not assert as fact.
+ *
+ * Each entry states a *reason*, not just a topic, so a reviewer can tell "we did not read
+ * that" from "the two accounts disagree about it".
+ */
+function uncertainties(input: BuildBriefInput): BriefUncertainty[] {
+  const out: BriefUncertainty[] = []
+  const { dispute, collected } = input
+
+  if (!collected.complete) {
+    out.push({
+      point: '这次读取不完整',
+      reason: `${collected.stopReason ?? '未知原因'}：部分楼层或楼中楼没有被读到，相关判断可能建立在缺失的内容上。`,
+    })
+  }
+  if (dispute.needsConfirmation) {
+    out.push({
+      point: '对手身份需要人工确认',
+      reason: dispute.notes.join('；') || '分析器无法确定主人在和谁争论。',
+    })
+  }
+  if (dispute.opponent === undefined) {
+    out.push({
+      point: '没有识别出争论对手',
+      reason: '因此不存在可以回应的具体对象。',
+    })
+  }
+  if (dispute.opponent !== undefined && dispute.opponent.matchKind === 'name') {
+    out.push({
+      point: '对手是按昵称匹配的',
+      reason:
+        '平台没有给出稳定的账号 id，同名的人会被当成同一个人；如果对手改过昵称，这条线索可能指向别人。',
+    })
+  }
+  // An inferred reply edge is a guess from a display name; saying so keeps it from being
+  // read later as a stated fact.
+  const inferred = dispute.exchange.some(
+    (statement) => statement.replyToName !== undefined && statement.replyToName !== '',
+  )
+  if (inferred) {
+    out.push({
+      point: '部分回复关系是按昵称推断的',
+      reason: '平台只给了被回复人的显示名，没有给评论 id；同名或改名的情形下可能连错。',
+    })
+  }
+  return out
+}
+
+/** Pick the reply shapes that fit what is actually in the brief. */
+function directions(input: BuildBriefInput, hasChallenge: boolean): BriefDirection[] {
+  const out: BriefDirection[] = []
+  const { dispute } = input
+
+  if (dispute.openQuestions.length > 0) out.push('rebut')
+  if (hasChallenge) out.push('rebut')
+  // No open questions and no unanswered challenge still leaves something to say, but the
+  // honest framing is analysis rather than another round of accusation.
+  if (out.length === 0) out.push('analyse')
+  return [...new Set(out)]
+}
+
+/**
+ * Risks a human should weigh before approving.
+ *
+ * Only risks this build can actually see. A generic "注意言辞" would train the reviewer to
+ * ignore the list.
+ */
+function risks(input: BuildBriefInput): string[] {
+  const out: string[] = []
+  const { dispute, collected } = input
+  if (!collected.complete) {
+    out.push('读取不完整：回复可能涉及没有读到的内容，建议先补读再发。')
+  }
+  if (dispute.opponent !== undefined && dispute.opponent.matchKind === 'name') {
+    out.push('对手按昵称匹配：存在认错人的风险。')
+  }
+  if (dispute.bystanders.length > 0) {
+    out.push(
+      `这一层还有 ${dispute.bystanders.length} 位其他参与者；回复只面向对手，不要把他们卷进来。`,
+    )
+  }
+  return out
+}
+
+/**
+ * Build the brief.
+ *
+ * Returns the brief plus the `BriefSources` that `validateBrief` needs, so a caller cannot
+ * accidentally validate against a different set of posts than the brief was built from.
+ */
+export function buildBrief(input: BuildBriefInput): {
+  readonly brief: DebateBrief
+  readonly sources: BriefSources
+} {
+  const { dispute } = input
+  const ownerKey = dispute.owner.key
+  const opponentKey = dispute.opponent?.key
+
+  const mine = ownerStatements(dispute)
+  const theirs = opponentStatements(dispute)
+
+  // Positions. The summary names an actual claim, not a mood, and the evidence is the posts
+  // it came from.
+  const ownerClaims = extractClaims(mine, 3)
+  const opponentClaims = extractClaims(theirs, 3)
+
+  let ownerPosition: BriefPosition = {
+    side: 'owner',
+    summary: ownerClaims[0] ?? '（主人的具体主张未能从句子里提取出来，请人工核对原帖）',
+    evidence: idsOf(mine),
+  }
+  let opponentPosition: BriefPosition = {
+    side: 'opponent',
+    summary: opponentClaims[0] ?? '（对方的具体主张未能从句子里提取出来，请人工核对原帖）',
+    evidence: idsOf(theirs),
+  }
+
+  // Arguments: the owner's substantive claims, each citing its own post.
+  const argumentsList: BriefArgument[] = []
+  for (const statement of mine) {
+    if (!isSubstantive(statement.content)) continue
+    const claim = extractClaims([statement], 1)[0]
+    if (claim === undefined) continue
+    argumentsList.push({ claim: summarise(claim), evidence: [statement.postId] })
+    if (argumentsList.length >= 5) break
+  }
+
+  // Disagreements: where the two sides' claims are both present and not shared. Derived from
+  // the two positions so it cannot drift from them.
+  const disagreements: string[] = []
+  if (ownerPosition.evidence.length > 0 && opponentPosition.evidence.length > 0) {
+    disagreements.push(
+      `主人主张「${summarise(ownerPosition.summary, 40)}」，对方主张「${summarise(opponentPosition.summary, 40)}」，两者不能同时成立。`,
+    )
+  }
+
+  // Open questions the owner left unanswered, phrased as questions because that is what they
+  // are. `findOpenQuestions` already filtered to questions the owner did not answer.
+  const openQuestions: string[] = []
+  for (const question of dispute.openQuestions) {
+    openQuestions.push(summarise(question.content, 100))
+    if (openQuestions.length >= 5) break
+  }
+
+  const briefChallenges = challenges(dispute)
+
+  // Third parties must not leak into either position. Assert it here as well as in the
+  // validator: a builder that put a bystander's words in the opponent's mouth would produce
+  // a brief that cites a post belonging to nobody in the dispute.
+  //
+  // `BriefPosition.evidence` is readonly, so the filtering happens by reconstruction rather
+  // than by mutation — which is also why the result is assigned back explicitly.
+  const thirdPartyIds = new Set(
+    dispute.exchange
+      .filter((statement) => sideOf(statement, ownerKey, opponentKey) === 'third')
+      .map((statement) => statement.postId),
+  )
+  ownerPosition = {
+    ...ownerPosition,
+    evidence: ownerPosition.evidence.filter((id) => !thirdPartyIds.has(id)),
+  }
+  opponentPosition = {
+    ...opponentPosition,
+    evidence: opponentPosition.evidence.filter((id) => !thirdPartyIds.has(id)),
+  }
+
+  const targetPostId = dispute.opponent?.lastPostId ?? dispute.floorPostId
+
+  const brief: DebateBrief = {
+    platform: input.platform,
+    threadId: input.threadId,
+    // The verified target, taken from collected data — never from a model's suggestion.
+    targetPostId,
+    owner: ownerPosition,
+    opponent: opponentPosition,
+    disagreements,
+    agreedFacts: agreedFacts(mine, theirs),
+    arguments: argumentsList,
+    challenges: briefChallenges,
+    openQuestions,
+    uncertainties: uncertainties(input),
+    directions: directions(input, briefChallenges.length > 0),
+    risks: risks(input),
+    bystanders: bystanders(dispute),
+  }
+
+  const sources = buildSources(input)
+  return { brief, sources }
+}
+
+/**
+ * Everything the brief is allowed to cite.
+ *
+ * Built from the collected thread rather than from the brief, so validation can catch a
+ * citation the builder invented — if both came from the same narrowing, the check would be
+ * circular.
+ */
+export function buildSources(input: BuildBriefInput): BriefSources {
+  const { dispute, collected } = input
+  const ownerKey = dispute.owner.key
+  const opponentKey = dispute.opponent?.key
+
+  const ownerPostIds = new Set<string>()
+  for (const statement of dispute.ownerStatements) ownerPostIds.add(statement.postId)
+
+  const opponentPostIds = new Set<string>()
+  for (const statement of dispute.exchange) {
+    if (opponentKey !== undefined && statement.authorKey === opponentKey) {
+      opponentPostIds.add(statement.postId)
+    }
+  }
+
+  const allPostIds = new Set<string>()
+  for (const floor of collected.floors) {
+    allPostIds.add(floor.floor.postId)
+    for (const nested of floor.nested) allPostIds.add(nested.postId)
+  }
+  // The exchange can carry posts from floors outside `collected.floors` when a cap dropped
+  // them; those were still read, so they are citable.
+  for (const statement of dispute.exchange) allPostIds.add(statement.postId)
+  for (const statement of dispute.ownerStatements) allPostIds.add(statement.postId)
+  void ownerKey
+
+  return { ownerPostIds, opponentPostIds, allPostIds }
+}
+
+/**
+ * Render a brief for a small context window.
+ *
+ * ## What is kept when space runs out
+ *
+ * The task book allows compressing the brief but requires the **evidence relationships** to
+ * survive: who said which post id. So this drops prose before it drops ids — a shorter
+ * summary with the same citations is still checkable, while a citation-free paragraph is
+ * not.
+ */
+export function renderBriefCompact(brief: DebateBrief, maxChars: number): string {
+  const full = [
+    `主人立场：${brief.owner.summary}（${brief.owner.evidence.join('、')}）`,
+    `对方立场：${brief.opponent.summary}（${brief.opponent.evidence.join('、')}）`,
+    ...brief.disagreements.map((item) => `分歧：${item}`),
+    ...brief.challenges.map((item) => `对方未获回应：「${item.quote}」（${item.evidence}）`),
+  ].join('\n')
+  if (full.length <= maxChars) return full
+
+  // Too long: keep the citations and cut the prose. Never drop an id to save space.
+  const minimal = [
+    `主人：${brief.owner.evidence.join('、')}`,
+    `对方：${brief.opponent.evidence.join('、')}`,
+    `回复目标：${brief.targetPostId}`,
+    brief.disagreements.length > 0 ? `分歧数：${brief.disagreements.length}` : '',
+    brief.challenges.length > 0 ? `未回应质疑数：${brief.challenges.length}` : '',
+  ]
+    .filter((line) => line !== '')
+    .join('\n')
+  return minimal.length <= maxChars ? minimal : minimal.slice(0, maxChars)
+}
+
+/** Whether a dispute produced enough material for a brief worth validating. */
+export function briefIsViable(dispute: Dispute): boolean {
+  if (dispute.opponent === undefined) return false
+  if (dispute.ownerStatements.length === 0) return false
+  return true
+}
+
+/** Exposed for tests that need the same participant shape. */
+export type { Participant }

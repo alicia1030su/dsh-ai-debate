@@ -59,7 +59,7 @@
 | 平台 | 状态 | 说明 |
 | --- | --- | --- |
 | 百度贴吧 | ✅ **已实现；真实发表尚未完成闭环** | 帖子 / 楼层分页 / 部分楼中楼读取 / 分析 / 人工批准 / 发表接口 / 回读核对**都有实现和测试**；但本机 IP 对贴吧持续 403，**从未在真实已登录账号上完成一次受控发表** |
-| 微博 | 🟡 **只读接入开发中，等待授权** | URL 解析、ID 规范化、离线 ConversationGraph 转换**已实现并测试**；官方 `weibo-cli` 只读适配层**已实现**（检测 / 命令发现 / JSON 解析 / 失败分类 / 脱敏 / 超时），但本机没装 CLI、没有开发者认证，**从未真实读过一条微博** |
+| 微博 | 🟡 **适配层已接线；真实读取仍未验证** | URL 解析、ID 规范化、ConversationGraph 转换、官方 `weibo-cli` 适配层均已实现。v0.2.12 起 Provider 真正调用 CLI（探测 → `commands show` 校验参数 → 执行读取 → `projection.ts` 投影），但本机没装 CLI、没有开发者认证、没有 OAuth 登录，**一次真实读取都没跑过**——新增测试是命令级假 CLI，不是端到端 |
 | 知乎 | ⬜ 规划阶段 | 只有能力清单，没有适配器 |
 | 小红书 | ⬜ 规划阶段 | 同上 |
 | 抖音 | ⬜ 规划阶段 | 同上 |
@@ -148,14 +148,14 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.11
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.12
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.11.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.12.tgz`：
 
 ```bash
 dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.11.tgz
@@ -605,7 +605,7 @@ src/
   platforms/
     contracts.ts        平台契约：能力状态、Provider/Adapter 接口、能力错误
     registry.ts         平台注册中心：注册 / 解析链接 / 能力断言 / 诊断
-    manifests.ts        微博、知乎、小红书、抖音的清单（只有计划，没有适配器）
+    manifests.ts        知乎、小红书、抖音的清单（只有计划，没有适配器；微博已移出清单）
     credentials.ts      凭据命名空间：平台 id 校验、单射编码、归属判定
     accounts.ts         平台账号绑定：主人 / AI 账号按平台隔离
     adapter-manager.ts  适配器缓存与重建：按配置指纹、跨平台凭据边界
@@ -615,13 +615,21 @@ src/
       url.ts            各种贴吧链接形状的解析
       parse.ts          纯函数解析器（WAP 页面 / 楼中楼 / totalComment）
       adapter.ts        TiebaAdapter：唯一知道贴吧页面结构的模块
+    weibo/
+      provider.ts       微博接入：能力矩阵、适配器构造、CLI 读取计划
+      url.ts            链接解析与 base62 ↔ numeric mid 分段转换
+      cli.ts            官方 weibo-cli 适配层：探测 / 命令发现 / 参数校验 / 执行
+      projection.ts     CLI payload → Thread / Floor / NestedReply
+      diagnostics.ts    环境诊断：CLI / 登录 / 服务 / 命令 / 额度的分状态报告
+      conversation.ts   微博结构到对话图的投影
   collector.ts          分页采集、去重、部分成功、时间线、四维完整性
   conversation.ts       平台无关对话图：节点 + 边（replies_to / reposts / quotes）
   conversation-bridge.ts 贴吧两层结构到对话图的投影
   analyzer.ts           主人识别、对手识别、争论链、未答问题
   compressor.ts         按优先级花预算的上下文压缩
   persona.ts            四种人格与表达参数
-  brief.ts              可追溯的 DebateBrief：每个论点都带 post id
+  brief.ts              DebateBrief 类型：可追溯的争论简报，每个论点都带 post id
+  brief-builder.ts      从 Dispute 构建 DebateBrief；空间不足时先砍文字、不砍证据 id
   llm.ts                模型边界（OpenAI 兼容客户端 + 测试用客户端）
   generator.ts          提示词、JSON 解析、规则校验、有限重试
   safety.ts             状态机守卫、发布策略、暂停判定、注入检测
@@ -1005,7 +1013,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**840 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.1 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**892 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.1 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1065,7 +1073,7 @@ node scripts/pack.mjs
 | `test/v027-platform-honesty.test.ts` | 4 | **平台区不许把「注册了」显示成「能用了」**：`implemented` 原样透传、未实现平台必须带前置条件、`permission_required` 不得渲染成已实现、平台区不含任何凭据值 |
 | `test/v027-weibo-url.test.ts` | 15 | **微博链接与 ID**：五种链接形状、垃圾输入不抛错、没有帖子 id 时拒绝而不是猜、base62 ↔ numeric mid 双向转换、同一微博两种写法归一到同一 threadId |
 | `test/v027-weibo-conversation.test.ts` | 12 | **微博结构投影到对话图**：不伪造楼层号、`contains` 是 stated、`replied_to` 平台给 id 才 stated / 只给昵称则 inferred、重名不猜、转发是独立节点与 `reposts` 边而不是父子回复、引用与回复分开 |
-| `test/v027-weibo-provider.test.ts` | 11 | **微博只读的诚实边界**：没有任何能力被声明成 `supported` 或 `unverified`、写能力等授权、艾特明确不可用、每个读方法抛可识别的授权错误而不是空数组、能力闸门 fail-closed |
+| `test/v027-weibo-provider.test.ts` | 12 | **微博只读的诚实边界**：没有任何能力被声明成 `supported`、读能力是 `unverified` 而写能力是 `permission_required`、艾特明确 `unavailable`、每个读方法都失败并给出可识别错误码（`cli_missing` 等）而不是空数组、登录检查是探测而非抛异常、能力闸门 fail-closed |
 | `test/v028-concurrent-processes.test.ts` | 2 | **真实双进程并发写（v0.2.8）**：`spawn` 两个进程各写 12 条，成功的写入必须全部留在盘上；锁被占用时拒绝而不是无锁写入，且不删持有者的锁 |
 | `test/v028-corrupt-overwrite.test.ts` | 3 | **损坏文件不得被覆盖（v0.2.8）**：初始化成功→写一次→外部破坏成非法 JSON→再写必须抛 `corrupt` 且磁盘字节原样；文件消失不得当成首次启动；真正的首次启动仍要能建库 |
 | `test/v028-lock-recovery.test.ts` | 2 | **锁的存活优先于年龄（v0.2.8）**：持有者 PID 存活时锁即便超时也不得回收；没有持有者 Token 时释放会删掉别人新锁 |
@@ -1076,7 +1084,12 @@ node scripts/pack.mjs
 | `test/v0211-weibo-cli.test.ts` | 15 | **微博 CLI 只读适配层（v0.2.11）**：源码层面确认不经 shell、可执行文件写死、参数以数组传递；Bearer/token/code 脱敏且不过度脱敏；带进度行的 JSON 能解析、截断的明确失败；本机探测如实给出 `cli_missing` 而非笼统失败 |
 | `test/v0211-weibo-mid.test.ts` | 14 | **微博 ID 分段算法（v0.2.11）**：用外部已知样例分别验证编码与解码两个方向（不复用「自编自解」的往返作为唯一证据）；补位规则单独验证；超出 Number 安全范围仍以字符串传递；规范链接能被自己解析回同一 threadId；歧义数字段仍拒绝 |
 | `test/v0211-weibo-quotes.test.ts` | 6 | **微博引用关系（v0.2.11）**：`quotes` 边指向 `post:` 而非 `comment:`；引用目标未被读取时记为空悬引用而不是编造节点；自引用落在图内；转发与引用是两条独立的边；引用不得被当成回复某条评论 |
-| **合计** | **840** | |
+| `test/v0212-brief-pipeline.test.ts` | 14 | TODO: 补充覆盖说明 |
+| `test/v0212-weibo-diagnostics.test.ts` | 8 | TODO: 补充覆盖说明 |
+| `test/v0212-weibo-fake-cli.test.ts` | 13 | TODO: 补充覆盖说明 |
+| `test/v0212-weibo-integration.test.ts` | 5 | TODO: 补充覆盖说明 |
+| `test/v0212-audit-regressions.test.ts` | 11 | TODO: 补充覆盖说明 |
+| **合计** | **892** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 
@@ -1121,7 +1134,7 @@ node --experimental-transform-types --test v013_dedupe_expiry_regression.test.mj
 
 #### 自动化测试（Mock / fixture，可重复运行）
 
-667 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
+892 项全部通过，详见上面的「测试覆盖」。这些用真实抓取的 HTML 作 fixture、用脚本化的假模型，
 不需要网络和账号，**证明的是代码逻辑，不是平台能力**。
 
 #### 0.1.5 这一轮修的是什么
@@ -1326,7 +1339,7 @@ v0.1.5 **不能**。贴吧没有可用的公开艾特通知接口，`/c/u/feed/a
     自己持锁、而对手已经持锁」的那条路径，但它不是分布式共识：**没有**租约、**没有**
     fencing token、**没有**时钟假设。极端情况下（例如文件系统不保证 rename 的原子
     可见性）仍可能出问题，那种环境应当只让一个进程写同一个 state 目录。
-25. **微博真实读取未验证（v0.2.11）**：只读适配层（`src/platforms/weibo/cli.ts`）
+25. **微博真实读取未验证（v0.2.12）**：CLI 适配层（`src/platforms/weibo/cli.ts`）与 Provider 的接线（`provider.ts` 探测 → 参数校验 → `runReadCommand` → `projection.ts` 投影）均已实现。但本机
     已经实现——检测官方 `weibo-cli`、发现可用命令、解析 JSON、分类失败原因、脱敏凭据、
     施加超时、拒绝不经 shell 的拼接。但本机**没有安装 CLI、没有开发者认证、没有 OAuth
     登录**，所以**一次真实读取都没有跑过**。能力表里对应行是 `unverified`（有代码、

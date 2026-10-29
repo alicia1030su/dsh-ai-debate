@@ -1,38 +1,55 @@
 /**
  * The Weibo provider: link routing, capability declaration, adapter construction.
  *
- * ## What this integration deliberately does NOT claim
+ * ## What changed in v0.2.12
  *
- * The Weibo Open Platform needs a registered application, developer qualification
- * and an explicit scope grant. This build has none of them, and no request against
- * the live API has ever been made from here. So:
+ * v0.2.11 shipped a CLI layer (`cli.ts`) that nothing called, and an adapter whose every
+ * read threw. Installing the CLI and logging in would have changed nothing, because there
+ * was no code path from the probe to `getThread`.
  *
- * - every network-touching capability is `permission_required` or `unavailable`,
- *   never `supported` and never `unverified`;
- * - there is **no OAuth client here**, because inventing endpoint paths and scope
- *   strings would look like working code and be wrong in a way nobody could see
- *   until a user granted a permission that does not exist;
- * - the adapter throws a named, actionable error on every read method rather than
- *   returning empty data, because "no comments" and "not implemented" must not look
- *   the same to the analysis pipeline.
+ * v0.2.12 wires them together: the adapter resolves a **read plan** by probing the CLI,
+ * discovering the catalog, and validating each candidate command's required parameters
+ * before deciding whether a read may run. The projection from Weibo's payloads to
+ * `Thread`/`Floor`/`NestedReply` lives in `projection.ts` so it is testable without a CLI.
  *
- * ## What it DOES provide, and why that is worth shipping
+ * ## What is still claimed and what is not
  *
- * Link routing and id normalisation are the parts that can be verified offline and
- * are the most expensive to get wrong: a base62 display id compared against a
- * numeric mid points the whole pipeline at a different post, silently. Registering
- * Weibo *read-only* means a pasted Weibo link resolves to the right platform and the
- * settings page shows the honest status instead of treating it as an unknown link
- * that "fell back to Tieba" — the v0.2.0 bug.
- *
- * `projectWeiboThread` (see `./conversation.ts`) is also complete and tested, so the
- * day an authorised reader exists, the data model needs no new design.
+ * - A read that has never run is **not** `supported`. It is `unverified` at best: the code
+ *   exists, no real account proved it.
+ * - A command is only used after `inspectCommand` confirms we can fill its required
+ *   parameters. A name that matches a regex is a *candidate*, not a permission.
+ * - `publishReply` always throws. There is no Weibo write path in this build; the platform
+ *   requires an explicit AI-content label plus a write scope this plugin does not request.
+ * - Nothing here buys credit, runs a face scan, or starts an OAuth flow. Those need a human.
  */
 import type { PlatformProvider } from '../contracts.js';
 /** The error every unimplemented read throws. Named so callers can branch on it. */
 export declare class WeiboNotAuthorisedError extends Error {
     readonly code = "weibo_not_authorised";
     constructor(what: string);
+}
+/**
+ * A CLI-backed read failed, with the reason preserved.
+ *
+ * ## Why this is a separate error class from `WeiboNotAuthorisedError` (v0.2.12)
+ *
+ * v0.2.11 threw `weibo_not_authorised` for everything, including "the CLI is not
+ * installed". Those two states need different actions from the owner — install a tool
+ * versus obtain a grant — and collapsing them meant the actionable one was hidden behind
+ * a message that said "go get authorisation" when no authorisation would help.
+ *
+ * The `code` is the CLI's own status, so a caller can branch without parsing prose.
+ */
+export declare class WeiboCliError extends Error {
+    readonly code: string;
+    /** The next steps for the owner, when this failure has a known remedy. */
+    readonly steps: readonly string[];
+    constructor(status: string, message: string, steps?: readonly string[]);
+}
+/** Thrown when the account is authorised but lacks the specific read command. */
+export declare class WeiboCommandUnavailableError extends Error {
+    readonly code = "command_unavailable";
+    constructor(message: string);
 }
 /** The provider the registry holds. */
 export declare const weiboProvider: PlatformProvider;

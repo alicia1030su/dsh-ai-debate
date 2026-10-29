@@ -2,6 +2,146 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.12] — 2026-10-29
+
+微博读取链路接线 + 争论简报进入生产流程。**核心变化：微博的 CLI 适配层不再是死代码，
+`DebateBrief` 不再只活在测试里。**
+
+没有推倒重写，没有删除任何安全机制。
+
+### 一、微博 CLI 与 Provider 之间是断的（P0）
+
+**缺陷**：v0.2.11 写了 `src/platforms/weibo/cli.ts`（探测、命令发现、JSON 解析、失败
+分类、凭据脱敏、超时），但 `provider.ts` **一行都没调用它**——每个读方法照旧无条件抛
+`WeiboNotAuthorisedError`。后果是：**装了 CLI、登录了账号，也不会有任何变化。**
+
+这个缺陷特别隐蔽，因为两边单独看都对：CLI 层有测试，能力矩阵写着 `unverified`，
+README 写着「适配层已实现」。缺的是中间那根线。
+
+**修法**：
+
+1. 新增 `WeiboCliError`（带 CLI 状态码与下一步）与 `WeiboCommandUnavailableError`；
+2. `createAdapter` 惰性解析**读取计划**：探测 CLI → `commands list --available` →
+   对候选命令逐个 `commands show` 校验参数 → 只有参数填得了的才成为计划；
+3. `getThread` / `getReplies` / `getNestedReplies` 真的调用 `runReadCommand`；
+4. `checkAuthentication` 从「抛异常」改为「返回状态与原因」——「有没有登录」有有用的
+   否定答案。
+
+### 二、不靠命令名猜权限
+
+任务书明确要求「不能靠正则匹配命令名称就直接认定拥有对应权限」。所以：
+
+- `classifyCommands` 只做**候选筛选**（哪几条看起来像读正文/读评论）；
+- 真正的判定是 `inspectCommand`：读该命令自己的参数表，只有**所有必填参数都是帖子 id
+  或分页参数**时才 usable；
+- 填不了的（例如要求 `uid`、日期范围）→ 明确报告「要求必填参数 X，本插件只会传帖子 id
+  与分页参数；猜一个值去调用等于伪造请求，所以不调用」，**并且真的不调用**。
+
+有一个测试专门断言这件事：参数校验失败后，CLI 日志里**不能出现**那条命令的执行记录。
+
+### 三、`projection.ts`：payload → 项目数据结构
+
+新增 `src/platforms/weibo/projection.ts`，把 CLI 返回的微博 payload 转成 `Thread` /
+`Floor` / `NestedReply`：
+
+- `idstr` 优先于 `id`（数字形式的 16 位 mid 进 JS 会丢精度）；
+- 微博没有楼层号，`floorNumber` **一律缺省**，不填占位值；
+- 标题为空字符串而不是编造（`ForumRef` 的 `name` 同理）；
+- 不认识的字段名 → `unwrapStatus` 返回 `undefined` → `malformed_response`，
+  而不是投影出一个「没有作者、没有正文」的假帖子。
+
+### 四、分页完整性来自响应，不来自「这页看着短」
+
+`hasMore` 直接取自 payload 的 `has_more`；未知时按「可能还有」处理。
+`getNestedReplies` 在 `hasMore` 为真时给 `incomplete: true`，采集器因此不会把这层报成
+读完整。官方的 `total_number` **只用于比对**，不当完整性证明——手册自己说它不等于去重
+后的可见条数。
+
+### 五、争论简报进入正式生成流程（P1）
+
+**缺陷**：`src/brief.ts` 有类型、有 `validateBrief`、有 `renderBrief`，**没有构建函数，
+也没有任何调用点**。所以 `validateBrief()` 只在测试里跑过，生产路径完全不知道它存在。
+
+**修法**：
+
+1. 新增 `src/brief-builder.ts`：从 `Dispute` 构建 `DebateBrief`，并输出 `BriefSources`
+   供校验使用。每个字段都引用 post id；无法支撑的字段变成明确的 `uncertainties`。
+2. `runtime.runGeneration` 现在：**构建 → 校验 → 校验失败直接抛错、不调模型** →
+   `renderBrief` 注入 prompt。
+3. `generator.ts` 新增可选 `brief`，prompt 里出现独立小节「## 争论简报（已通过证据
+   校验）」。
+
+**校验失败发生在调用模型之前**，这是安全属性而不是体验问题：如果先调模型再校验，模型
+已经基于一份没有证据支撑的简报生成了内容。
+
+### 六、路人不会被当成一方
+
+`buildBrief` 用 `authorKey` 判定每条发言属于哪一侧，任何第三方都被排除在两方立场之外；
+`bystanders` 单独输出，且**不推断站队**——从语气判断谁支持谁是猜测，而 `validateBrief`
+本来就会拒绝没有引用支撑的倾向。
+
+### 七、微博环境诊断（§二）
+
+`describeDiagnostics()` 按七种状态分别报告：适配器未实现 / CLI 未安装 / 未授权 /
+服务未开通 / 权限不足 / 额度不足 / 读取成功。
+
+两条刻意的取舍：
+
+- **CLI 没装时，OAuth 与服务的状态是「未知」而不是「未完成」**——`doctor` 没跑过，
+  我们没有任何证据。说「未完成」会让主人去找一个可能不存在的登录问题。
+- **额度信息报 `not_implemented`**，因为读余额要调用官方的账户/计费命令，属于账户管理，
+  插件不代为执行。
+
+### 八、测试
+
+**892 项全绿**（v0.2.11 的 840 项 + 新增 52 项；原有测试零删除，三条旧断言按新行为改写
+并保留了原意）。
+
+| 文件 | 数量 | 内容 |
+| --- | --- | --- |
+| `test/v0212-weibo-integration.test.ts` | 5 | 先写成红的断点证明：`getThread` 报的是笼统授权错误、能力表无原因 |
+| `test/v0212-weibo-fake-cli.test.ts` | 12 | 假 CLI 真 spawn：参数是 numeric mid、分页、子评论、六种失败可区分、参数填不了就不调用 |
+| `test/v0212-brief-pipeline.test.ts` | 14 | 构建/校验/接线：校验失败在调模型之前、路人进不了立场、紧预算先砍文字不砍 id |
+| `test/v0212-weibo-diagnostics.test.ts` | 8 | 七种状态可区分、未知不写成未完成、额度不伪造 |
+
+**新增 `test/fixtures/fake-weibo-cli.mjs`**：一个按 JSON 脚本应答的假可执行文件。它由
+真实的 `execFile` 调用路径 spawn，所以「Provider 会不会去调用、参数对不对」是被真实证明
+的；但它**不证明微博真实接口的形状**。
+
+### 九、独立审计发现并修掉的八个缺陷
+
+v0.2.12 的微博接入代码交给了独立只读审计。审计报了 4 个 P0、8 个 P1，我把每一条都在
+编译产物上实测复现，**全部属实**，均已修复并补了回归测试
+（`test/v0212-audit-regressions.test.ts`）。
+
+| # | 缺陷 | 实测现象 |
+| --- | --- | --- |
+| A1 | 未知分页状态被当成「读完了」 | `{"comments":[{"id":"1"}]}` → `hasMore === false`，采集器判定 `confirmed_end`，后面 9 页永不请求，且 `complete === true`。代码注释还写着相反的承诺。 |
+| A2 | `{"data":[...]}` 被读成零条评论 | `typeof [] === 'object'` 让容器选择命中了数组本身，三条评论解析出 0 条，错误还被误诊成「帖子可能已删除」。 |
+| A3 | 只有 id 的空壳被当有效微博 | `{"idstr":"5012..."}` → 一个 `content: ''`、无作者的 `Thread`，错误最终在 `analyzeDispute` 报成「帖子里没有找到主人」，指向完全错误的方向。 |
+| A4 | 平台返回的 id 可被当成命令行 flag | `projectCommentAsFloor({idstr:'--output'})` 被接受，argv 变成 `--comment --output --page 1 --output json`。不是 shell 注入（`execFile` 用数组），是**参数注入**。 |
+| A5 | schema 解析失败被当成「没有必填参数所以可用」 | `asArray(...) ?? []` 把「没看懂」和「确实没有」合并成一个结论，正是 `inspectCommand` 存在理由的反面。标准 JSON Schema 形（兄弟 `required` 数组）也读不出来。 |
+| A6 | JSON 解析错误未脱敏 | 新版 V8 的 `JSON.parse` 报错会带输入片段，而这条 `reason` 会进日志、诊断面板与模型上下文。 |
+| A7 | `openQuestions` 方向被渲染反 | 数据是「对方问、主人没答」，标题却印「对方没有回答的问题」——模型会据此写「你倒是回答我啊」，攻击方向整个翻转。 |
+| A8 | 回复关系解析后被 `void` 丢弃 | 微博给了结构化的 `reply_comment`，比贴吧按昵称猜可靠得多，却被扔掉。 |
+
+另外修掉三条同源的 P0/P1：`PAGE_LIKE` 无锚点子串匹配（`discount` 命中 `count`）且它判
+「可填」的参数 `provider` 实际一个都不发；`--comment` 是**凭空拼的 flag**，从未被校验；
+`incomplete` 被赋成 `hasMore`，导致所有多页楼中楼永久假报「读不全」。
+
+**填参策略已从正则改为显式映射表** `FILLABLE_ARGUMENTS`：只有表里列出的参数名算可填，
+且每个名的 argv 构造与适配器实际发送的是同一份定义——两者不能再漂移。
+父评论筛选参数改为从目录里发现（`nestedFilterFlag`），目录没列就拒绝读取，不再猜。
+
+### 十、诚实边界（必须读）
+
+- **微博真实读取仍未验证。** 本机没有安装 `weibo-cli`、没有开发者认证、没有 OAuth 登录，
+  一次真实读取都没有跑过。新增的 12 项集成测试用的是**假 CLI**，不是端到端。
+- 能力表里微博读能力仍是 `unverified`，**不是 `supported`**。
+- **微博发表仍然不开放**，`publishReply` 依旧抛授权错误。
+- 不会自动执行购买服务、扫码认证或 OAuth 授权——这些需要人来做。
+- 贴吧真实发表仍未验证（本机 IP 对贴吧持续 403）。
+
 ## [0.2.11] — 2026-10-29
 
 微博只读接入与争论理解。**核心变化：微博 ID 不再算错，规范链接不再自相矛盾，引用不再
