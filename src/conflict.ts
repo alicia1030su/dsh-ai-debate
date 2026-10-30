@@ -30,7 +30,7 @@
  *   number, the same subject with opposing polarity ("值" vs "不值"), or an explicit negation.
  * - **different_topics** — no shared subject at all. This is the apple/oolong case.
  * - **different_preference** — the same domain, but both are statements of taste, which coexist.
- * - **shared_ground** — both mention the same fact without disagreeing about it.
+ * - **agreement** — both mention the same fact without disagreeing about it.
  * - **unknown** — everything else, including anything that might be a real disagreement this
  *   code cannot prove.
  *
@@ -48,15 +48,25 @@
  */
 
 /** How two stated positions relate. */
+import { compareArgumentObjects } from './argument-object.js'
+
 export type PositionRelation =
   /** Incompatible claims about the same subject: a real dispute. */
   | 'contradiction'
+  /** Both affirm the same thing about the same object. */
+  | 'agreement'
   /** Same domain, both statements of preference — these coexist. */
   | 'different_preference'
   /** No shared subject: two people talking past each other. */
   | 'different_topics'
-  /** Both state the same fact without opposing it. */
-  | 'shared_ground'
+  /**
+   * The two statements might be about the same thing, and might disagree — but establishing
+   * either requires context this module does not have (v0.2.14 §6.2).
+   *
+   * This is the honest answer for `这个方案可行` / `这个方案不可行`: a reader knows they are
+   * arguing, and the code cannot prove it. It must reach a human, not become a confident claim.
+   */
+  | 'clarification_needed'
   /** Not decidable from the text. Must be reviewed by a human. */
   | 'unknown'
 
@@ -116,7 +126,7 @@ const NUMBER = /\d+(?:\.\d+)?%?/g
  *     owner:    "12 万不算贵。"      ← contains 不, but affirms cheapness
  *     opponent: "12 万太贵了，不值。"  ← contains 不, and negates value
  *
- * Both have a marker, so the comparison said "same polarity" and returned `shared_ground` for
+ * Both have a marker, so the comparison said "same polarity" and returned `agreement` for
  * a textbook disagreement.
  *
  * **2. A positive phrase inside a negative word.** The fix then broke the other direction:
@@ -206,6 +216,70 @@ export function judgeRelation(input: {
     }
   }
 
+  // --- 0. Are they even talking about the same object? (v0.2.14 §六) --------
+  //
+  // This branch exists because word overlap is not object identity. Reproduced against v0.2.13:
+  //
+  //     owner: "A 方案可行。"        / opponent: "B 方案不可行。"      → contradiction (wrong)
+  //     owner: "我支持张三的建议。"   / opponent: "我反对李四的建议。"   → contradiction (wrong)
+  //     owner: "这个方案可行。"       / opponent: "这个方案不可行。"     → unknown (wrong, too timid)
+  //
+  // The first two are two different objects, which can both be true. The third is one object
+  // referred to by a pointer: a reader knows it is a real argument, and this code cannot prove
+  // it. Each gets its own answer, and none of them defaults to "cannot both hold".
+  const objects = compareArgumentObjects(owner, opponent)
+  if (objects.relation === 'different_objects') {
+    return {
+      relation: 'different_topics',
+      isContradiction: false,
+      reason: objects.reason,
+      requiresReview: false,
+      confidence: 'strong',
+    }
+  }
+  if (objects.relation === 'same_reference') {
+    // ## The same pointer on both sides
+    //
+    // `这个方案可行` vs `这个方案不可行`: both sides use the *identical* pointer, so whatever it
+    // refers to, they refer to the same thing. That is enough to call it a disagreement — the
+    // referent cancels out of the comparison.
+    //
+    // What it does not establish is *what* they are arguing about, so a weak contradiction still
+    // carries `requiresReview`. The task book is explicit that a machine reading of meaning
+    // deserves a second pair of eyes even when it looks clear.
+    const ownerPointers = new Set(
+      objects.owner.filter((entry) => entry.deictic).map((entry) => entry.phrase),
+    )
+    const identical = objects.opponent.some(
+      (entry) => entry.deictic && ownerPointers.has(entry.phrase),
+    )
+    const ownerPole = polarityOf(owner)
+    const opponentPole = polarityOf(opponent)
+    const opposite =
+      ownerPole !== undefined && opponentPole !== undefined && ownerPole !== opponentPole
+
+    if (identical && opposite) {
+      return {
+        relation: 'contradiction',
+        isContradiction: true,
+        subject: [...ownerPointers][0],
+        reason: '双方用同一个指代指向同一个对象，并且一方肯定、一方否定，构成实际分歧。',
+        requiresReview: true,
+        confidence: 'weak',
+      }
+    }
+
+    return {
+      relation: 'clarification_needed',
+      isContradiction: false,
+      reason:
+        objects.reason +
+        '如果这个指代确实指向同一个对象，那么这就是明确的分歧；请人工确认后再决定回应方向。',
+      requiresReview: true,
+      confidence: 'weak',
+    }
+  }
+
   // --- 1. Same number, opposite framing ------------------------------------
   //
   // The most checkable contradiction there is: both cite the same figure and one disputes it.
@@ -242,7 +316,7 @@ export function judgeRelation(input: {
     //     owner:    "去年报价是 12 万。"      ← stating a figure, no evaluation
     //     opponent: "12 万不算贵。"          ← exactly one side is evaluating it
     //
-    // Returning `shared_ground` there says the two agree about the price, when in fact one is
+    // Returning `agreement` there says the two agree about the price, when in fact one is
     // citing it and the other is judging it — and their real disagreement ("成本翻倍值不值")
     // never got examined. When the registers differ, the number match proves only that they are
     // talking about the same figure, so this branch falls through and lets the subject-based
@@ -251,7 +325,7 @@ export function judgeRelation(input: {
       (ownerPole === undefined && opponentPole === undefined) || ownerPole === opponentPole
     if (sameRegister) {
       return {
-        relation: 'shared_ground',
+        relation: 'agreement',
         isContradiction: false,
         reason: `双方都提到「${subject}」且没有相反表态，这更像共同前提，不能据此认定冲突。`,
         subject,
@@ -345,12 +419,14 @@ export function describeRelation(verdict: ConflictVerdict): string {
   switch (verdict.relation) {
     case 'contradiction':
       return `存在实际分歧：${verdict.reason}`
+    case 'agreement':
+      return `双方在这一意见上一致：${verdict.reason}`
     case 'different_preference':
       return `双方喜好不同，但可以同时成立：${verdict.reason}`
     case 'different_topics':
       return `双方讨论的不是同一件事：${verdict.reason}`
-    case 'shared_ground':
-      return `双方在这一点上并不冲突：${verdict.reason}`
+    case 'clarification_needed':
+      return `双方是否在谈同一件事需要确认：${verdict.reason}`
     case 'unknown':
       return `分歧是否存在尚不确定：${verdict.reason}`
   }

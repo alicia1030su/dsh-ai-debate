@@ -27,6 +27,7 @@
  *    having to remove.
  */
 import type { Dispute, Participant } from './analyzer.js';
+import { type ConflictVerdict } from './conflict.js';
 import type { BriefSources, DebateBrief } from './brief.js';
 import type { CollectedThread } from './collector.js';
 import type { PlatformId } from './types.js';
@@ -46,6 +47,14 @@ export interface BuildBriefInput {
 export declare function buildBrief(input: BuildBriefInput): {
     readonly brief: DebateBrief;
     readonly sources: BriefSources;
+    /**
+     * The verdict the brief's disagreements were derived from (v0.2.14 §6.4).
+     *
+     * Returned rather than recomputed downstream: the publisher needs to know whether the
+     * analysis was *settled* (it could name a proven relation), and re-running the judge on text
+     * assembled elsewhere would answer a slightly different question than the brief did.
+     */
+    readonly verdict: ConflictVerdict;
 };
 /**
  * Everything the brief is allowed to cite.

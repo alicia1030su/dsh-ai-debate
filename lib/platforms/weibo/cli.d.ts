@@ -190,6 +190,18 @@ export interface WeiboCliCommandSchema {
     /** Which of them the catalog marks as required. */
     readonly required: readonly string[];
     /**
+     * The same parameters with the type the catalog declared.
+     *
+     * `parameters` remains the flat name list because dozens of call sites and tests use it. This
+     * carries the extra facts the invocation plan needs — chiefly whether a parameter is required —
+     * so the plan does not have to re-derive them from two parallel arrays.
+     */
+    readonly typedParameters: readonly {
+        readonly name: string;
+        readonly type?: string;
+        readonly required: boolean;
+    }[];
+    /**
      * Whether the parameter list was actually parsed, or the response shape was unrecognised.
      *
      * `unknown` must never be treated as "no required parameters": a schema we could not read is

@@ -71,7 +71,7 @@ const RELATION_CASES: readonly {
     name: '相同数字且无相反表态（都是 12 万）',
     owner: '去年报价是 12 万。',
     opponent: '我记得也是 12 万。',
-    expect: 'shared_ground',
+    expect: 'agreement',
     why: '都提到同一个数字且都不反对，这是共同前提，不是冲突。',
   },
   {
@@ -153,9 +153,10 @@ test('关系判定：弱证据得出的矛盾仍然要复核', () => {
 test('描述函数覆盖全部五种关系，不留 undefined', () => {
   const relations: PositionRelation[] = [
     'contradiction',
+    'agreement',
     'different_preference',
     'different_topics',
-    'shared_ground',
+    'clarification_needed',
     'unknown',
   ]
   for (const relation of relations) {

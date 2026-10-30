@@ -309,6 +309,14 @@ function risks(input: BuildBriefInput, verdict?: ConflictVerdict): string[] {
 export function buildBrief(input: BuildBriefInput): {
   readonly brief: DebateBrief
   readonly sources: BriefSources
+  /**
+   * The verdict the brief's disagreements were derived from (v0.2.14 §6.4).
+   *
+   * Returned rather than recomputed downstream: the publisher needs to know whether the
+   * analysis was *settled* (it could name a proven relation), and re-running the judge on text
+   * assembled elsewhere would answer a slightly different question than the brief did.
+   */
+  readonly verdict: ConflictVerdict
 } {
   const { dispute } = input
   const ownerKey = dispute.owner.key
@@ -433,7 +441,7 @@ export function buildBrief(input: BuildBriefInput): {
   }
 
   const sources = buildSources(input)
-  return { brief, sources }
+  return { brief, sources, verdict }
 }
 
 /**

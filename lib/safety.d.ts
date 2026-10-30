@@ -80,6 +80,33 @@ export interface PublishAttempt {
      * passes it, and `undefined` is treated as the strictest reading (see below).
      */
     readonly securityDecision?: 'allow' | 'review' | 'block';
+    /**
+     * Whether the debate analysis itself is settled (v0.2.14 §6.4).
+     *
+     * ## Why this is separate from `securityDecision`
+     *
+     * `securityDecision` answers "is this text safe to send" — prompt injection, owner identity,
+     * credential leaks. It says nothing about whether we *understood the argument*. A candidate can
+     * be perfectly safe and still be a reply to a disagreement that does not exist (the v0.2.13
+     * `A方案 / B方案` false contradiction), or to a target we could not identify (the `这个方案`
+     * case).
+     *
+     * Those are different failures and need different handling:
+     *
+     * | situation | what the owner should get |
+     * | --- | --- |
+     * | unsafe text | refusal, no candidate |
+     * | safe text about an unresolved dispute | a candidate to review, never an automatic post |
+     *
+     * So this field does not block the publish outright — it **removes the automatic slots**. In
+     * `manual` mode the owner still approves by hand, which is the point: they are the one who can
+     * tell whether the argument is real.
+     *
+     * `undefined` is read as unsettled: a caller that did not compute the semantic verdict has not
+     * shown the dispute is understood, and defaulting the other way would turn a missing argument
+     * into a permission. Same reasoning as `securityDecision` above.
+     */
+    readonly semanticSettled?: boolean;
     readonly now: number;
 }
 /** The outcome of a policy check. */

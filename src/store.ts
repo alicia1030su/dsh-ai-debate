@@ -135,6 +135,25 @@ export interface CandidateSecurityRecord {
   readonly decision: 'allow' | 'review' | 'block'
   readonly reasons: readonly string[]
   /**
+   * Whether the *debate analysis* behind this text was settled (v0.2.14 §6.4).
+   *
+   * ## Why this lives on the candidate rather than the session
+   *
+   * The other fields here are text-safety facts: "does this prose leak a secret", "does it attack
+   * the owner". This one is about comprehension: "did we establish that these two people are
+   * actually arguing about the same thing?"
+   *
+   * It belongs on the candidate because it is a property of *this* text: after the owner clarifies
+   * the dispute, a regenerated candidate can be settled while the old one stays unsettled.
+   * Putting it on the session would make one clarification retroactively bless every earlier
+   * draft.
+   *
+   * Optional only because candidates persisted before v0.2.14 have none. The publish policy reads
+   * `undefined` as unsettled, so an old candidate keeps needing a human — the correct reading of
+   * "we never checked".
+   */
+  readonly semanticSettled?: boolean
+  /**
    * Fingerprint binding this decision to one exact text and target.
    *
    * The publisher recomputes it before sending. Without it, "approved" would be

@@ -30,7 +30,7 @@
  *   number, the same subject with opposing polarity ("值" vs "不值"), or an explicit negation.
  * - **different_topics** — no shared subject at all. This is the apple/oolong case.
  * - **different_preference** — the same domain, but both are statements of taste, which coexist.
- * - **shared_ground** — both mention the same fact without disagreeing about it.
+ * - **agreement** — both mention the same fact without disagreeing about it.
  * - **unknown** — everything else, including anything that might be a real disagreement this
  *   code cannot prove.
  *
@@ -46,16 +46,23 @@
  * forbidden. If this module cannot see a contradiction, it says so, even when the owner would
  * prefer it saw one.
  */
-/** How two stated positions relate. */
 export type PositionRelation = 
 /** Incompatible claims about the same subject: a real dispute. */
 'contradiction'
+/** Both affirm the same thing about the same object. */
+ | 'agreement'
 /** Same domain, both statements of preference — these coexist. */
  | 'different_preference'
 /** No shared subject: two people talking past each other. */
  | 'different_topics'
-/** Both state the same fact without opposing it. */
- | 'shared_ground'
+/**
+ * The two statements might be about the same thing, and might disagree — but establishing
+ * either requires context this module does not have (v0.2.14 §6.2).
+ *
+ * This is the honest answer for `这个方案可行` / `这个方案不可行`: a reader knows they are
+ * arguing, and the code cannot prove it. It must reach a human, not become a confident claim.
+ */
+ | 'clarification_needed'
 /** Not decidable from the text. Must be reviewed by a human. */
  | 'unknown';
 /** The verdict, with the reason a reviewer can check. */

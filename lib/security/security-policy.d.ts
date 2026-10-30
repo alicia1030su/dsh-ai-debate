@@ -57,6 +57,20 @@ export interface CandidateSecurityAssessment {
     readonly evidenceIntegrityValid: boolean;
     readonly decision: SecurityDecision;
     readonly reasons: readonly string[];
+    /**
+     * Whether the debate analysis behind this reply is settled (v0.2.14 §6.4).
+     *
+     * ## Not part of `decision`
+     *
+     * `decision` is about text safety. This is about comprehension: did we establish that the two
+     * sides are arguing about the same thing? A reply to a misunderstanding is perfectly safe prose
+     * and completely wrong to send unattended, so it must not be `block` (the owner should still
+     * see the candidate) and must not be silently `allow`.
+     *
+     * `decideSecurity` therefore does not compute it — it cannot, the information lives in the
+     * brief — and reads `undefined` as unsettled. The generation path fills it in.
+     */
+    readonly semanticSettled?: boolean;
 }
 /** What the checks found, before a decision is made. */
 export interface SecurityFindings {
@@ -75,6 +89,12 @@ export interface SecurityFindings {
     readonly evidenceIntegrityValid: boolean;
     /** Whether the reply text itself looks like a credential or privacy leak. */
     readonly secretLeakRisk: boolean;
+    /**
+     * Whether the debate brief that produced this reply is settled (v0.2.14 §6.4).
+     *
+     * Absent means "not computed", which the policy treats as unsettled.
+     */
+    readonly semanticSettled?: boolean;
 }
 /**
  * The strictness the owner may tune.

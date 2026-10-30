@@ -48,7 +48,14 @@ export type WeiboDiagnosisState =
 /** A read actually completed. */
  | 'read_ok'
 /** Something else went wrong; `message` carries the detail. */
- | 'failed';
+ | 'failed'
+/**
+ * The platform answered with a *different* post than the one requested (v0.2.14 §二).
+ *
+ * Distinct from `malformed_response`: the payload was perfectly readable, it was simply not
+ * the target. Conflating the two would hide an identity problem inside a parsing problem.
+ */
+ | 'target_mismatch';
 /** One line of the diagnostic. */
 export interface WeiboDiagnosticLine {
     readonly state: WeiboDiagnosisState;
@@ -126,5 +133,24 @@ export declare function buildDiagnosticLines(input: {
     readonly readinessSteps: readonly string[];
     readonly lastRead?: WeiboDiagnostics['lastRead'];
     readonly lastError?: WeiboDiagnostics['lastError'];
+    /**
+     * Why each command was chosen, when more than one candidate existed (v0.2.14 §五.9).
+     *
+     * Rendered as its own line so the owner sees the choice, not just its result: a read that
+     * fails because the wrong command was picked looks identical to one that fails for lack of
+     * permission, and only this text tells them apart.
+     */
+    readonly selectionNotes?: readonly string[];
+    /**
+     * Why nested replies are or are not available (v0.2.14 §四.8).
+     *
+     * The capability table says yes or no; this says why, which is what turns an "unverified"
+     * answer into something the owner can act on.
+     */
+    readonly nestedCapability?: {
+        readonly available: boolean;
+        readonly state: string;
+        readonly reason: string;
+    };
 }): WeiboDiagnosticLine[];
 //# sourceMappingURL=diagnostics.d.ts.map

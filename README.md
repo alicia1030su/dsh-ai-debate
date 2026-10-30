@@ -148,17 +148,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.13
+dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.14
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.13.tgz`：
+从 Release 下载 `dsh-ai-debate-0.2.14.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.13.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.14.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
@@ -1013,7 +1013,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**935 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.1 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**998 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.1 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1086,14 +1086,19 @@ node scripts/pack.mjs
 | `test/v0211-weibo-quotes.test.ts` | 6 | **微博引用关系（v0.2.11）**：`quotes` 边指向 `post:` 而非 `comment:`；引用目标未被读取时记为空悬引用而不是编造节点；自引用落在图内；转发与引用是两条独立的边；引用不得被当成回复某条评论 |
 | `test/v0212-brief-pipeline.test.ts` | 14 | TODO: 补充覆盖说明 |
 | `test/v0212-weibo-diagnostics.test.ts` | 8 | TODO: 补充覆盖说明 |
-| `test/v0212-weibo-fake-cli.test.ts` | 13 | TODO: 补充覆盖说明 |
+| `test/v0212-weibo-fake-cli.test.ts` | 14 | TODO: 补充覆盖说明 |
 | `test/v0212-weibo-integration.test.ts` | 5 | TODO: 补充覆盖说明 |
 | `test/v0212-audit-regressions.test.ts` | 11 | TODO: 补充覆盖说明 |
 | `test/v0213-cli-compat.test.ts` | 9 | TODO: 补充覆盖说明 |
 | `test/v0213-conflict-semantics.test.ts` | 14 | TODO: 补充覆盖说明 |
 | `test/v0213-plan-cache.test.ts` | 13 | TODO: 补充覆盖说明 |
 | `test/v0213-platform-diagnostics.test.ts` | 7 | TODO: 补充覆盖说明 |
-| **合计** | **935** | |
+| `test/v0214-argument-object.test.ts` | 14 | TODO: 补充覆盖说明 |
+| `test/v0214-client-platform-panel.test.ts` | 7 | TODO: 补充覆盖说明 |
+| `test/v0214-invocation-plan.test.ts` | 18 | TODO: 补充覆盖说明 |
+| `test/v0214-semantic-policy.test.ts` | 7 | TODO: 补充覆盖说明 |
+| `test/v0214-target-identity.test.ts` | 16 | TODO: 补充覆盖说明 |
+| **合计** | **998** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

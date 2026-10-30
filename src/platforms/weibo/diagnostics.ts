@@ -51,6 +51,13 @@ export type WeiboDiagnosisState =
   | 'read_ok'
   /** Something else went wrong; `message` carries the detail. */
   | 'failed'
+  /**
+   * The platform answered with a *different* post than the one requested (v0.2.14 §二).
+   *
+   * Distinct from `malformed_response`: the payload was perfectly readable, it was simply not
+   * the target. Conflating the two would hide an identity problem inside a parsing problem.
+   */
+  | 'target_mismatch'
 
 /** One line of the diagnostic. */
 export interface WeiboDiagnosticLine {
@@ -169,6 +176,25 @@ export function buildDiagnosticLines(input: {
   readonly readinessSteps: readonly string[]
   readonly lastRead?: WeiboDiagnostics['lastRead']
   readonly lastError?: WeiboDiagnostics['lastError']
+  /**
+   * Why each command was chosen, when more than one candidate existed (v0.2.14 §五.9).
+   *
+   * Rendered as its own line so the owner sees the choice, not just its result: a read that
+   * fails because the wrong command was picked looks identical to one that fails for lack of
+   * permission, and only this text tells them apart.
+   */
+  readonly selectionNotes?: readonly string[]
+  /**
+   * Why nested replies are or are not available (v0.2.14 §四.8).
+   *
+   * The capability table says yes or no; this says why, which is what turns an "unverified"
+   * answer into something the owner can act on.
+   */
+  readonly nestedCapability?: {
+    readonly available: boolean
+    readonly state: string
+    readonly reason: string
+  }
 }): WeiboDiagnosticLine[] {
   const lines: WeiboDiagnosticLine[] = []
 
@@ -269,6 +295,30 @@ export function buildDiagnosticLines(input: {
       state: input.lastError.state,
       message: `最后一次错误：${input.lastError.message}（${input.lastError.at}）`,
       steps: [],
+    })
+  }
+
+  // ## The two answers the capability booleans cannot give
+  if (input.nestedCapability !== undefined) {
+    const nested = input.nestedCapability
+    lines.push({
+      // `unverified` is deliberately not `read_ok`: the page must not show a green badge for a
+      // capability the schema did not confirm.
+      state: nested.available
+        ? 'read_ok'
+        : nested.state === 'unverified'
+          ? 'not_implemented'
+          : 'permission_insufficient',
+      message: `子评论读取：${nested.available ? '可用' : nested.state === 'unverified' ? '未确认' : '不可用'}`,
+      steps: [nested.reason],
+    })
+  }
+
+  if (input.selectionNotes !== undefined && input.selectionNotes.length > 0) {
+    lines.push({
+      state: 'read_ok',
+      message: '命令选择',
+      steps: [...input.selectionNotes],
     })
   }
 

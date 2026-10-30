@@ -531,6 +531,18 @@ export interface WeiboCliCommandSchema {
   /** Which of them the catalog marks as required. */
   readonly required: readonly string[]
   /**
+   * The same parameters with the type the catalog declared.
+   *
+   * `parameters` remains the flat name list because dozens of call sites and tests use it. This
+   * carries the extra facts the invocation plan needs — chiefly whether a parameter is required —
+   * so the plan does not have to re-derive them from two parallel arrays.
+   */
+  readonly typedParameters: readonly {
+    readonly name: string
+    readonly type?: string
+    readonly required: boolean
+  }[]
+  /**
    * Whether the parameter list was actually parsed, or the response shape was unrecognised.
    *
    * `unknown` must never be treated as "no required parameters": a schema we could not read is
@@ -722,9 +734,30 @@ export async function inspectCommand(
 
   const parameters: string[] = []
   const required: string[] = []
+  const typed: { name: string; type?: string; required: boolean }[] = []
+  /** Record one parameter once, merging a later sighting into the earlier row. */
+  const note = (name: string, type: string | undefined, isRequired: boolean): void => {
+    const lower = name.toLowerCase()
+    if (!parameters.includes(lower)) parameters.push(lower)
+    if (isRequired && !required.includes(lower)) required.push(lower)
+    const existing = typed.find((row) => row.name === lower)
+    if (existing === undefined) {
+      typed.push({
+        name: lower,
+        ...(type === undefined ? {} : { type }),
+        required: isRequired,
+      })
+      return
+    }
+    // A parameter that appears twice (property list + sibling `required` array) is required if
+    // either sighting says so.
+    if (isRequired) existing.required = true
+    if (existing.type === undefined && type !== undefined) existing.type = type
+  }
+
   for (const entry of rawParams) {
     if (typeof entry === 'string') {
-      parameters.push(entry.toLowerCase())
+      note(entry, undefined, false)
       continue
     }
     if (typeof entry !== 'object' || entry === null) continue
@@ -733,8 +766,10 @@ export async function inspectCommand(
       (value): value is string => typeof value === 'string' && value.trim() !== '',
     )
     if (paramName === undefined) continue
-    parameters.push(paramName.toLowerCase())
-    if (record.required === true || record.is_required === true) required.push(paramName.toLowerCase())
+    const declaredType = [record.type, record.value_type].find(
+      (value): value is string => typeof value === 'string' && value.trim() !== '',
+    )
+    note(paramName, declaredType, record.required === true || record.is_required === true)
   }
 
   // A JSON-schema-style sibling `required: ["mid"]` array names parameters without repeating
@@ -746,9 +781,7 @@ export async function inspectCommand(
     if (!Array.isArray(candidate)) continue
     for (const name of candidate) {
       if (typeof name !== 'string') continue
-      const normalised = name.toLowerCase()
-      if (!parameters.includes(normalised)) parameters.push(normalised)
-      if (!required.includes(normalised)) required.push(normalised)
+      note(name, undefined, true)
     }
   }
 
@@ -759,6 +792,7 @@ export async function inspectCommand(
     name,
     parameters,
     required,
+    typedParameters: typed,
     evidence,
     ...(nestedFlag === undefined ? {} : { nestedFilterFlag: nestedFlag }),
     // A schema we could not parse can never be "usable": the whole point of this check is to

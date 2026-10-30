@@ -55,6 +55,17 @@ export interface OutputGuardInput {
     /** The conversation text the reply was generated from, for input assessment. */
     readonly conversationText?: readonly string[];
     readonly strictness?: SecurityStrictness;
+    /**
+     * Whether the debate brief is settled (v0.2.14 §6.4).
+     *
+     * Comes from the `ConflictVerdict` the brief was built with. It does **not** affect
+     * `decision`: a reply to a misunderstanding is safe prose, so it must not be blocked — but it
+     * must lose the automatic slots, which `checkPublishPolicy` enforces from this field.
+     *
+     * Absent means "not computed". That is treated as unsettled everywhere downstream, because
+     * "we never checked" is not "it is fine".
+     */
+    readonly semanticSettled?: boolean;
 }
 /**
  * True when the reply text itself contains anything credential-shaped.

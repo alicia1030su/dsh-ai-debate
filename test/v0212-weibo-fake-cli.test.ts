@@ -153,16 +153,18 @@ function happyRules(): unknown[] {
     { match: 'commands show comments show/biz', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
     { match: 'commands list', stdout: JSON.stringify(GOOD_CATALOG) },
     { match: 'statuses show_batch/biz --ids 4331051486294436', stdout: JSON.stringify(STATUS) },
+    // Page 1 omits `--page` (it is the default), and both pages carry `--count` because the
+    // schema declares it. v0.2.13 always sent `--page`, including for page 1.
     {
-      match: 'comments show/biz --id 4331051486294436 --page 1',
+      match: 'comments show/biz --id 4331051486294436 --count 20',
       stdout: JSON.stringify(COMMENTS_PAGE_1),
     },
     {
-      match: 'comments show/biz --id 4331051486294436 --page 2',
+      match: 'comments show/biz --id 4331051486294436 --page 2 --count 20',
       stdout: JSON.stringify(COMMENTS_PAGE_2),
     },
     {
-      match: 'comments show/biz --cid 5001',
+      match: 'comments show/biz --id 4331051486294436 --cid 5001 --count 20',
       stdout: JSON.stringify({
         comments: [
           {
@@ -262,16 +264,29 @@ test('集成：getReplies 分页，且完整性来自响应而不是「这页看
     assert.equal(page2.hasMore, false)
 
     const log = calls(logPath)
+    // ## Page 2 must carry `--page`, and page 1 must not (v0.2.14)
+    //
+    // The schema declares `page`, so a request for page 2 has to say so. Page 1 is the server
+    // default, so it is left off; sending `--page 1` would be a request the command may reject
+    // with `Unknown option` on a schema that names its paging flag differently.
     assert.equal(
       log.some(
-      (argv) =>
-        argv[0] === 'comments' &&
-        argv[1] === 'show/biz' &&
-        argv.includes('--page') &&
-        argv.includes('1'),
-    ),
+        (argv) =>
+          argv[0] === 'comments' &&
+          argv[1] === 'show/biz' &&
+          argv.includes('--page') &&
+          argv.includes('2'),
+      ),
       true,
-      '分页参数必须传下去',
+      '请求第 2 页时必须把页码传下去',
+    )
+    assert.equal(
+      log.some(
+        (argv) =>
+          argv[0] === 'comments' && argv[1] === 'show/biz' && argv.includes('--page') && argv.includes('1'),
+      ),
+      false,
+      '第 1 页是服务端默认，不该发 --page 1',
     )
   } finally {
     resetCli()
@@ -289,7 +304,9 @@ test('集成：getNestedReplies 用目录里发现的筛选参数，不再凭空
   // schema lists `cid`, so the invocation must use `--cid`.
   const rules = happyRules().map((rule) => {
     const r = rule as { match: string; stdout?: string }
-    if (r.match.startsWith('comments show/biz --cid')) {
+    // The nested argv is `--id <微博id> --cid <评论id> --count 20`: two different ids, and the
+    // first version of this rewrite passed the comment id as the post id.
+    if (r.match.startsWith('comments show/biz --id 4331051486294436 --cid')) {
       return {
         match: r.match,
         stdout: JSON.stringify({
@@ -560,9 +577,16 @@ test('集成：命令要求我们填不了的参数 → 拒绝调用，不猜参
   }
 })
 
-test('集成：响应结构对不上 → malformed_response，不返回空 Thread', async () => {
-  // The real platform may name fields differently. When that happens the adapter must say
-  // so, because a thread with no author and no body would look like a real empty post.
+test('集成：响应里没有可识别 id → target_mismatch，不返回空 Thread', async () => {
+  // ## Why the code changed in v0.2.14
+  //
+  // This payload carries no id at all. v0.2.13 called that `malformed_response` ("the shape did
+  // not parse"), which framed it as a parsing problem. It is not: a payload that identifies no
+  // post **cannot be shown to be the target**, and calling it a shape error invites a future
+  // parser tweak to "fix" it by accepting the object anyway.
+  //
+  // The guarantee is unchanged and is the one that matters: `getThread` must fail rather than
+  // return a thread built from an unidentifiable post.
   useFakeCli([
     { match: 'version', stdout: 'weibo-cli 1.0.0\n' },
     { match: 'doctor', stdout: 'ok\n' },
@@ -579,6 +603,35 @@ test('集成：响应结构对不上 → malformed_response，不返回空 Threa
         (reason: unknown) => reason as Error & { code?: string },
       )
     assert.ok(error !== undefined, '结构不符必须失败')
+    assert.equal(error!.code, 'target_mismatch', `实际 ${error!.code}: ${error!.message}`)
+  } finally {
+    resetCli()
+  }
+})
+
+test('集成：id 对得上但正文读不出来 → malformed_response', async () => {
+  // The complementary case, and the reason the two codes exist separately: here the post *is*
+  // the target (its id matches) and only its body is unreadable — a genuine parsing failure.
+  useFakeCli([
+    { match: 'version', stdout: 'weibo-cli 1.0.0\n' },
+    { match: 'doctor', stdout: 'ok\n' },
+    { match: 'commands show statuses show_batch/biz', stdout: JSON.stringify(GOOD_STATUS_SCHEMA) },
+    { match: 'commands show comments show/biz', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
+    { match: 'commands list', stdout: JSON.stringify(GOOD_CATALOG) },
+    {
+      match: 'statuses show_batch/biz --ids 4331051486294436',
+      // Right id, no body anywhere.
+      stdout: JSON.stringify({ idstr: '4331051486294436', unexpected: 'shape' }),
+    },
+  ])
+  try {
+    const error = await adapter()
+      .getThread(REF)
+      .then(
+        () => undefined,
+        (reason: unknown) => reason as Error & { code?: string },
+      )
+    assert.ok(error !== undefined, '正文读不出来必须失败')
     assert.equal(error!.code, 'malformed_response', `实际 ${error!.code}: ${error!.message}`)
   } finally {
     resetCli()

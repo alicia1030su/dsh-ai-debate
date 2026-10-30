@@ -105,6 +105,10 @@ function sessionWithVerdict(
       evidenceIntegrityValid: true,
       decision,
       reasons: decision === 'allow' ? [] : [`${decision} 的安全理由`],
+      // v0.2.14 §6.4: the automatic slot also requires a settled debate analysis. This fixture
+      // is about the v0.2.5 matrix, so it states the assumption rather than exercising it;
+      // `semanticSettled` has its own coverage in `v0214-semantic-policy.test.ts`.
+      semanticSettled: true,
       fingerprint: assessmentFingerprint({ reply: text, targetPostId: OPPONENT_POST_ID, decision }),
     },
     createdAt: now,

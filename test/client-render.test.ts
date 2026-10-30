@@ -200,11 +200,20 @@ test('the settings section renders every area without injected props', async () 
   }
 })
 
-test('the section reads the plugin route exactly once per load', () => {
+test('the section reads settings once and status once per load', () => {
   const bundle = loadBundle()
   const component = bundle.exports['DebateSection']!
   component({ view: 'page', close: () => undefined })
-  assert.deepEqual(bundle.fetches, ['/api/dsh-ai-debate/settings'])
+  // v0.2.14 §九: the page now also reads `/status`, because the platform panel needs the live
+  // diagnostics on first open. Before this the blocks were fetched only when the owner pressed
+  // 重新探测, so every platform rendered as "no live diagnostic" until then.
+  //
+  // Both routes are asserted, in order: a duplicate would mean the page re-fetches on every
+  // render rather than once per load.
+  assert.deepEqual(bundle.fetches, [
+    '/api/dsh-ai-debate/settings',
+    '/api/dsh-ai-debate/status',
+  ])
 })
 
 test('the section shows the saved credential status without its value', async () => {

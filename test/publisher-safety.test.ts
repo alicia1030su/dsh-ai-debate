@@ -577,6 +577,10 @@ test('the limited-auto policy enforces its caps and cooldown', () => {
     // automatic slot by omission. This test is about the caps and cooldown, so it
     // states the verdict it is assuming.
     securityDecision: 'allow' as const,
+    // v0.2.14 §6.4: an automatic slot additionally requires a *settled* debate analysis.
+    // Without this the policy refuses with `semantic_unsettled` — intended behaviour, but this
+    // test is about the caps and cooldown, so it states the assumption explicitly.
+    semanticSettled: true,
     now: 1_000_000,
   }
   assert.equal(checkPublishPolicy(policy, base).allowed, true)

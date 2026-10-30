@@ -1018,10 +1018,31 @@ window.__ModuleLoader__.load({
       /** Load the served view. */
       async load() {
         try {
-          this.install(normalizeView(await callJson(ROUTE_SETTINGS)))
+          // ## Two reads, one page (v0.2.14 §九)
+          //
+          // `/settings` carries the form; `/status` carries the live platform diagnostics.
+          // Fetching only the first left `platformBlocks` undefined, so the platform panel showed
+          // "这个平台没有提供实时诊断" for *every* platform on first open — including Weibo, whose
+          // state the Host was already serving.
+          //
+          // `allSettled` rather than `all`: an unreachable status endpoint must not blank the
+          // settings form. An undefined block list still renders as "no live diagnostic", which
+          // is the honest answer when the probe could not run.
+          const [settingsResult, statusResult] = await Promise.allSettled([
+            callJson(ROUTE_SETTINGS),
+            callJson(ROUTE_STATUS),
+          ])
+          if (settingsResult.status === 'rejected') throw settingsResult.reason
+          this.install(normalizeView(settingsResult.value))
+          if (statusResult.status === 'fulfilled') {
+            this.status = statusResult.value
+            const blocks = this.status && this.status.platforms
+            this.platformBlocks = Array.isArray(blocks) ? blocks : undefined
+          }
         } catch (error) {
           this.view = { ...emptyView(), status: 'unavailable' }
           this.failed = error instanceof Error ? error.message : String(error)
+        } finally {
           this.publish()
         }
       }
@@ -1244,6 +1265,14 @@ window.__ModuleLoader__.load({
         this.publish()
         try {
           this.status = await callJson(ROUTE_STATUS)
+          // ## The platform blocks ride on the same response (v0.2.14 §九)
+          //
+          // They were being fetched and thrown away: the panel read `platformBlocks`, which
+          // nothing ever assigned, so every platform rendered as "no live diagnostic" while the
+          // Host was happily sending seven lines about the Weibo CLI. Capturing them here is the
+          // whole fix.
+          const blocks = this.status && this.status.platforms
+          this.platformBlocks = Array.isArray(blocks) ? blocks : undefined
           this.probes = { ...this.probes, status: { state: 'done' } }
         } catch (error) {
           this.probes = {
@@ -2315,10 +2344,13 @@ window.__ModuleLoader__.load({
           status
             ? h('p', { className: 'dsd-hint' }, format(t('ledgerDetail'), status.publishLedger))
             : h('p', { className: 'dsd-hint' }, t('recordsNotLoading')),
-          status && status.publishLedger.overCapacity
+          // Guard the field, not its parent: a status that exists but has no ledger yet is a
+          // real intermediate state (the Host fills it in on first publish), and reading through
+          // it used to blank the entire panel.
+          status && status.publishLedger && status.publishLedger.overCapacity
             ? h('p', { className: 'dsd-hint dsd-hint-error' }, t('ledgerOver'))
             : null,
-          status
+          status && status.publishLedger
             ? h('p', { className: 'dsd-hint' }, `${t('pendingRecords')} — ${status.publishLedger.pending}`)
             : null,
         ),
@@ -3010,7 +3042,7 @@ window.__ModuleLoader__.load({
           h('dt', null, t('usage')),
           h('dd', null, format(t('usageDetail'), status.usage)),
           h('dt', null, t('rateLimit')),
-          h('dd', null, status.rateLimit.note),
+          h('dd', null, status.rateLimit && status.rateLimit.note ? status.rateLimit.note : '—'),
         ),
         h('p', { className: 'dsd-sect-title', style: { marginTop: 14 } }, t('recentErrors')),
         status.recentErrors && status.recentErrors.length > 0
