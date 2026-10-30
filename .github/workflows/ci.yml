@@ -78,7 +78,7 @@ jobs:
       # A suite can be green while skipping files, and a release can be reachable from a branch.
       # Those are properties of the repository, so they are asserted rather than assumed.
       - name: CI 守卫检查
-        run: node scripts/ci-guard.mjs
+        run: node scripts/ci-guard.mjs --require-archive
 
       - name: 确认没有把凭据提交进仓库
         run: |

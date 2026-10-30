@@ -115,7 +115,7 @@ jobs:
           node scripts/scan-archive.mjs "${{ steps.pack.outputs.source_zip }}"
 
       - name: CI 守卫检查
-        run: node scripts/ci-guard.mjs
+        run: node scripts/ci-guard.mjs --require-archive
 
       - name: 校验安装包内容
         run: |

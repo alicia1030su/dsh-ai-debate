@@ -211,9 +211,19 @@ function zipEntryNames(file) {
  * 2. **When the artifact exists** — open it and check what actually landed inside. This catches a
  *    rule that looks right but is applied wrongly.
  *
- * Tier 2 skips locally, but never in CI: `CI` is set there, the ZIP is built in an earlier step,
- * and a missing artifact at that point *is* the failure this section exists to catch.
+ * Tier 2 is skippable locally, but the decision is **explicit, never inferred from `CI`**.
+ *
+ * An earlier version of this file keyed off `process.env.CI`. That was wrong, and real CI proved
+ * it: `test/v0215-ci-integrity.test.ts` runs this guard from inside the test suite, and in `ci.yml`
+ * the test step comes *before* the step that builds the archive. So `CI` was set, the ZIP was not
+ * there yet, and the guard failed the suite it was supposed to protect.
+ *
+ * "Am I in CI?" does not answer "has the artifact been built yet?". Only the caller knows that, so
+ * the caller says so: `--require-archive` in the workflow step that runs after packaging, and
+ * nothing in the test suite. The flag is opt-in, so a forgotten flag shows up as an honest skip
+ * rather than a false green.
  */
+const requireArchive = process.argv.includes('--require-archive') || process.env.CI_GUARD_REQUIRE_ARCHIVE === '1'
 const sourceZipPacker = join(root, 'scripts', 'source-zip.mjs')
 if (existsSync(sourceZipPacker)) {
   const packer = readFileSync(sourceZipPacker, 'utf8')
@@ -232,11 +242,11 @@ if (existsSync(pkgPath)) {
   const sourceZip = join(root, '..', `dsh-ai-debate-source-${version}.zip`)
 
   if (!existsSync(sourceZip)) {
-    // In CI the archive is produced by an earlier step, so its absence means the pipeline is
-    // broken — not that the user is mid-edit.
-    if (process.env.CI) {
+    // Only the step that just built the archive may demand its presence. Everything else — the
+    // test suite especially — is a checkout where "not built yet" is the normal state.
+    if (requireArchive) {
       fail(
-        `CI 环境里找不到源码包 ${sourceZip}。前面的「生成并扫描公开源码包」步骤没有产出它。`,
+        `--require-archive 已指定，但找不到源码包 ${sourceZip}。前面的「生成并扫描公开源码包」步骤没有产出它。`,
       )
     } else {
       note('源码包尚未生成，跳过归档内容检查（打包规则已单独校验）')
