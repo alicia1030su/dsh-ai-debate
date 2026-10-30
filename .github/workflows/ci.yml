@@ -80,23 +80,14 @@ jobs:
       - name: CI 守卫检查
         run: node scripts/ci-guard.mjs --require-archive
 
+      # ## 凭据扫描交给项目自己的脚本（v0.2.16）
+      #
+      # v0.2.15 这里是两条内联 `grep`。它和 `scripts/audit-leaks.mjs` 各写了一套规则，
+      # 结果两套规则对「什么算 fixture」的答案不一致：审计脚本认得 `fixture-` 前缀，
+      # 内联 grep 不认，于是 `test/v0215-source-zip-security.test.ts` 里那个假 Cookie
+      # 直接把这一步判死。同一件事只能有一个判定来源，否则修好一边不代表另一边也对。
       - name: 确认没有把凭据提交进仓库
-        run: |
-          set -e
-          # 贴吧 Cookie 与常见 key 形态；命中即失败。
-          if grep -rInE '(BAIDUID|BDUSS)\s*=\s*[A-Za-z0-9]{10,}' \
-               --include='*.ts' --include='*.js' --include='*.json' \
-               --include='*.yml' --include='*.yaml' --include='*.md' . ; then
-            echo "::error::仓库里出现了疑似贴吧 Cookie"
-            exit 1
-          fi
-          if grep -rInE 'sk-[A-Za-z0-9]{20,}' \
-               --include='*.ts' --include='*.js' --include='*.json' \
-               --include='*.yml' --include='*.yaml' --include='*.md' . ; then
-            echo "::error::仓库里出现了疑似 API key"
-            exit 1
-          fi
-          echo "未发现凭据痕迹"
+        run: node scripts/audit-leaks.mjs
 
       - name: 确认构建产物已提交（供 GitHub 直接安装）
         run: |

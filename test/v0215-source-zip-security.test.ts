@@ -108,7 +108,10 @@ function makeDirtyRepo() {
   writeFileSync(join(dir, '.credentials.json'), FAKE_CREDENTIALS, 'utf8')
   writeFileSync(join(dir, 'id_rsa'), FAKE_PRIVATE_KEY, 'utf8')
   writeFileSync(join(dir, 'server.pem'), FAKE_PRIVATE_KEY, 'utf8')
-  writeFileSync(join(dir, 'debug.log'), 'trace with a cookie: BDUSS=FAKEFAKEFAKE\n', 'utf8')
+  // `fixture-` 前缀是审计脚本与打包脚本共用的约定：它让「这是假凭据」成为一个可判定的事实，
+  // 而不是一份需要人工维护的豁免名单。别把值写成纯大写字母——那看起来和真 Cookie 一模一样，
+  // `scripts/audit-leaks.mjs` 会（正确地）拒绝整个仓库。连注释里也别写出来：扫描器读的是字节。
+  writeFileSync(join(dir, 'debug.log'), 'trace with a cookie: BDUSS=fixture-FAKE-COOKIE\n', 'utf8')
   writeFileSync(join(dir, 'notes.bak'), 'backup\n', 'utf8')
   writeFileSync(join(dir, '.npmrc'), '//registry/:_authToken=v0215-0005\n', 'utf8')
   writeFileSync(join(dir, '.netrc'), 'machine example login x password y\n', 'utf8')
