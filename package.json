@@ -1,6 +1,6 @@
 {
   "name": "dsh-ai-debate",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "description": "AI代吵架 — read a Tieba thread, reconstruct the argument, inherit the owner's position, and draft a persona-styled reply with human review before publishing.",
   "license": "AGPL-3.0-only",
   "type": "module",
