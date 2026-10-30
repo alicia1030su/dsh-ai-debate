@@ -61,11 +61,13 @@ jobs:
 
       - name: 自动化测试
         run: |
+          set -e
           # Globbed so a new test file cannot be silently skipped by a stale list.
           node --experimental-transform-types --test "test/**/*.test.ts"
 
       - name: 确认 lib/ 与源码一致
         run: |
+          set -e
           git diff --exit-code --stat lib/ || {
             echo "::error::lib/ 与源码不一致，请先本地构建并提交产物"
             exit 1
@@ -100,6 +102,20 @@ jobs:
           echo "source_zip=$SOURCE_ZIP" >> "$GITHUB_OUTPUT"
           echo "source_sha256=$SOURCE_SHA256" >> "$GITHUB_OUTPUT"
           echo "源码包完成：$SOURCE_ZIP（$SOURCE_SHA256）"
+
+      # ## Independent scan before anything becomes an asset (v0.2.15 §五)
+      #
+      # The packer already refuses to write a leaking archive, but that is self-certification:
+      # a wrong allowlist and a wrong self-check are the same bug. This scanner has its own rules
+      # and never imports the packer, so it can disagree — which is the point.
+      - name: 独立扫描发布产物
+        run: |
+          set -e
+          node scripts/scan-archive.mjs "${{ steps.pack.outputs.tarball }}"
+          node scripts/scan-archive.mjs "${{ steps.pack.outputs.source_zip }}"
+
+      - name: CI 守卫检查
+        run: node scripts/ci-guard.mjs
 
       - name: 校验安装包内容
         run: |

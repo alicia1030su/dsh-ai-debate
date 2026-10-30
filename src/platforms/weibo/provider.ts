@@ -133,6 +133,28 @@ function row(state: CapabilityDeclaration['state'], reason: string, extra: Parti
  * Nothing is `supported`. That word has one meaning in this project — exercised against
  * the real platform — and no Weibo call has been.
  */
+/**
+ * The evidence level in words a reader can act on.
+ *
+ * These strings are the difference between "it works" and "it looks like it might work", which is
+ * the whole point of §三. `schema_only` is the most common state in this build and it must never
+ * sound like success.
+ */
+export function describeEvidenceLevel(
+  level: 'schema_only' | 'live_call' | 'fully_verified' | 'unavailable',
+): string {
+  switch (level) {
+    case 'fully_verified':
+      return '真实调用成功且父子关系已核对'
+    case 'live_call':
+      return '真实调用成功，但父子关系未核对'
+    case 'schema_only':
+      return '仅参数 schema 吻合，尚未在真实平台调用'
+    case 'unavailable':
+      return '平台 schema 明确不支持'
+  }
+}
+
 function describeCapabilities(): PlatformCapabilityMatrix {
   const capabilities: Record<CapabilityName, CapabilityDeclaration> = {
     'thread.read': row('unverified', `${READ_REASON}读取单条微博正文是第一步。`, {
@@ -484,9 +506,16 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
     cached = {
       thread: threadClaim?.available === true,
       replies: commentClaim?.available === true,
-      // A nested read is claimed only when the plan *verified* it. `unverified` stays false
-      // here and its reason is carried in the notes below, so the page can explain the gap.
-      nestedReplies: nestedClaim?.available === true,
+      // ## Claimed only after a real platform call (v0.2.15 §三)
+      //
+      // v0.2.14 used `nestedClaim.available`, which is true as soon as the *schema* looks right
+      // — so a command declaring `cid` + `count` made the page say "子评论可读" while no read
+      // had ever run. A parameter name is not a platform capability.
+      //
+      // The bar now is `fully_verified`: a real call succeeded **and** the returned parent/child
+      // link was checked against the requested comment id. A bare successful call (`live_call`)
+      // only proves the command runs, not that the replies hang off the right comment.
+      nestedReplies: nestedClaim?.evidence.level === 'fully_verified',
       userProfile: false,
       mentions: false,
       publish: false,
@@ -495,8 +524,14 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
         ...(resolved.threadProblem === undefined ? {} : { thread: resolved.threadProblem }),
         ...(resolved.commentProblem === undefined ? {} : { replies: resolved.commentProblem }),
         // The nested answer always carries a reason: "no" without one is indistinguishable
-        // from "we did not look", and the page renders this text.
-        ...(nestedClaim === undefined ? {} : { nestedReplies: nestedClaim.reason }),
+        // from "we did not look", and the page renders this text. The level is spelled out so
+        // "schema only" can never be read as "it works".
+        ...(nestedClaim === undefined
+          ? {}
+          : {
+              nestedReplies:
+                `${nestedClaim.reason}（证据层次：${describeEvidenceLevel(nestedClaim.evidence.level)}）`,
+            }),
         ...(ready ? {} : { authCheck: resolved.readiness.message }),
         publish: '本版不开放微博真实发表（需要写入授权与 AI 生成内容标识）。',
         mentions: '微博的艾特通知不对外开放给第三方读取。',

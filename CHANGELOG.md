@@ -2,6 +2,169 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.15] — 2026-10-30
+
+发布安全、微博身份语义与 CI 真实性加固。**核心变化：源码 ZIP 从「排除清单」改为白名单，
+微博身份字段按语义分组校验，CLI 参数形状不再被当作真实平台验证，CI 的空检查变成可断言的
+仓库属性。**
+
+没有推倒重写，v0.2.14 的 998 项测试全部保留。
+
+### 一、P0 源码 ZIP 泄漏本地敏感文件
+
+**缺陷**：`source-zip.mjs` 遍历整个工作目录，只排除一份硬编码黑名单。`.env` 在任何一条规则里
+都没出现，所以它带着完整内容进了**公开**源码包。
+
+**复现**（修复前）：工作目录放 `.env`、`.env.local`、`.credentials.json`，执行打包：
+
+```
+文件数：471
+.env            ← 泄漏
+.env.local      ← 泄漏
+.credentials.json
+```
+
+**根因是极性反了**。黑名单永远不完整：本地可能创建什么文件是无限的，每次遗漏都是一次公开
+泄漏。
+
+**修法**：
+
+- 白名单：只发 `src/`、`test/`、`scripts/`、`docs/`、`client/`、`templates/`、`.github/`
+  与指定顶层文件（README、LICENSE、package.json、tsconfig、.env.example 等）。
+- Git 仓库时以 `git ls-files --cached -z` 为权威来源；无 Git 时同一套白名单作用于遍历。
+- 未知路径 `isPublishable()` 返回 `false`——**无法确认就不发布**。
+- `FORBIDDEN_NAMES` / `FORBIDDEN_DIRS` 在白名单**之后**再过一遍：`.env`、`.env.*`（保留
+  `.env.example`）、`.credentials*`、私钥、`.ssh`、`.dsh`、`.npmrc`、`.netrc`、日志、备份。
+- 符号链接一律不跟随（`isSymbolicLink()` 先于一切判断），Git 路径再用 `lstat` 复核。
+- 每个候选文件字节级扫描凭据形状，命中即 `throw`，不是警告。
+- 最终清单再复核一遍禁止规则：`isPublishable` 与它若不一致，说明有代码绕过了检查。
+
+**新增独立扫描器** `scripts/scan-archive.mjs`：不导入打包脚本的任何规则，用自己的名单与正则
+检查**成品压缩包**。自证不够——「白名单写错」和「自检也写错」是同一个 bug。
+
+**验证**：471 → 239 条目，`.env` 与 `.credentials.json` 均不存在，`.env.example` 保留。
+tgz（247 条目）与源码 ZIP（239 条目）独立扫描均干净。
+
+### 二、P1 微博身份字段语义
+
+**缺陷**：`idsOf()` 把 `id`、`idstr`、`mid` 平铺进一个数组，**任一命中即放行**。
+
+```json
+{ "idstr": "4331051486294436", "id": "9999999999999999", "text": "测试正文" }
+```
+
+v0.2.14 返回 `ok: true`。这个对象自己说自己是两条不同的微博。
+
+**字段语义**（依据微博开放平台 CLI 手册：发布后请保存 `id`/`idstr`）：
+
+| 字段 | 语义 | 同空间于 |
+| --- | --- | --- |
+| `id` | 微博状态 ID | `idstr` |
+| `idstr` | 同一 ID 的字符串形式 | `id` |
+| `mid` | URL 中的 mid（`weibo.com/<uid>/<mid>`） | 仅 `mid` |
+
+**修法**：
+
+- 同语义组内冲突必须拒绝 → `code: identity_conflict`。
+- 跨语义组不强制比较：`mid` 与 `id` 取值不同是正常的，拿它们互相校验会把正确响应判成不匹配。
+- **矛盾检查先于匹配**：审计 payload 的 `idstr` 等于请求值，若先判「有没有字段命中」，
+  命中字段会盖住矛盾。
+- 重复对象比较**作者**而不只是正文：同 id 挂两个作者时，判错的正是「谁是对手」。
+- 嵌套信封（`{ data: { status } }`、`{ result: { statuses } }`）最多穿透 4 层。
+
+### 三、P1 CLI 参数形状不再当成真实平台验证
+
+**缺陷**：`nestedClaimOf()` 只要命令声明 `cid` 与 `count` 就返回 `state: 'verified'`；
+`provider.ts` 用 `nestedClaim.available === true`。于是**页面宣称「子评论可读」，而读取从未执行**。
+
+**六层证据**（前两层静态，后四层必须来自真实调用）：
+
+| 层次 | 性质 | 本轮 |
+| --- | --- | --- |
+| 命令存在 | 静态 | 可判定 |
+| 参数 Schema 兼容 | 静态 | 可判定 |
+| 已取得账号权限 | 账号态 | `unknown` |
+| 真实调用成功 | 网络 | 未发生 |
+| 父子关系正确 | 网络 | 未发生 |
+| 真实平台验证完成 | 人工 | 未达成 |
+
+**修法**：`CapabilityClaim` 增加 `evidence`：
+
+```
+evidence: {
+  commandExists, schemaCompatible, accountPermitted: boolean | 'unknown',
+  liveCallSucceeded, parentChildConfirmed,
+  level: 'schema_only' | 'live_call' | 'fully_verified' | 'unavailable'
+}
+```
+
+- 所有静态构造点一律 `schema_only`。
+- `nestedReplies` 只认 `level === 'fully_verified'`。
+- **一次成功调用也不够**：`live_call` 只证明命令能跑，不证明返回的回复真的挂在请求的评论下。
+- 新增 `describeEvidenceLevel()`，`schema_only` 的措辞明确写着「尚未在真实平台调用」。
+
+### 四、CI 真实性加固
+
+`scripts/ci-guard.mjs` 把六类「绿色但什么都没验证」变成可断言的仓库属性，并查出三个真实缺口：
+
+1. `ci.yml` 的「自动化测试」步骤多行但缺 `set -e`。
+2. `release.yml` 的「自动化测试」同样缺。
+3. `release.yml` 的「确认 lib/ 与源码一致」缺 `set -e`——这一步失败后若无 `set -e`，
+   后续成功命令会让整步变绿，正是「lib 陈旧却报告通过」。
+
+工作流强化：
+
+- `ci.yml` 现在**每次推送**都构建并独立扫描源码 ZIP 与 tgz（此前只有 release 才生成源码包，
+  打包器坏了要等发版才发现）。
+- `release.yml` 在创建 Release **之前**插入独立扫描与守卫检查。
+- `release.yml` 的 `workflow_dispatch` 保持 `dry_run` 默认 `true`，创建 Release 限定
+  `refs/tags/`——分支通过不能发布正式版本。
+
+### 五、GitHub Actions 远端验证：未执行
+
+本机实际检查结果：**无 git、无 gh、无 GitHub 授权会话、目录不是 Git 仓库、
+`GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_PAT` 均未设置**。
+
+因此本轮**不报告远端 CI 结果**，也不把「本地 1053 项通过」解释为「Actions 全绿」。
+仓库、分支、commit SHA、Workflow、Run ID、Node 22.18/24 结果全部为「未验证」。
+
+自行完成的最小步骤（不需要把任何 Token 贴进对话）：
+
+- **GitHub Desktop**：登录（浏览器 OAuth）→ Add local repository → Publish repository →
+  仓库页 Actions → CI → Run workflow。
+- **命令行**：装 Git 与 GitHub CLI → `git init && git add -A && git commit` →
+  `gh auth login`（选 web browser）→ `gh repo create --source . --push` →
+  `gh run list --workflow CI`。
+
+推送与发布需要用户本人完成：本环境无法取得批准。
+
+### 六、测试
+
+**1053 项全绿**（v0.2.14 的 998 项全部保留，新增 55 项）。
+
+| 新增文件 | 项数 | 覆盖 |
+| --- | --- | --- |
+| `test/v0215-source-zip-security.test.ts` | 8 | 打包安全（隔离目录假凭据） |
+| `test/v0215-weibo-identity.test.ts` | 19 | 身份字段语义 |
+| `test/v0215-capability-evidence.test.ts` | 13 | 六层证据 |
+| `test/v0215-ci-integrity.test.ts` | 15 | CI 空检查 |
+
+打包安全测试全部在 `mkdtemp` 临时目录里造 `FAKE_*` 常量，**不读任何真实用户凭据**。
+
+### 七、未验证清单
+
+| 项目 | 状态 |
+| --- | --- |
+| 源码 ZIP 不泄漏敏感文件 | ✅ 完成并验证 |
+| 微博身份语义（模拟层） | ✅ 完成并验证 |
+| 能力声明不虚报 | ✅ 完成并验证 |
+| CI 工作流正确性（静态断言） | ✅ 完成并验证 |
+| **GitHub Actions 远端运行** | ❌ **未验证** |
+| **远端 Node 22.18 / Node 24 结果** | ❌ **未验证** |
+| **微博真实读取** | ❌ **未验证** |
+| **贴吧真实发表 + 回读** | ❌ **未验证** |
+| 创建正式 GitHub Release | ⛔ 未执行（无授权） |
+
 ## [0.2.14] — 2026-10-30
 
 微博真实读取可靠性与跨平台争论理解升级。**核心变化：正文 MID 必须与请求一致，所有 CLI 参数

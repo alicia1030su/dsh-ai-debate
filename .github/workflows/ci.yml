@@ -50,11 +50,35 @@ jobs:
 
       - name: 自动化测试
         run: |
+          set -e
           # Globbed so a new test file cannot be silently skipped by a stale list.
           node --experimental-transform-types --test "test/**/*.test.ts"
 
       - name: 打包自检
         run: node scripts/pack.mjs
+
+      # ## The source archive is built and scanned here too (v0.2.15 §五)
+      #
+      # It used to be produced only by the release workflow, so a broken packer or a leaked local
+      # file would first be noticed when publishing. Building it on every push costs a second and
+      # moves that discovery to the pull request.
+      - name: 生成并扫描公开源码包
+        run: |
+          set -e
+          node scripts/source-zip.mjs
+          VERSION="$(node -p "require('./package.json').version")"
+          SOURCE_ZIP="../dsh-ai-debate-source-${VERSION}.zip"
+          # Independent scanner: it does not import the packer and uses its own rules, so a bug in
+          # the allowlist cannot certify itself.
+          node scripts/scan-archive.mjs "$SOURCE_ZIP"
+          node scripts/scan-archive.mjs "dsh-ai-debate-${VERSION}.tgz"
+
+      # ## Facts about the workflow itself (§五)
+      #
+      # A suite can be green while skipping files, and a release can be reachable from a branch.
+      # Those are properties of the repository, so they are asserted rather than assumed.
+      - name: CI 守卫检查
+        run: node scripts/ci-guard.mjs
 
       - name: 确认没有把凭据提交进仓库
         run: |
@@ -76,6 +100,10 @@ jobs:
 
       - name: 确认构建产物已提交（供 GitHub 直接安装）
         run: |
+          # `set -e` matters here more than elsewhere: without it, a failing `git diff` followed by
+          # a later successful command would let the step finish green while lib/ is stale — the
+          # exact "green but nothing verified" shape this workflow exists to prevent.
+          set -e
           if [ ! -f lib/index.js ]; then
             echo "::error::lib/index.js 不存在。用户从 GitHub 安装时需要它，请不要在提交里排除 lib/。"
             exit 1

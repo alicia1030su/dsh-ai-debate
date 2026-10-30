@@ -64,8 +64,50 @@ export interface PlanParameter {
  */
 export interface CapabilityClaim {
   readonly available: boolean
-  /** `verified` = the schema supports it; `unavailable` = the schema says no; `unverified` = unknown. */
+  /**
+   * What the **schema** says.
+   *
+   * `verified` = the command declares parameters that make this reading coherent;
+   * `unavailable` = the schema says no; `unverified` = the schema is ambiguous.
+   *
+   * This is a *static* answer. It is evidence about the interface, not about the platform.
+   */
   readonly state: 'verified' | 'unavailable' | 'unverified'
+  /**
+   * ## The six-layer distinction (v0.2.15 §三)
+   *
+   * `state` alone was being read as "verified usable", which conflated six different strengths
+   * of evidence into one badge. A command that merely declares `cid` and `count` looks
+   * parameter-compatible and proves nothing about whether the platform honours it, whether this
+   * account may call it, or whether the returned replies actually hang off the requested comment.
+   *
+   * `evidence` keeps them apart so the page can say exactly how much is known.
+   */
+  readonly evidence: {
+    /** The command appears in `commands list`. */
+    readonly commandExists: boolean
+    /** The schema declares the parameters the reading needs. */
+    readonly schemaCompatible: boolean
+    /**
+     * The account is recorded as permitted for this command.
+     *
+     * `unknown` when the catalogue did not say — a missing permission marker is not permission.
+     */
+    readonly accountPermitted: boolean | 'unknown'
+    /** A real call returned a success response at least once. */
+    readonly liveCallSucceeded: boolean
+    /** A real response's parent/child link was checked against the requested comment id. */
+    readonly parentChildConfirmed: boolean
+    /**
+     * The level this evidence reaches, as one word for the UI.
+     *
+     * - `schema_only` — parameters look right; nothing was ever executed
+     * - `live_call` — a call succeeded, but the parent/child relation was not checked
+     * - `fully_verified` — a real call confirmed the relationship
+     * - `unavailable` — the schema says this cannot work
+     */
+    readonly level: 'schema_only' | 'live_call' | 'fully_verified' | 'unavailable'
+  }
   /** Plain-language reason, shown in the diagnostic panel. */
   readonly reason: string
 }
@@ -179,6 +221,45 @@ export const COUNT_FLAG_NAMES: readonly string[] = ['count', 'limit', 'page_size
  */
 export const MAX_PAGE_SIZE = 20
 
+/**
+ * Build the evidence record for a capability.
+ *
+ * Defaults are the **weakest** reading at every level: a command that was never executed has
+ * `liveCallSucceeded: false`, and a run that never checked the parent link has
+ * `parentChildConfirmed: false`. That way a caller who forgets to record a fact does not get a
+ * stronger claim by omission.
+ */
+export function capabilityEvidence(input: {
+  readonly commandExists?: boolean
+  readonly schemaCompatible?: boolean
+  readonly accountPermitted?: boolean | 'unknown'
+  readonly liveCallSucceeded?: boolean
+  readonly parentChildConfirmed?: boolean
+  readonly schemaSaysUnavailable?: boolean
+}): CapabilityClaim['evidence'] {
+  const commandExists = input.commandExists === true
+  const schemaCompatible = input.schemaCompatible === true
+  const accountPermitted = input.accountPermitted ?? 'unknown'
+  const liveCallSucceeded = input.liveCallSucceeded === true
+  const parentChildConfirmed = input.parentChildConfirmed === true
+
+  return {
+    commandExists,
+    // A capability cannot be schema-compatible without its command existing.
+    schemaCompatible: schemaCompatible && commandExists,
+    accountPermitted,
+    liveCallSucceeded,
+    parentChildConfirmed,
+    level: input.schemaSaysUnavailable
+      ? 'unavailable'
+      : parentChildConfirmed && liveCallSucceeded
+        ? 'fully_verified'
+        : liveCallSucceeded
+          ? 'live_call'
+          : 'schema_only',
+  }
+}
+
 function pick(
   parameters: readonly PlanParameter[],
   names: readonly string[],
@@ -220,6 +301,9 @@ function nestedClaimOf(parameters: readonly PlanParameter[]): {
       claim: {
         available: false,
         state: 'unavailable',
+        // The schema positively says this cannot work, so no amount of live calls would change
+        // the answer.
+        evidence: capabilityEvidence({ commandExists: true, schemaSaysUnavailable: true }),
         reason:
           '这条评论命令没有声明任何「按父评论筛选」的参数，因此无法只读取某条评论下的回复。' +
           '把一级评论当成子回复会伪造对话结构，所以这里如实声明不可用。',
@@ -233,6 +317,9 @@ function nestedClaimOf(parameters: readonly PlanParameter[]): {
       claim: {
         available: false,
         state: 'unverified',
+        // Unknown shape: not refuted, not confirmed. Everything beyond "the command exists" is
+        // unproven, and the level says exactly that.
+        evidence: capabilityEvidence({ commandExists: true, schemaCompatible: false }),
         reason:
           `命令声明了 ${parentFlag.name}，但没有配套的分页或范围参数，` +
           '无法确认它就是「按父评论筛选」。参数名相似不等于语义相同，因此不声明可用。',
@@ -244,10 +331,16 @@ function nestedClaimOf(parameters: readonly PlanParameter[]): {
   return {
     claim: {
       available: true,
+      // ## `state` stays `verified` but that is now unambiguous
+      //
+      // v0.2.14 read this field alone and rendered "已验证可用". The field still describes the
+      // *schema*, and the accompanying `evidence` says the live side has not happened yet, so
+      // the page can word it as "结构支持，未真实验证" instead of overclaiming.
       state: 'verified',
+      evidence: capabilityEvidence({ commandExists: true, schemaCompatible: true }),
       reason:
         `命令声明的 ${parentFlag.name} 与 ${corroborating.name} 组合符合「按父评论分页读取」的形状；` +
-        '回复的父子关系仍以平台返回的真实 id 为准。',
+        '这只证明参数形状吻合，还没有在真实平台上调用过——回复的父子关系仍以平台返回的真实 id 为准。',
     },
     flag: parentFlag,
   }
@@ -288,6 +381,7 @@ export function buildInvocationPlan(input: {
       return {
         available: false,
         state: 'unverified',
+        evidence: capabilityEvidence({ commandExists: true, schemaCompatible: false }),
         reason: `命令 ${name} 的参数 schema 无法识别，不能据此判断能否${label}。`,
       }
     }
@@ -295,6 +389,7 @@ export function buildInvocationPlan(input: {
       return {
         available: false,
         state: 'unavailable',
+        evidence: capabilityEvidence({ commandExists: true, schemaSaysUnavailable: true }),
         reason: `命令 ${name} 没有把 ${ID_FLAG_NAMES.slice(0, 3).join('/')} 作为必填参数，无法指定要${label}的对象。`,
       }
     }
@@ -302,13 +397,17 @@ export function buildInvocationPlan(input: {
       return {
         available: false,
         state: 'unavailable',
+        evidence: capabilityEvidence({ commandExists: true, schemaSaysUnavailable: true }),
         reason: `命令 ${name} 还有本插件无法提供的必填参数，调用会被拒绝。`,
       }
     }
     return {
       available: true,
       state: 'verified',
-      reason: `命令 ${name} 的参数足够${label}。`,
+      // Static only: the parameters are sufficient. Whether a real call succeeds is recorded by
+      // the provider after it actually runs one.
+      evidence: capabilityEvidence({ commandExists: true, schemaCompatible: true }),
+      reason: `命令 ${name} 的参数足够${label}；是否真的能读到，要等真实调用之后才知道。`,
     }
   }
 
@@ -316,11 +415,13 @@ export function buildInvocationPlan(input: {
     readThread: kind === 'thread' ? readable('读取正文') : {
       available: false,
       state: 'unavailable' as const,
+      evidence: capabilityEvidence({ commandExists: true, schemaSaysUnavailable: true }),
       reason: `命令 ${name} 是评论命令，不用于读取正文。`,
     },
     readComments: kind === 'comments' ? readable('读取评论') : {
       available: false,
       state: 'unavailable' as const,
+      evidence: capabilityEvidence({ commandExists: true, schemaSaysUnavailable: true }),
       reason: `命令 ${name} 是正文命令，不用于读取评论。`,
     },
     readNested:
@@ -329,6 +430,7 @@ export function buildInvocationPlan(input: {
         : {
             available: false,
             state: 'unavailable' as const,
+            evidence: capabilityEvidence({ commandExists: true, schemaSaysUnavailable: true }),
             reason: `命令 ${name} 不能用于读取评论，因而也不能读取子回复。`,
           },
   }
