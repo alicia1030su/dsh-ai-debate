@@ -2,6 +2,158 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.13] — 2026-10-30
+
+微博真实接入验收、争论简报可信度与诊断界面。**核心变化：命令层按官方 CLI 的真实语法
+重写，简报不再把无关观点判成矛盾，设置页面能真的看到微博连接状态。**
+
+没有推倒重写，没有删除任何安全机制，919 项既有测试全部保留。
+
+### 一、读取计划被永久缓存（P1）
+
+**缺陷**：v0.2.12 把第一次探测的 promise 永久缓存了。
+
+```ts
+let planPromise
+const plan = () => {
+  if (planPromise === undefined) planPromise = resolveReadPlan()
+  return planPromise
+}
+```
+
+**复现**（用发布产物，同一个 Adapter）：
+
+| 时序 | 结果 |
+| --- | --- |
+| 第一次，CLI 未安装 | `cli_missing` |
+| 随后 CLI 变为可用，**同一个 Adapter** 再读 | 仍然 `cli_missing` |
+| 新建 Adapter | `ok` |
+
+也就是：主人装好 CLI、登录完账号，**界面还显示旧的失败**，除非重启整个 DSH。
+
+**修法**：`src/platforms/weibo/plan-cache.ts` —— 状态机而不是 promise 缓存。
+
+- 成功缓存 `READY_TTL_MS`（60s）：够覆盖一次完整分析，又能在主人还看着页面时发现权限被撤。
+- 可恢复失败（`cli_missing` / `not_authenticated` / `service_inactive` /
+  `quota_exhausted` / `command_unavailable`）只在 `FAILED_BACKOFF_MS`（15s）内快速返回，
+  之后重新探测。**失败永不永久缓存。**
+- 并发请求共享同一次探测，一次分析不会为每个评论页各跑一遍 `version` + `doctor`。
+- `generation` 计数器：被作废的慢探测**不能覆盖**新结果。
+- `force`：诊断页的刷新按钮用它做**受控**重探——只跑一次，不做登录、不做购买。
+
+### 二、无关观点被判为矛盾（P1）
+
+**缺陷**：`buildBrief` 只要双方各有发言，就断言「两者不能同时成立」。
+
+**复现**：
+
+| | |
+| --- | --- |
+| 主人 | 我喜欢吃苹果，尤其是红富士苹果。 |
+| 对方 | 我喜欢喝乌龙茶，尤其是热乌龙茶。 |
+| 输出 | 「…两者不能同时成立。」 |
+| `validateBrief()` | 零问题 |
+
+两句话都是真的。校验器只检查引用存在与身份归属，它从未声称检查语义——所以「构建器与
+校验器互相接受」这个断言，在**判错的情况下也会通过**。
+
+**修法**：`src/conflict.ts` —— 结构判定，允许回答 `unknown`。
+
+五种关系：`contradiction` / `different_preference` / `different_topics` /
+`shared_ground` / `unknown`。只有 `contradiction` 会产生分歧条目；`unknown` 与
+弱证据的矛盾都标记 `requiresReview`，进入人工审核。
+
+实现过程中修掉的两个自身缺陷：
+
+1. **极性判断不能只看否定词**。「12 万不算贵」与「12 万太贵了，不值」都含「不」，
+   于是被判定为「同极性 → 共同前提」。改看**极性词**（值得/不值、可行/不可行）。
+2. **肯定词是否定词的前缀**。`可行` 是 `不可行` 的子串，正负两边同时命中，
+   `polarityOf` 返回 `undefined`，清晰的对立变成了 `unknown`。改为**否定优先**。
+
+另外两处连带修正：
+
+- `extractClaims` 会丢掉疑问句，把对手的完整质疑（「你凭什么说成本会翻倍？有数据吗？」）
+  削成「有数据吗」，判定器因此看不到「成本」这个共同主题。立场摘要改为取第一条实质发言原文。
+- `validateBrief` 原本**强制要求**至少一条分歧。现在允许无分歧，但**必须说明原因**
+  （`uncertainties` 或 `risks` 里写明），否则仍然拒绝，避免「静默的空列表」。
+
+### 三、微博诊断没有真正接到设置页面（P1）
+
+**缺陷**：`src/platforms/weibo/diagnostics.ts` 与 `Provider.describeDiagnostics()` 都在，
+但 `src/settings-routes.ts` 里**没有任何一处调用**。能力写了，通道没接。
+
+**修法**：
+
+- `SettingsRouteDeps.platformDiagnostics?` —— 平台无关的可选通道，返回不透明的块。
+- `GET /api/dsh-ai-debate/status` 附带 `platforms`；**没有能力时字段缺失**，而不是空数组
+  （空数组会被读成「全部正常」）。
+- `POST /api/dsh-ai-debate/action {action:'refresh-platforms'}` —— 受控重探，传
+  `refresh:true`，走同一个 `guard`。
+- 客户端 `PlatformLiveBlock`：逐条渲染 `state.lines`，`not_implemented` 显示「未知」而
+  不是绿标；平台未回答显示「没有提供实时诊断」；探测抛错显示**失败原因**。
+
+### 四、命令层与官方 CLI 的假设是反的（P0，方法：只读核对官方发行物）
+
+本机没有 `weibo-cli`、没有 `npm`，所以 `commands list/show` 无法执行。改为从 npm
+registry 下载官方包 `@weibo-ai/weibo-cli@0.9.8`（当前 latest），**只读**解包核对
+`dist/main.js`。三条假设全部与官方相反：
+
+| # | v0.2.12 的假设 | 官方实际 | 后果 |
+| --- | --- | --- | --- |
+| 1 | `commands show <name>`，一个参数 | `commands show <group> <action>`，两个；缺一个 `throw` | **每次必抛**，能力判断永远走不到成功分支 |
+| 2 | 目录行字段是 `name` / `command` / `path` | 只有 `group` 与 `action`（`action` 可含 `/`） | 每一行都被 `continue` 跳过，**目录恒为空** |
+| 3 | 帖子 id 作为**位置参数**传入 | `handleInvoke = async (group, action, flags)` 签名里**没有 `rest`** | 位置参数被**静默丢弃**，请求照发但不带 id |
+
+第 3 条最危险：CLI 不报错。看起来调用成功，实际参数被吞掉了。
+
+**修法**：
+
+- `WeiboCliCommand` 改为 `{group, action, name, access?, flags?}`。
+- `commands show` 传两个位置参数。
+- 所有业务参数走 flag：`--ids` / `--id` / `--cid` / `--page` / `--count`。
+- 参数列表从 `flags` 读（官方 payload 就在这里），`required` 随之。
+- `--page` 与 `--count` **只在命令声明了该 flag 时**才发 —— 官方有 `assertKnownFlags`，
+  未声明的 flag 是硬错误，强行给第一页加 `--page` 会把能成功的读取变成失败。
+- 错误体在 **stderr 且是 JSON 信封**（`{success,status,code,message}`），改为先读
+  `code` 再退回文本匹配；补上 11 个已知错误码的映射。
+
+### 五、测试
+
+935 项全绿（v0.2.12 的 919 项全部保留，新增 16 项）。
+
+新增：
+
+- `test/v0213-plan-cache.test.ts`（13）：可恢复失败不永久缓存、TTL、退避、并发共享、
+  慢探测不得覆盖新结果、`force` 真的重探。
+- `test/v0213-conflict-semantics.test.ts`（14）：六组**独立标注预期**的关系判定用例、
+  端到端不得编造矛盾、路人不得被推断站队、注入文本不得改变身份与目标。
+- `test/v0213-cli-compat.test.ts`（9）：**断言真正 spawn 出去的 argv**，而不是内部状态。
+- `test/v0213-platform-diagnostics.test.ts`（7）：`/status` 带块、未认证读不到、
+  探测失败显示失败、刷新真的重探。
+
+### 六、未验证清单
+
+**必须明确区分的四件事**：
+
+| 项目 | 状态 |
+| --- | --- |
+| 代码实现 | ✅ 完成 |
+| 模拟测试（假 CLI） | ✅ 935 项全绿 |
+| 真实 DSH 界面验收 | ⏳ 本轮未做 |
+| 真实微博读取 | ❌ **未做**（本机无 CLI、无 OAuth、无开发者认证） |
+| 真实贴吧发表 | ❌ **未做**（本机 IP 持续 403） |
+
+仍无法确认的能力（不声称已验证）：
+
+- 单条微博读取的确切命令与参数（有据的只有批量 `statuses show_batch/biz --ids`）。
+- 子评论/父评论筛选参数的真实名字（读路径无据；写路径的 `--cid` 有据）。
+- 各命令 flags 的完整清单（需要真实 `commands show` 输出）。
+- 体验服务白名单里的具体命令。
+- `--page` / `--count` 在其它命令上的默认值与上限。
+
+**核对基准是 0.9.8**；引用的第三方实测基于 0.8.3，两者之间 `bin` 名、`auth token` 输出、
+凭据存储方式都变过。
+
 ## [0.2.12] — 2026-10-29
 
 微博读取链路接线 + 争论简报进入生产流程。**核心变化：微博的 CLI 适配层不再是死代码，

@@ -241,8 +241,39 @@ export function validateBrief(
   checkSide('owner', 'owner', brief.owner.evidence)
   checkSide('opponent', 'opponent', brief.opponent.evidence)
 
+  // ## A brief with no disagreement is allowed *if* it says why (v0.2.13)
+  //
+  // v0.2.12 required at least one disagreement, on the reasoning that "a brief about a dispute
+  // that names no disagreement is describing something else". That was written when the builder
+  // fabricated a disagreement unconditionally, so the rule never fired in practice.
+  //
+  // Now the conflict judge may legitimately conclude "I cannot prove these positions
+  // contradict" — the apple/oolong case, or two people talking past each other. Demanding a
+  // disagreement in that situation would force the builder to invent one, which is exactly the
+  // failure this version removes.
+  //
+  // The rule is therefore: no disagreement is acceptable **only when the brief explicitly says
+  // why**, so a reviewer sees the gap instead of a silent empty list.
+  //
+  // ## Why the explanation may live in `risks` as well as `uncertainties`
+  //
+  // The first fix only looked at `uncertainties`, and that broke the strongest case: when the
+  // judge is *confident* the positions do not conflict (both are first-person preferences), it
+  // correctly does not flag them as uncertain — it explains the situation in `risks` instead.
+  // Requiring the uncertainty entry forced either a false "we are unsure" or a rejection of a
+  // correct brief. Both sources count; what matters is that the reviewer is told.
   if (brief.disagreements.length === 0) {
-    problems.push({ field: 'disagreements', reason: '没有指出任何具体分歧，这不构成一场争论' })
+    const explained =
+      brief.uncertainties.some((item) => /分歧|冲突|对立/.test(item.point + item.reason)) ||
+      brief.risks.some((risk) => /分歧|冲突|对立|喜好|不是同一件事/.test(risk))
+    if (!explained) {
+      problems.push({
+        field: 'disagreements',
+        reason:
+          '没有指出任何具体分歧，也没有说明为什么没有分歧——' +
+          '不解释的空列表会让审阅者以为漏看了什么',
+      })
+    }
   }
 
   if (!sources.allPostIds.has(brief.targetPostId)) {

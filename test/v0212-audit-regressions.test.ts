@@ -129,15 +129,16 @@ test('审计 A5：认不出的 schema 结构必须判为不可用', async () => 
       rules: [
         { match: 'version', stdout: 'weibo-cli 1.0.0\n' },
         {
-          match: 'commands show weird/shape',
+          match: 'commands show weird shape',
           // A shape asArray cannot read: a bare string list under an unknown key.
-          stdout: JSON.stringify({ name: 'weird/shape', arguments: 'mid,page' }),
+          stdout: JSON.stringify({ group: 'weird', action: 'shape', arguments: 'mid,page' }),
         },
         {
-          match: 'commands show std/schema',
+          match: 'commands show std schema',
           // Standard JSON Schema: sibling `required` array + properties map.
           stdout: JSON.stringify({
-            name: 'std/schema',
+            group: 'std',
+            action: 'schema',
             required: ['mid', 'uid'],
             properties: { mid: {}, uid: {} },
           }),
@@ -152,12 +153,14 @@ test('审计 A5：认不出的 schema 结构必须判为不可用', async () => 
     prefixArgs: [join(import.meta.dirname, 'fixtures', 'fake-weibo-cli.mjs')],
   })
   try {
-    const unknown = await inspectCommand('weird/shape')
+    // v0.2.13: `commands show` takes two positional arguments (group, action), so the call
+    // site passes the pair rather than one combined name.
+    const unknown = await inspectCommand({ group: 'weird', action: 'shape' })
     assert.equal(unknown.data?.evidence, 'unknown', '认不出的结构应标记为 unknown')
     assert.equal(unknown.data?.usable, false, '认不出就不能说可用')
     assert.match(unknown.data?.reason ?? '', /无法识别/)
 
-    const standard = await inspectCommand('std/schema')
+    const standard = await inspectCommand({ group: 'std', action: 'schema' })
     assert.equal(standard.data?.evidence, 'parsed')
     assert.equal(standard.data?.usable, false, 'uid 填不了，所以不可用')
     assert.equal(standard.data?.required.includes('uid'), true, '兄弟 required 数组要读进来')

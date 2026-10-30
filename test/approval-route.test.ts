@@ -259,7 +259,7 @@ test('批准接口不会把凭据写进响应', async () => {
   // a key, however the Host is configured. `assert` on the serialized payload catches a
   // future field that happens to be copied from config.
   const { deps, dir } = makeDeps({
-    config: () => resolveConfig({ tiebaCookie: 'ST=SUPERSECRET', llmApiKey: 'sk-SUPERSECRET' }),
+    config: () => resolveConfig({ tiebaCookie: 'ST=fixture-supersecret-0001', llmApiKey: 'sk-fixture-supersecret-00000001' }),
     approve: async () => ({ status: 200, body: { approved: true, approvalId: 'ap-1' } }),
   })
   try {

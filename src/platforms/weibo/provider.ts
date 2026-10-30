@@ -51,6 +51,7 @@ import {
   listAvailableCommands,
   probeWeiboCli,
   runReadCommand,
+  type WeiboCliCommand,
   type WeiboCliReadiness,
 } from './cli.js'
 import {
@@ -60,6 +61,7 @@ import {
   unwrapComments,
   unwrapStatus,
 } from './projection.js'
+import { createPlanCache } from './plan-cache.js'
 import { parseWeiboUrl, weiboCanHandleUrl } from './url.js'
 
 const PLATFORM: PlatformId = 'weibo'
@@ -220,14 +222,43 @@ export class WeiboCommandUnavailableError extends Error {
 }
 
 /**
+ * The flags that can carry a post or comment id, most specific first.
+ *
+ * ## Why a list rather than one name
+ *
+ * The official examples use `--ids` for the batch status read and `--id` for comments, and the
+ * catalog is server-driven, so the exact spelling is not knowable ahead of time. The plan picks
+ * whichever of these the command **actually declares**, which is why this is only a preference
+ * order and never a guess.
+ */
+const ID_FLAGS: readonly string[] = ['ids', 'id', 'idstr', 'mid', 'status_id', 'weibo_id']
+
+/**
+ * Page size requested when the comment command declares a `count` flag.
+ *
+ * 20 is the value the official manual documents for the read commands that cap it, so asking for
+ * more would be rejected with `COUNT_EXCEEDS_MAX`. When the command has no `count` flag this is
+ * never sent and the server's own default applies — which this code does not assume.
+ */
+const COMMENT_PAGE_SIZE = 20
+
+/**
  * One resolved read plan: which command to call, and whether we may claim completeness.
  *
  * Built once per adapter so a single read does not re-validate the catalog on every page.
  */
 interface WeiboReadPlan {
   readonly readiness: WeiboCliReadiness
-  readonly threadCommand?: string
-  readonly commentCommand?: string
+  /** The catalog row that drives `getThread`, with both its group and its action. */
+  readonly thread?: WeiboCliCommand
+  /** The catalog row that drives `getReplies`. */
+  readonly comment?: WeiboCliCommand
+  /** Which flag on `thread` carries the id, as the command itself declares it. */
+  readonly threadIdFlag?: string
+  /** Which flag on `comment` carries the id. */
+  readonly commentIdFlag?: string
+  /** Whether `comment` declares a `count` flag we can use for page size. */
+  readonly countFlag?: string
   /**
    * The flag the comment command uses to scope a read to one parent comment.
    *
@@ -265,8 +296,11 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
   const candidates = classifyCommands(listed.data)
   const plan: {
     readiness: WeiboCliReadiness
-    threadCommand?: string
-    commentCommand?: string
+    thread?: WeiboCliCommand
+    comment?: WeiboCliCommand
+    threadIdFlag?: string
+    commentIdFlag?: string
+    countFlag?: string
     nestedFilterFlag?: string
     threadProblem?: string
     commentProblem?: string
@@ -274,38 +308,55 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
 
   // The catalog's exact spelling is server-owned, so pick by the same family shapes the
   // classifier used, then validate the winner.
-  const pick = (family: 'status' | 'comment'): string | undefined => {
-    const names = listed.data!.map((command) => command.name)
-    return family === 'status'
-      ? names.find((name) => /status|weibo|post/i.test(name) && /show|get|read|detail/i.test(name))
-      : names.find((name) => /comment/i.test(name) && /list|show|get|read/i.test(name))
+  //
+  // Returns the whole `(group, action)` row: `commands show` needs both, and the invocation
+  // needs both. Keeping only a display name here was the v0.2.12 bug.
+  const pick = (family: 'status' | 'comment'): WeiboCliCommand | undefined => {
+    const rows = listed.data!
+    const matches = family === 'status'
+      ? rows.filter(
+          (row) =>
+            /status|weibo|post/i.test(row.group) &&
+            /show|get|read|detail|batch/i.test(row.action),
+        )
+      : rows.filter((row) => /comment/i.test(row.group) && /list|show|get|read/i.test(row.action))
+    // Prefer an unlocked row: a locked entry would fail at call time.
+    return matches.find((row) => row.access !== 'locked') ?? matches[0]
   }
 
-  const statusName = candidates.statuses ? pick('status') : undefined
-  if (statusName === undefined) {
+  const statusPick = candidates.statuses ? pick('status') : undefined
+  if (statusPick === undefined) {
     plan.threadProblem = '当前账号的可用命令里没有能读取微博正文的命令。'
   } else {
-    const schema = await inspectCommand(statusName)
+    const statusName = statusPick.name
+    const schema = await inspectCommand({ group: statusPick.group, action: statusPick.action })
     if (schema.status !== 'ok' || schema.data === undefined) {
       plan.threadProblem = `无法校验命令 ${statusName}：${schema.message}`
     } else if (!schema.data.usable) {
       plan.threadProblem = schema.data.reason ?? `命令 ${statusName} 的参数无法满足。`
     } else {
-      plan.threadCommand = statusName
+      plan.thread = statusPick
+      // Which flag carries the id is decided by the command's own list, never assumed.
+      plan.threadIdFlag = schema.data.parameters.find((parameter) =>
+        ID_FLAGS.includes(parameter),
+      )
     }
   }
 
-  const commentName = candidates.comments ? pick('comment') : undefined
-  if (commentName === undefined) {
+  const commentPick = candidates.comments ? pick('comment') : undefined
+  if (commentPick === undefined) {
     plan.commentProblem = '当前账号的可用命令里没有能读取评论的命令。'
   } else {
-    const schema = await inspectCommand(commentName)
+    const commentName = commentPick.name
+    const schema = await inspectCommand({ group: commentPick.group, action: commentPick.action })
     if (schema.status !== 'ok' || schema.data === undefined) {
       plan.commentProblem = `无法校验命令 ${commentName}：${schema.message}`
     } else if (!schema.data.usable) {
       plan.commentProblem = schema.data.reason ?? `命令 ${commentName} 的参数无法满足。`
     } else {
-      plan.commentCommand = commentName
+      plan.comment = commentPick
+      plan.commentIdFlag = schema.data.parameters.find((parameter) => ID_FLAGS.includes(parameter))
+      plan.countFlag = schema.data.parameters.includes('count') ? 'count' : undefined
       // Carried into the plan so `getNestedReplies` uses the discovered flag rather than a
       // hardcoded guess. When the catalog lists none, nested reads refuse.
       if (schema.data.nestedFilterFlag !== undefined) {
@@ -342,14 +393,28 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
   // Keeping the parameter documents that the adapter receives platform-scoped settings
   // without pretending to consume them.
   void context
-  // The plan is resolved lazily and shared across calls: probing spawns processes, and a
-  // single analysis reads the thread and several comment pages.
+  // The plan is resolved lazily and shared across calls, with a **bounded** lifetime.
+  //
+  // v0.2.12 cached the first probe's promise forever, so a `cli_missing` reported before the
+  // owner installed the CLI stayed cached until the DSH process restarted. The cache now has a
+  // TTL for success, a short backoff for recoverable failures, a forced-refresh path, and a
+  // generation guard so a slow outdated probe cannot overwrite a newer verdict.
   const diagnostics: WeiboDiagnosticRecorder = createDiagnosticRecorder()
-  let planPromise: Promise<WeiboReadPlan> | undefined
-  const plan = (): Promise<WeiboReadPlan> => {
-    if (planPromise === undefined) planPromise = resolveReadPlan()
-    return planPromise
-  }
+  const planCache = createPlanCache<WeiboReadPlan>(async () => {
+    const plan = await resolveReadPlan()
+    return { plan, status: plan.readiness.status }
+  })
+  /**
+   * Drop the cache without probing.
+   *
+   * Called when something outside the probe proves the plan stale. Kept as a named local so
+   * the intent is recorded even though the only current caller is the handler below — the
+   * alternative was exporting a mutator that any module could call.
+   */
+  const invalidatePlan = (): void => planCache.invalidate()
+  // `invalidatePlan` is reachable through the adapter's optional member below; referencing it
+  // here keeps the wiring explicit rather than reaching into `planCache` from outside.
+  void invalidatePlan
 
   /**
    * Capabilities reflect what was *measured*, not what was hoped.
@@ -388,9 +453,9 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
   const remember = (resolved: WeiboReadPlan): void => {
     const ready = resolved.readiness.canRead
     cached = {
-      thread: resolved.threadCommand !== undefined,
-      replies: resolved.commentCommand !== undefined,
-      nestedReplies: resolved.commentCommand !== undefined,
+      thread: resolved.thread !== undefined,
+      replies: resolved.comment !== undefined,
+      nestedReplies: resolved.comment !== undefined,
       userProfile: false,
       mentions: false,
       publish: false,
@@ -405,9 +470,23 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
     }
   }
 
+  /**
+   * Resolve the plan **without throwing**, for callers that report state rather than read.
+   *
+   * `requirePlan` exists for reads: "cannot read" is an error there. A diagnostic is the
+   * opposite — its entire job is to say *why* reads cannot run, so throwing would replace the
+   * answer with an exception. Same cache, same probe, different contract.
+   */
+  const observePlan = async (force = false): Promise<WeiboReadPlan> => {
+    const result = await planCache.get(force ? { force: true } : {})
+    remember(result.plan)
+    return result.plan
+  }
+
   /** Resolve the plan, cache the capabilities, and translate a refusal into a throw. */
-  const requirePlan = async (): Promise<WeiboReadPlan> => {
-    const resolved = await plan()
+  const requirePlan = async (force = false): Promise<WeiboReadPlan> => {
+    const result = await planCache.get(force ? { force: true } : {})
+    const resolved = result.plan
     remember(resolved)
     if (!resolved.readiness.canRead) {
       throw new WeiboCliError(
@@ -424,14 +503,21 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
     displayName: '微博',
     getCapabilities: capabilities,
     /**
-     * The Weibo-specific diagnostic (v0.2.12 §二).
+     * The Weibo-specific diagnostic (v0.2.12 §二, extended in v0.2.13 §四).
      *
      * Exposed as an optional member rather than part of `PlatformAdapter`: the generic
      * interface describes what every platform must do, and a diagnostic that only Weibo can
      * produce does not belong there. The settings page probes for it.
+     *
+     * ## `options.refresh` is the controlled re-probe
+     *
+     * The settings page's refresh button calls this with `refresh: true`. It runs **one**
+     * probe, ignores any cached verdict, and does nothing else — no login, no purchase, no
+     * account operation. Without this the page could only ever show whatever the first probe
+     * of the process concluded, which is precisely the v0.2.12 defect.
      */
-    describeDiagnostics: async (): Promise<WeiboDiagnostics> => {
-      const resolved = await plan()
+    describeDiagnostics: async (options: { readonly refresh?: boolean } = {}): Promise<WeiboDiagnostics> => {
+      const resolved = await observePlan(options.refresh === true)
       remember(resolved)
 
       // "Installed" is only true when the binary answered `version`; a missing binary has an
@@ -449,8 +535,8 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
         ...(cliVersion === undefined ? {} : { cliVersion }),
         oauthLoggedIn,
         serviceActive,
-        ...(resolved.threadCommand === undefined ? {} : { threadCommand: resolved.threadCommand }),
-        ...(resolved.commentCommand === undefined ? {} : { commentCommand: resolved.commentCommand }),
+        ...(resolved.thread === undefined ? {} : { threadCommand: resolved.thread.name }),
+        ...(resolved.comment === undefined ? {} : { commentCommand: resolved.comment.name }),
         ...(resolved.threadProblem === undefined ? {} : { threadProblem: resolved.threadProblem }),
         ...(resolved.commentProblem === undefined ? {} : { commentProblem: resolved.commentProblem }),
         readinessState: diagnosisOfStatus(resolved.readiness.status),
@@ -464,8 +550,8 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
         ...(cliVersion === undefined ? {} : { cliVersion }),
         oauthLoggedIn,
         serviceActive,
-        ...(resolved.threadCommand === undefined ? {} : { threadCommand: resolved.threadCommand }),
-        ...(resolved.commentCommand === undefined ? {} : { commentCommand: resolved.commentCommand }),
+        ...(resolved.thread === undefined ? {} : { threadCommand: resolved.thread.name }),
+        ...(resolved.comment === undefined ? {} : { commentCommand: resolved.comment.name }),
         // ## Why quota is `not_implemented` rather than a number
         //
         // Reading the credit balance means calling a billing command (`me`, the credit
@@ -486,7 +572,7 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
     checkAuthentication: async () => {
       // A read-only probe of the local CLI. It answers `false` with a reason rather than
       // throwing, because "am I logged in?" has a useful negative answer.
-      const resolved = await plan()
+      const resolved = await observePlan(false)
       remember(resolved)
       return {
         authenticated: resolved.readiness.canRead,
@@ -495,38 +581,75 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
     },
     getThread: async (ref, signal) => {
       const resolved = await requirePlan()
-      if (resolved.threadCommand === undefined) {
+      const threadCommand = resolved.thread
+      if (threadCommand === undefined) {
         const message = resolved.threadProblem ?? '当前账号没有可用的微博正文读取命令。'
         diagnostics.recordError('permission_insufficient', message)
         throw new WeiboCommandUnavailableError(message)
       }
+      // ## The id is a flag value (v0.2.13, verified against official source)
+      //
+      // The official dispatcher has no `rest` parameter, so a positional id is dropped without
+      // an error. v0.2.12 sent it positionally, which means the request went out with no id.
+      // The flag name comes from the command's own catalog entry; if the command declares none of
+      // the known id flags we refuse rather than sending a request that cannot possibly work.
+      const idFlag = resolved.threadIdFlag
+      if (idFlag === undefined) {
+        const message =
+          `命令 ${threadCommand.name} 没有可识别的 ${ID_FLAGS.join('/')} 参数，无法传帖子 id。`
+        diagnostics.recordError('permission_insufficient', message)
+        throw new WeiboCommandUnavailableError(message)
+      }
       throwIfAborted(signal)
-      const read = await runReadCommand<unknown>(resolved.threadCommand, [ref.threadId])
+      const read = await runReadCommand<unknown>(threadCommand, [
+        `--${idFlag.replace(/_/g, '-')}`,
+        ref.threadId,
+      ])
       if (read.status !== 'ok') {
         diagnostics.recordError(diagnosisOfStatus(read.status), read.message)
         guardRead(read.status, read.message)
       }
       const payload = unwrapStatus(read.data)
       if (payload === undefined) {
-        const message = `${resolved.threadCommand} 的输出里找不到微博正文对象（可能字段名与预期不符）。`
+        const message = `${threadCommand.name} 的输出里找不到微博正文对象（可能字段名与预期不符）。`
         diagnostics.recordError('failed', message)
         throw new WeiboCliError('malformed_response', message)
       }
-      diagnostics.recordRead(true, 'thread', `${resolved.threadCommand} 返回了正文`)
+      diagnostics.recordRead(true, 'thread', `${threadCommand.name} 返回了正文`)
       return projectThread(payload, ref.threadId, ref.url)
     },
     getReplies: async (ref, page, signal) => {
       const resolved = await requirePlan()
-      if (resolved.commentCommand === undefined) {
+      const commentCommand = resolved.comment
+      if (commentCommand === undefined) {
         throw new WeiboCommandUnavailableError(
           resolved.commentProblem ?? '当前账号没有可用的微博评论读取命令。',
         )
       }
+      // ## The id is a flag, and `--page` only when the command declares it (v0.2.13)
+      //
+      // Two corrections against the official CLI:
+      //   - a positional id is silently dropped, so it must be `--<idFlag> <mid>`;
+      //   - `--page` is not universal. The CLI rejects an undeclared flag with
+      //     `Unknown option: --page`, which would turn a first-page read into a hard failure,
+      //     so the flag is only sent when the command's own list includes it.
+      const idFlag = resolved.commentIdFlag
+      if (idFlag === undefined) {
+        const message =
+          `命令 ${commentCommand.name} 没有可识别的 ${ID_FLAGS.join('/')} 参数，无法传微博 id。`
+        diagnostics.recordError('permission_insufficient', message)
+        throw new WeiboCommandUnavailableError(message)
+      }
       throwIfAborted(signal)
-      const read = await runReadCommand<unknown>(resolved.commentCommand, [
+      const pageArgs: string[] = []
+      if (commentCommand.flags?.includes('page') === true || resolved.countFlag !== undefined) {
+        pageArgs.push('--page', String(page))
+      }
+      if (resolved.countFlag !== undefined) pageArgs.push('--count', String(COMMENT_PAGE_SIZE))
+      const read = await runReadCommand<unknown>(commentCommand, [
+        `--${idFlag.replace(/_/g, '-')}`,
         ref.threadId,
-        '--page',
-        String(page),
+        ...pageArgs,
       ])
       guardRead(read.status, read.message)
       const page1 = unwrapComments(read.data)
@@ -556,7 +679,12 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
     },
     getNestedReplies: async (ref, floor, page, signal) => {
       const resolved = await requirePlan()
-      if (resolved.commentCommand === undefined) {
+      // `ref` is not sent: the official nested read is scoped by the parent comment id alone, and
+      // a comment id is globally unique. Adding the thread id would need a flag the catalog may
+      // not declare, and an undeclared flag is a hard error in this CLI.
+      void ref
+      const commentCommand = resolved.comment
+      if (commentCommand === undefined) {
         throw new WeiboCommandUnavailableError(
           resolved.commentProblem ?? '当前账号没有可用的微博评论读取命令。',
         )
@@ -570,18 +698,24 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
       const nestedFlag = resolved.nestedFilterFlag
       if (nestedFlag === undefined) {
         const message =
-          `当前账号的评论命令 ${resolved.commentCommand} 没有可识别的「按父评论筛选」参数，` +
+          `当前账号的评论命令 ${commentCommand.name} 没有可识别的「按父评论筛选」参数，` +
           '无法读取楼中楼；发送一个未经校验的参数名等于猜测请求。'
         diagnostics.recordError('permission_insufficient', message)
         throw new WeiboCommandUnavailableError(message)
       }
       throwIfAborted(signal)
-      const read = await runReadCommand<unknown>(resolved.commentCommand, [
-        ref.threadId,
+      // The parent id is a flag value, like the thread id. `--page` is only sent when the
+      // command declares it: the CLI rejects an undeclared flag with `Unknown option: --page`,
+      // which would turn a first-page read into a hard failure.
+      const pageArgs: string[] = []
+      if (commentCommand.flags?.includes('page') === true) {
+        pageArgs.push('--page', String(page))
+      }
+      if (resolved.countFlag !== undefined) pageArgs.push('--count', String(COMMENT_PAGE_SIZE))
+      const read = await runReadCommand<unknown>(commentCommand, [
         `--${nestedFlag.replace(/_/g, '-')}`,
         floor.postId,
-        '--page',
-        String(page),
+        ...pageArgs,
       ])
       guardRead(read.status, read.message)
       const nestedPage = unwrapComments(read.data)

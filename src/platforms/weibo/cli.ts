@@ -182,15 +182,120 @@ async function runCli(
  * on those words rather than on exit codes, because the manual does not promise distinct
  * codes and guessing one would be worse than matching text.
  */
+/**
+ * The error codes the official CLI emits, and what each one means for this plugin.
+ *
+ * ## Why the code beats text matching (v0.2.13)
+ *
+ * The official `formatError` writes a JSON envelope to **stderr** when `--output` is explicit:
+ *
+ *     { success: false, status, code, message, trace_id?, response_body? }
+ *
+ * v0.2.12 only ever ran keyword regexes over the combined stderr/stdout, so an exact machine
+ * field — `code: 'SERVICE_REQUIRED'` — was thrown away and re-inferred from prose. That is both
+ * less reliable (the messages are Chinese prose that changes between versions) and less safe (a
+ * token echoed into a message could match the wrong branch).
+ *
+ * The envelope is now parsed first; the regexes stay as a fallback for a CLI that answered
+ * without one (an older version, or a crash before the request).
+ */
+const ERROR_CODE_STATUS: Readonly<Record<string, { status: WeiboCliStatus; message: string }>> = {
+  IP_GEO_DENIED: {
+    status: 'not_authenticated',
+    message: '当前网络位置被微博拒绝：请在你的常用网络环境下使用，不要通过代理访问。',
+  },
+  DEVELOPER_IDENTITY_REQUIRED: {
+    status: 'service_inactive',
+    message: '还没有完成开发者身份认证：需要在微博开放平台控制台完成扫脸认证。',
+  },
+  DEVELOPER_DISABLED: {
+    status: 'service_inactive',
+    message: '开发者身份已被停用：请到微博开放平台查看账号状态。',
+  },
+  SERVICE_REQUIRED: {
+    status: 'service_inactive',
+    message: '还没有开通服务：需要在控制台领取体验服务或购买积分包。',
+  },
+  TRIAL_ALREADY_CLAIMED: {
+    status: 'service_inactive',
+    message: '体验服务已经领取过：如需继续使用需要购买积分包。',
+  },
+  TRIAL_EXPIRED: {
+    status: 'service_inactive',
+    message: '体验服务已过期：需要购买积分包才能继续调用。',
+  },
+  TRIAL_API_NOT_ALLOWED: {
+    status: 'command_unavailable',
+    message: '这条接口不在体验服务的白名单里：需要购买对应的积分包。',
+  },
+  TRIAL_API_QUOTA_EXCEEDED: {
+    status: 'quota_exhausted',
+    message: '体验服务的接口次数已用完：本次读取未执行。',
+  },
+  QUOTA_EXCEEDED: { status: 'quota_exhausted', message: '积分余额不足：本次读取未执行。' },
+  COUNT_EXCEEDS_MAX: {
+    status: 'failed',
+    message: '请求的分页条数超过接口上限：这属于本插件构造的请求有问题，不是账号问题。',
+  },
+  UNAUTHORIZED: {
+    status: 'not_authenticated',
+    message: 'weibo-cli 尚未登录或登录已失效：请运行 weibo-cli auth login。',
+  },
+  TOKEN_EXPIRED: {
+    status: 'not_authenticated',
+    message: '登录凭证已过期：请重新运行 weibo-cli auth login。',
+  },
+}
+
+/** Pull the `code` out of an official error envelope on stderr, if there is one. */
+function errorCodeFromEnvelope(stderr: string): string | undefined {
+  const text = stderr.trim()
+  if (text === '') return undefined
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start === -1 || end <= start) return undefined
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1)) as unknown
+    if (typeof parsed !== 'object' || parsed === null) return undefined
+    const record = parsed as Record<string, unknown>
+    // `success: true` means the call worked; whatever else is in the body is not an error.
+    if (record.success === true) return undefined
+    const code = record.code
+    return typeof code === 'string' && code.trim() !== '' ? code.trim().toUpperCase() : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function classifyFailure(
   stderr: string,
   stdout: string,
   errorCode?: string,
 ): { status: WeiboCliStatus; message: string } {
+  // A missing binary has an empty stderr — `error.code` is the only evidence, so it comes first.
+  if (errorCode === 'ENOENT') {
+    return {
+      status: 'cli_missing',
+      message: '没有找到 weibo-cli 可执行文件。请先安装：npm install -g @weibo-ai/weibo-cli',
+    }
+  }
+
+  // ## The machine-readable code first
+  const envelopeCode = errorCodeFromEnvelope(stderr)
+  if (envelopeCode !== undefined) {
+    const mapped = ERROR_CODE_STATUS[envelopeCode]
+    if (mapped !== undefined) return mapped
+    // A code we do not know is still a real, specific failure. Reporting it verbatim is more
+    // useful than a generic "call failed", and it carries no credential.
+    return {
+      status: 'failed',
+      message: `weibo-cli 返回错误码 ${envelopeCode}。`,
+    }
+  }
+
   const text = scrubCredentials(`${stderr}\n${stdout}`).toLowerCase()
 
-  // A missing binary has an empty stderr — the `error.code` is the only evidence.
-  if (errorCode === 'ENOENT' || /enoent|command not found|不是内部或外部命令/.test(text)) {
+  if (/enoent|command not found|不是内部或外部命令/.test(text)) {
     return {
       status: 'cli_missing',
       message: '没有找到 weibo-cli 可执行文件。请先安装：npm install -g @weibo-ai/weibo-cli',
@@ -305,11 +410,27 @@ export async function probeWeiboCli(): Promise<WeiboCliReadiness> {
   }
 }
 
-/** One row of `commands list --available`. */
+/**
+ * One row of `commands list --available`.
+ *
+ * ## Why it is a pair, not a name
+ *
+ * The official CLI invokes `weibo <group> <action> [flags]`, and `action` itself may contain a
+ * slash (`show_batch/other`). Keeping the pair separate is what lets `commands show` receive the
+ * two arguments it requires, and what lets the reader tell `statuses` (the group) from
+ * `user_timeline/biz` (the action).
+ */
 export interface WeiboCliCommand {
+  readonly group: string
+  readonly action: string
+  /** `group action`, for display and for the fake CLI's matching. */
   readonly name: string
   readonly description?: string
   readonly priceType?: string
+  /** `allowed` / `locked` as the catalog reports it. Locked rows are listed but not callable. */
+  readonly access?: string
+  /** Flag names this command accepts, when the catalog row already carried them. */
+  readonly flags?: readonly string[]
 }
 
 /**
@@ -345,13 +466,31 @@ export async function listAvailableCommands(): Promise<WeiboCliCall<readonly Wei
   for (const entry of list) {
     if (typeof entry !== 'object' || entry === null) continue
     const record = entry as Record<string, unknown>
-    // The manual shows `users show/biz` style names; accept whichever field carries it.
-    const name = [record.name, record.command, record.path].find(
-      (value): value is string => typeof value === 'string' && value.trim() !== '',
-    )
-    if (name === undefined) continue
+    // ## The fields are `group` and `action` (v0.2.13, verified against official source)
+    //
+    // v0.2.12 looked for `name` / `command` / `path`, none of which the catalog sends, so every
+    // row was skipped and the list was always empty — the capability check then reported "no read
+    // command" for an account that had one.
+    const group = typeof record.group === 'string' ? record.group.trim() : ''
+    const action = typeof record.action === 'string' ? record.action.trim() : ''
+    if (group === '' || action === '') continue
+    const flags: string[] = []
+    if (Array.isArray(record.flags)) {
+      for (const flag of record.flags) {
+        if (typeof flag === 'object' && flag !== null) {
+          const name = (flag as { name?: unknown }).name
+          if (typeof name === 'string' && name.trim() !== '') flags.push(name.trim().toLowerCase())
+        } else if (typeof flag === 'string' && flag.trim() !== '') {
+          flags.push(flag.trim().toLowerCase())
+        }
+      }
+    }
     commands.push({
-      name,
+      group,
+      action,
+      name: `${group} ${action}`,
+      ...(flags.length === 0 ? {} : { flags }),
+      ...(typeof record.access === 'string' ? { access: record.access } : {}),
       ...(typeof record.description === 'string' ? { description: record.description } : {}),
       ...(typeof record.price_type === 'string' ? { priceType: record.price_type } : {}),
     })
@@ -429,25 +568,52 @@ export interface WeiboCliCommandSchema {
  * here, and the argv builder for it is the same one the adapter uses. If a future read needs a
  * new parameter, it has to be added here *and* in the invocation — the two cannot drift.
  */
+/**
+ * The argument names this layer can supply, and the argv each one produces.
+ *
+ * ## Positional arguments do not work here (v0.2.13, verified against official source)
+ *
+ * v0.2.12 asserted "the catalog's own invocation form is `statuses/show <id>`" and returned an
+ * empty argv for every id-shaped parameter, expecting the id to be appended positionally.
+ *
+ * The official dispatcher is `handleInvoke = async (group, action, flags) => …` called as
+ * `handleInvoke(command, subcommand, flags)` — **there is no `rest` parameter**. A positional
+ * argument after the action is therefore **silently dropped**: the request goes out with no id at
+ * all, and the CLI reports no error. That is worse than a rejection, because it looks like a
+ * successful call.
+ *
+ * Every business parameter is a flag, and the body the CLI sends is built from `flags` alone. So
+ * each entry below produces `['--name', value]`.
+ *
+ * ## Why names are plural-aware
+ *
+ * The official examples use `--ids` (plural) for the batch status read and `--id` for comments.
+ * Both spellings are accepted here; which one is used is decided by what the command's own
+ * `flags[]` lists, so we never send a flag the command does not declare.
+ */
 const FILLABLE_ARGUMENTS: Readonly<Record<string, (context: ReadArgContext) => readonly string[]>> = {
-  // The post or comment being read. Passed positionally, never as a flag: the catalog's own
-  // invocation form is `statuses/show <id>`.
-  id: () => [],
-  idstr: () => [],
-  mid: () => [],
-  status_id: () => [],
-  weibo_id: () => [],
-  post_id: () => [],
-  // Paging. `page` is the only knob the adapter actually turns.
-  page: (context) => ['--page', String(context.page)],
+  id: (context) => ['--id', context.threadId],
+  idstr: (context) => ['--idstr', context.threadId],
+  mid: (context) => ['--mid', context.threadId],
+  status_id: (context) => ['--status_id', context.threadId],
+  weibo_id: (context) => ['--weibo_id', context.threadId],
+  post_id: (context) => ['--post_id', context.threadId],
+  ids: (context) => ['--ids', context.threadId],
+  // Paging. `page` is the knob the adapter turns; `count` is sent when the command offers it.
+  page: (context) => (context.paged ? ['--page', String(context.page)] : []),
+  count: (context) => (context.count === undefined ? [] : ['--count', String(context.count)]),
 }
 
 /** What the caller knows when it asks "can I build a valid invocation?". */
 export interface ReadArgContext {
+  /** The post id this read is about. Placed **as a flag value**, never positionally. */
+  readonly threadId: string
   /** Whether this read pages at all. */
   readonly paged: boolean
   /** The page number for this read; ignored when `paged` is false. */
   readonly page: number
+  /** Page size, when the command declares a `count` flag. */
+  readonly count?: number
   /**
    * The flag this CLI uses to scope a comment read to one parent comment, once discovered.
    *
@@ -498,12 +664,27 @@ export function nestedFilterSupported(parameters: readonly string[]): string | u
  * refused.
  */
 export async function inspectCommand(
-  name: string,
-  context: ReadArgContext = { paged: true, page: 1 },
+  command: { readonly group: string; readonly action: string },
+  context: ReadArgContext = { threadId: '', paged: true, page: 1 },
 ): Promise<WeiboCliCall<WeiboCliCommandSchema>> {
-  // The id comes from the catalog, not from user input, but it still goes in as a single
-  // argv element — never concatenated into a command line.
-  const result = await runCli(['commands', 'show', name, '--output', 'json'])
+  // ## Two positional arguments, not one (v0.2.13, verified against official source)
+  //
+  // The official CLI reads `const group = rest[0]; const action = rest[1]` and throws
+  // `Usage: weibo-cli commands show <group> <action>` when either is missing. v0.2.12 passed a
+  // single combined name, so every call threw before any catalog information was read — the
+  // capability check could never succeed regardless of the account's real permissions.
+  //
+  // Both values come from the catalog, not from user input, but they still go in as separate
+  // argv elements — never concatenated into a command line.
+  const result = await runCli([
+    'commands',
+    'show',
+    command.group,
+    command.action,
+    '--output',
+    'json',
+  ])
+  const name = `${command.group} ${command.action}`
   if (result.code !== 0) {
     const classified = classifyFailure(result.stderr, result.stdout, result.errorCode)
     return { status: classified.status, message: classified.message }
@@ -512,17 +693,22 @@ export async function inspectCommand(
   if (!parsed.ok) return { status: 'failed', message: parsed.reason }
 
   const body = parsed.data
-  // The catalog's exact field names are not documented in the manual, so accept the few
-  // shapes that could carry a parameter list rather than assuming one.
+  // ## Where the parameter list actually lives (v0.2.13, verified against official source)
   //
-  // `asArray(body)` is in the chain because a standard JSON Schema puts `properties` at the
-  // **top level** of the document, not under a `schema` key. `asArray` already knows how to
-  // turn a `properties` map into parameter rows, so handing it the whole document is what
-  // makes that shape readable — without it, a textbook schema looked "unparseable".
+  // The official `commands show` payload puts the command's parameters in **`flags`**, each
+  // `{name, type, required, description, enum}`. v0.2.12 never looked there — it searched
+  // `params` / `parameters` / `schema.params` / `properties`, none of which the CLI sends — so
+  // even after the two-argument fix every command would have parsed as "no parameters", and the
+  // "can I supply the required ones" check would have answered from an empty list.
+  //
+  // The other shapes stay in the chain because a differently-versioned CLI may answer in one of
+  // them, and accepting several costs nothing as long as `flags` is tried first.
   const parsedParams =
-    asArray(body) ??
+    asArray(body.flags) ??
     asArray(body.params) ??
     asArray(body.parameters) ??
+    asArray((body.command as Record<string, unknown> | undefined)?.flags) ??
+    asArray(body) ??
     asArray((body.schema as Record<string, unknown> | undefined)?.params) ??
     asArray((body.schema as Record<string, unknown> | undefined)?.parameters) ??
     asArray((body.schema as Record<string, unknown> | undefined)?.properties) ??
@@ -644,18 +830,30 @@ export interface WeiboCliRead<T> {
  *   status so the caller can distinguish quota from auth from upstream.
  */
 export async function runReadCommand<T>(
-  command: string,
+  command: { readonly group: string; readonly action: string; readonly name?: string },
   args: readonly string[],
   options: { readonly timeoutMs?: number } = {},
 ): Promise<WeiboCliRead<T>> {
   const started = Date.now()
-  const result = await runCli([command, ...args, '--output', 'json'], options.timeoutMs)
+  const displayName = command.name ?? `${command.group} ${command.action}`
+  // ## The group and the action are separate argv elements (v0.2.13)
+  //
+  // The official form is `weibo <group> <action> [flags]`. Passing a combined "group action"
+  // string would make the CLI read the whole thing as the group and find no action.
+  //
+  // Everything after the pair is a flag. There is no positional id: the official dispatcher
+  // (`handleInvoke = async (group, action, flags)`) has no `rest` parameter, so a positional
+  // value is dropped without an error — the request would go out with no id at all.
+  const result = await runCli(
+    [command.group, command.action, ...args, '--output', 'json'],
+    options.timeoutMs,
+  )
   const elapsedMs = Date.now() - started
   if (result.code !== 0) {
     const classified = classifyFailure(result.stderr, result.stdout, result.errorCode)
-    return { status: classified.status, message: classified.message, command, elapsedMs }
+    return { status: classified.status, message: classified.message, command: displayName, elapsedMs }
   }
   const parsed = parseCliJson<T>(result.stdout)
-  if (!parsed.ok) return { status: 'failed', message: parsed.reason, command, elapsedMs }
-  return { status: 'ok', message: `${command} 执行成功。`, data: parsed.data, command, elapsedMs }
+  if (!parsed.ok) return { status: 'failed', message: parsed.reason, command: displayName, elapsedMs }
+  return { status: 'ok', message: `${displayName} 执行成功。`, data: parsed.data, command: displayName, elapsedMs }
 }

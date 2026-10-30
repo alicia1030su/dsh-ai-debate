@@ -1191,6 +1191,64 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     },
     approve: createApprovalForSettings,
     pendingApprovals: listPendingApprovals,
+    /**
+     * Live per-platform diagnostic (v0.2.13 §四).
+     *
+     * ## Why the adapter is asked rather than a static manifest
+     *
+     * A manifest describes what a platform *could* do. The task book requires the opposite: the
+     * page must show the **actual** connection state, including that it is not connected. So
+     * this walks the registered providers, asks each one that supports it for its live
+     * diagnostic, and reports whatever it says — or an explicit error when it cannot say.
+     *
+     * ## Nothing here can leak a credential
+     *
+     * The adapter's diagnostic is built from probe results only (a status enum, a version
+     * string, command names, a failure message). It never receives the OAuth session: the
+     * official CLI owns that on disk and this plugin does not read it. The route is also behind
+     * `guard`, so an unauthenticated caller cannot read it either.
+     */
+    platformDiagnostics: async (options?: { readonly refresh?: boolean }) => {
+      const blocks: {
+        platform: string
+        displayName: string
+        state?: unknown
+        error?: string
+      }[] = []
+      for (const provider of platforms.list()) {
+        // Only the Weibo adapter exposes `describeDiagnostics` today. Probing for the member
+        // rather than switching on the id keeps this platform-neutral: the next adapter that
+        // implements it starts showing up with no edit here.
+        let adapter: unknown
+        try {
+          adapter = provider.createAdapter({ settings: platformSettingsOf(effectiveConfig(), provider.id) })
+        } catch (error) {
+          blocks.push({
+            platform: provider.id,
+            displayName: provider.displayName,
+            error: `无法构造适配器：${(error as Error).message}`,
+          })
+          continue
+        }
+        const probe = adapter as {
+          describeDiagnostics?: (opts?: { refresh?: boolean }) => Promise<unknown>
+        }
+        if (typeof probe.describeDiagnostics !== 'function') continue
+        try {
+          const state = await probe.describeDiagnostics(options)
+          blocks.push({ platform: provider.id, displayName: provider.displayName, state })
+        } catch (error) {
+          // An answer we could not get is still worth showing: silence would render as
+          // "nothing to check".
+          blocks.push({
+            platform: provider.id,
+            displayName: provider.displayName,
+            error: `诊断读取失败：${(error as Error).message}`,
+          })
+        }
+      }
+      return blocks
+    },
   }
 
   // /api/dsh-ai-debate/* — the configuration page's read/write path.

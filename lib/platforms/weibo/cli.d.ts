@@ -132,11 +132,27 @@ export declare function parseCliJson<T>(stdout: string): {
  * `cli_missing` must not advertise any read as `supported`.
  */
 export declare function probeWeiboCli(): Promise<WeiboCliReadiness>;
-/** One row of `commands list --available`. */
+/**
+ * One row of `commands list --available`.
+ *
+ * ## Why it is a pair, not a name
+ *
+ * The official CLI invokes `weibo <group> <action> [flags]`, and `action` itself may contain a
+ * slash (`show_batch/other`). Keeping the pair separate is what lets `commands show` receive the
+ * two arguments it requires, and what lets the reader tell `statuses` (the group) from
+ * `user_timeline/biz` (the action).
+ */
 export interface WeiboCliCommand {
+    readonly group: string;
+    readonly action: string;
+    /** `group action`, for display and for the fake CLI's matching. */
     readonly name: string;
     readonly description?: string;
     readonly priceType?: string;
+    /** `allowed` / `locked` as the catalog reports it. Locked rows are listed but not callable. */
+    readonly access?: string;
+    /** Flag names this command accepts, when the catalog row already carried them. */
+    readonly flags?: readonly string[];
 }
 /**
  * The account's available command list.
@@ -193,10 +209,14 @@ export interface WeiboCliCommandSchema {
 }
 /** What the caller knows when it asks "can I build a valid invocation?". */
 export interface ReadArgContext {
+    /** The post id this read is about. Placed **as a flag value**, never positionally. */
+    readonly threadId: string;
     /** Whether this read pages at all. */
     readonly paged: boolean;
     /** The page number for this read; ignored when `paged` is false. */
     readonly page: number;
+    /** Page size, when the command declares a `count` flag. */
+    readonly count?: number;
     /**
      * The flag this CLI uses to scope a comment read to one parent comment, once discovered.
      *
@@ -231,7 +251,10 @@ export declare function nestedFilterSupported(parameters: readonly string[]): st
  * could not parse is a schema we have **not** verified. It is now `evidence: 'unknown'` and
  * refused.
  */
-export declare function inspectCommand(name: string, context?: ReadArgContext): Promise<WeiboCliCall<WeiboCliCommandSchema>>;
+export declare function inspectCommand(command: {
+    readonly group: string;
+    readonly action: string;
+}, context?: ReadArgContext): Promise<WeiboCliCall<WeiboCliCommandSchema>>;
 /**
  * A read that actually ran.
  *
@@ -260,7 +283,11 @@ export interface WeiboCliRead<T> {
  * - It does not treat a non-zero exit as a soft failure. Every failure keeps its classified
  *   status so the caller can distinguish quota from auth from upstream.
  */
-export declare function runReadCommand<T>(command: string, args: readonly string[], options?: {
+export declare function runReadCommand<T>(command: {
+    readonly group: string;
+    readonly action: string;
+    readonly name?: string;
+}, args: readonly string[], options?: {
     readonly timeoutMs?: number;
 }): Promise<WeiboCliRead<T>>;
 export {};

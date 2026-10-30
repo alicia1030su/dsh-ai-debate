@@ -17,7 +17,9 @@ import { DebateStore } from '../lib/store.js'
 import { DEFAULT_CONFIG, resolveConfig } from '../lib/config.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { runAnalysis, runGeneration, runPublish } from '../lib/runtime.js'
-import { FakeAdapter, threePartyThread } from '../test/helpers.ts'
+// `grantApproval` is a test helper: it mints the approval record the publisher now requires
+// (v0.2.5 removed the caller-supplied boolean on purpose).
+import { FakeAdapter, grantApproval, threePartyThread } from '../test/helpers.ts'
 
 let failures = 0
 const results = []
@@ -82,7 +84,6 @@ const data = threePartyThread()
       sessionId: a.sessionId,
       candidateId: first.candidateId,
       approvedText: first.text,
-      humanApproved: true,
     })
     check('OLD_CANDIDATE 旧版本候选被拒', report.ok, false)
     check('OLD_CANDIDATE 平台调用次数', rig.adapter.publishes.length, 0)
@@ -105,12 +106,17 @@ const data = threePartyThread()
   try {
     const a = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const g = await runGeneration(rig.runtime, { sessionId: a.sessionId })
-    const report = await runPublish(rig.runtime, {
-      sessionId: a.sessionId,
-      candidateId: g.candidateId,
-      approvedText: g.text,
-      humanApproved: true,
-    })
+    // v0.2.5+: an approval is a record, not a caller-supplied boolean.
+await grantApproval(rig.store, {
+  sessionId: a.sessionId,
+  candidateId: g.candidateId,
+  config: rig.runtime.config,
+})
+const report = await runPublish(rig.runtime, {
+  sessionId: a.sessionId,
+  candidateId: g.candidateId,
+  approvedText: g.text,
+})
     const key = rig.store.snapshot().dedupe[0]?.key
     check('THROWN_TIMEOUT 发表结果', report.status, 'uncertain')
     check('THROWN_TIMEOUT 去重状态', rig.store.findDedupe(key)?.publishState, 'pending')
@@ -138,11 +144,16 @@ const data = threePartyThread()
   try {
     const a = await runAnalysis(runtime, { url: data.thread.url, postId: 'n7' })
     const g = await runGeneration(runtime, { sessionId: a.sessionId })
+      // v0.2.5+: an approval is a stored record, not a caller-supplied boolean.
+      await grantApproval(runtime.store, {
+        sessionId: a.sessionId,
+        candidateId: g.candidateId,
+        config: runtime.config,
+      })
     const report = await runPublish(runtime, {
       sessionId: a.sessionId,
       candidateId: g.candidateId,
       approvedText: g.text,
-      humanApproved: true,
     })
     check('UNBOUND_AI_ACCOUNT 被拒', report.ok, false)
     check('UNBOUND_AI_ACCOUNT 原因', report.errorCode, 'identity_unbound')
@@ -160,11 +171,16 @@ const data = threePartyThread()
     const g = await runGeneration(rig.runtime, { sessionId: a.sessionId })
     // A long body: the guard must reject or trim rather than silently store a stub.
     const long = '第一句话必须留下。' + '中间的填充内容。'.repeat(400) + '最后一句也要在。'
+      // v0.2.5+: an approval is a stored record, not a caller-supplied boolean.
+      await grantApproval(rig.runtime.store, {
+        sessionId: a.sessionId,
+        candidateId: g.candidateId,
+        config: rig.runtime.config,
+      })
     const report = await runPublish(rig.runtime, {
       sessionId: a.sessionId,
       candidateId: g.candidateId,
       approvedText: long,
-      humanApproved: true,
     })
     check('CAP_CONFIRMED 超长正文被拒', report.ok, false)
     check('CAP_CONFIRMED 平台调用次数', rig.adapter.publishes.length, 0)
@@ -179,11 +195,16 @@ const data = threePartyThread()
   try {
     const a = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const g = await runGeneration(rig.runtime, { sessionId: a.sessionId })
+      // v0.2.5+: an approval is a stored record, not a caller-supplied boolean.
+      await grantApproval(rig.runtime.store, {
+        sessionId: a.sessionId,
+        candidateId: g.candidateId,
+        config: rig.runtime.config,
+      })
     const report = await runPublish(rig.runtime, {
       sessionId: a.sessionId,
       candidateId: g.candidateId,
       approvedText: g.text,
-      humanApproved: true,
     })
     const key = rig.store.snapshot().dedupe[0]?.key
     check('MISSING_POST_ID 结果不是 confirmed', report.status === 'confirmed', false)
@@ -217,11 +238,16 @@ const data = threePartyThread()
       publishReply: (...args) => inner.publishReply(...args),
       checkAuthentication: (...args) => inner.checkAuthentication(...args),
     }
+      // v0.2.5+: an approval is a stored record, not a caller-supplied boolean.
+      await grantApproval(rig.runtime.store, {
+        sessionId: a.sessionId,
+        candidateId: g.candidateId,
+        config: rig.runtime.config,
+      })
     await runPublish(rig.runtime, {
       sessionId: a.sessionId,
       candidateId: g.candidateId,
       approvedText: g.text,
-      humanApproved: true,
     })
     check('CACHED_FLOOR 发表前重新读取了目标', reads > 0, true)
   } finally {
@@ -247,11 +273,16 @@ const data = threePartyThread()
       ]),
     )
     rig.runtime.adapter = new FakeAdapter({ ...data, nested })
+      // v0.2.5+: an approval is a stored record, not a caller-supplied boolean.
+      await grantApproval(rig.runtime.store, {
+        sessionId: a.sessionId,
+        candidateId: g.candidateId,
+        config: rig.runtime.config,
+      })
     const report = await runPublish(rig.runtime, {
       sessionId: a.sessionId,
       candidateId: g.candidateId,
       approvedText: g.text,
-      humanApproved: true,
     })
     check('NAME_AUTHOR_DRIFT 改名后被拒', report.ok, false)
     check('NAME_AUTHOR_DRIFT 平台调用次数', rig.runtime.adapter.publishes.length, 0)

@@ -80,28 +80,41 @@ const COMMENTS_PAGE_2 = {
   has_more: false,
 }
 
-/** The catalog entry with parameters we can actually fill. */
+/**
+ * The catalog rows use the official `group` + `action` shape.
+ *
+ * v0.2.12 modelled these as one name (`statuses/show`). That cannot be invoked: the CLI reads
+ * `rest[0]` as the group and `rest[1]` as the action, so a single combined string leaves the
+ * action empty and `commands show` throws. The fixture was part of the bug.
+ */
 const GOOD_CATALOG = {
   commands: [
-    { name: 'statuses/show', description: '读取单条微博', price_type: 'credit' },
-    { name: 'comments/list', description: '读取评论', price_type: 'credit' },
+    { group: 'statuses', action: 'show_batch/biz', description: '读取微博', price_type: 'credit' },
+    { group: 'comments', action: 'show/biz', description: '读取评论', price_type: 'credit' },
   ],
+  total: 2,
 }
 
 const GOOD_STATUS_SCHEMA = {
-  name: 'statuses/show',
-  params: [{ name: 'id', required: true }, { name: 'isGetLongText' }],
+  group: 'statuses',
+  action: 'show_batch/biz',
+  flags: [
+    { name: 'ids', required: true },
+    { name: 'isGetLongText' },
+  ],
 }
 
 const GOOD_COMMENT_SCHEMA = {
-  name: 'comments/list',
-  params: [
+  group: 'comments',
+  action: 'show/biz',
+  flags: [
     { name: 'id', required: true },
     { name: 'page' },
-    // A parent-scoping parameter the catalog actually lists. v0.2.12's audit found the
-    // adapter was sending a hardcoded `--comment` that appeared nowhere in the schema; the
-    // flag is now discovered from here and nested reads refuse when it is absent.
-    { name: 'parent_id' },
+    { name: 'count' },
+    // A parent-scoping flag the catalog actually lists. v0.2.12's audit found the adapter was
+    // sending a hardcoded `--comment` that appeared nowhere in the schema; the flag is now
+    // discovered from here, and nested reads refuse when it is absent.
+    { name: 'cid' },
   ],
 }
 
@@ -130,14 +143,26 @@ function happyRules(): unknown[] {
   return [
     { match: 'version', stdout: 'weibo-cli 1.0.0\n' },
     { match: 'doctor', stdout: 'ok\n' },
-    { match: 'commands show statuses/show', stdout: JSON.stringify(GOOD_STATUS_SCHEMA) },
-    { match: 'commands show comments/list', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
+    // ## The argv shapes below are what the official CLI actually receives
+    //
+    // `commands show <group> <action>` takes two positional arguments; every business argument
+    // (`--ids`, `--id`, `--page`, `--count`, `--cid`) is a flag. v0.2.12's fixture used
+    // `comments/list <mid> --page 1`, i.e. an id passed positionally — a form the CLI drops
+    // without an error, which is exactly why the defect stayed invisible.
+    { match: 'commands show statuses show_batch/biz', stdout: JSON.stringify(GOOD_STATUS_SCHEMA) },
+    { match: 'commands show comments show/biz', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
     { match: 'commands list', stdout: JSON.stringify(GOOD_CATALOG) },
-    { match: 'statuses/show', stdout: JSON.stringify(STATUS) },
-    { match: 'comments/list 4331051486294436 --page 1', stdout: JSON.stringify(COMMENTS_PAGE_1) },
-    { match: 'comments/list 4331051486294436 --page 2', stdout: JSON.stringify(COMMENTS_PAGE_2) },
+    { match: 'statuses show_batch/biz --ids 4331051486294436', stdout: JSON.stringify(STATUS) },
     {
-      match: 'comments/list 4331051486294436 --parent-id 5001',
+      match: 'comments show/biz --id 4331051486294436 --page 1',
+      stdout: JSON.stringify(COMMENTS_PAGE_1),
+    },
+    {
+      match: 'comments show/biz --id 4331051486294436 --page 2',
+      stdout: JSON.stringify(COMMENTS_PAGE_2),
+    },
+    {
+      match: 'comments show/biz --cid 5001',
       stdout: JSON.stringify({
         comments: [
           {
@@ -185,10 +210,15 @@ test('集成：getThread 真的 spawn 了 CLI，并把 numeric mid 作为参数�
     // The argument assertion: a numeric mid, never the raw URL and never the base62 form.
     //
     // `argv[0]` is the command name, so the lookup has to match the *first* element. The
-    // first version matched anywhere in argv and picked up `commands show statuses/show`,
+    // first version matched anywhere in argv and picked up the `commands show` argument,
     // which is the schema lookup — a different call that legitimately carries no mid.
     const log = calls(logPath)
-    const statusCall = log.find((argv) => argv[0] === 'statuses/show')
+    // The command is invoked as `statuses show_batch/biz --ids <mid>`: two positional
+  // arguments, then the id as a flag. v0.2.12 asserted on a single `statuses/show` argv
+  // element, a form the real CLI cannot accept.
+  const statusCall = log.find(
+    (argv) => argv[0] === 'statuses' && argv[1] === 'show_batch/biz',
+  )
     assert.ok(
       statusCall !== undefined,
       `应真的调用 statuses/show，实际：${JSON.stringify(log)}`,
@@ -233,7 +263,13 @@ test('集成：getReplies 分页，且完整性来自响应而不是「这页看
 
     const log = calls(logPath)
     assert.equal(
-      log.some((argv) => argv[0] === 'comments/list' && argv.includes('--page') && argv.includes('1')),
+      log.some(
+      (argv) =>
+        argv[0] === 'comments' &&
+        argv[1] === 'show/biz' &&
+        argv.includes('--page') &&
+        argv.includes('1'),
+    ),
       true,
       '分页参数必须传下去',
     )
@@ -250,10 +286,10 @@ test('集成：getNestedReplies 用目录里发现的筛选参数，不再凭空
   // ignored, in which case top-level comments come back and get projected as replies.
   //
   // The adapter now takes the flag from `inspectCommand`'s `nestedFilterFlag`. The fixture's
-  // schema lists `parent_id`, so the invocation must use `--parent-id`.
+  // schema lists `cid`, so the invocation must use `--cid`.
   const rules = happyRules().map((rule) => {
     const r = rule as { match: string; stdout?: string }
-    if (r.match.startsWith('comments/list 4331051486294436 --parent-id')) {
+    if (r.match.startsWith('comments show/biz --cid')) {
       return {
         match: r.match,
         stdout: JSON.stringify({
@@ -295,7 +331,7 @@ test('集成：getNestedReplies 用目录里发现的筛选参数，不再凭空
 
     const log = calls(logPath)
     assert.equal(
-      log.some((argv) => argv.includes('--parent-id') && argv.includes('5001')),
+      log.some((argv) => argv.includes('--cid') && argv.includes('5001')),
       true,
       `必须用目录里发现的参数名，实际调用：${JSON.stringify(log)}`,
     )
@@ -315,12 +351,14 @@ test('集成：目录里没有父评论筛选参数时，楼中楼读取必须�
   // comments that then look like replies. Refusing is the only honest outcome.
   const rules = happyRules().map((rule) => {
     const r = rule as { match: string; stdout?: string }
-    if (r.match === 'commands show comments/list') {
+    if (r.match === 'commands show comments show/biz') {
       return {
         match: r.match,
+        // No `cid`/`parent_id` among the flags: the case under test.
         stdout: JSON.stringify({
-          name: 'comments/list',
-          params: [{ name: 'id', required: true }, { name: 'page' }],
+          group: 'comments',
+          action: 'show/biz',
+          flags: [{ name: 'id', required: true }, { name: 'page' }],
         }),
       }
     }
@@ -446,10 +484,10 @@ test('集成：额度不足 → quota_exhausted', async () => {
   useFakeCli([
     { match: 'version', stdout: 'weibo-cli 1.0.0\n' },
     { match: 'doctor', stdout: 'ok\n' },
-    { match: 'commands show statuses/show', stdout: JSON.stringify(GOOD_STATUS_SCHEMA) },
-    { match: 'commands show comments/list', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
+    { match: 'commands show statuses show_batch/biz', stdout: JSON.stringify(GOOD_STATUS_SCHEMA) },
+    { match: 'commands show comments show/biz', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
     { match: 'commands list', stdout: JSON.stringify(GOOD_CATALOG) },
-    { match: 'statuses/show', stderr: 'error: 积分余额不足\n', exit: 1 },
+    { match: 'statuses show_batch/biz --ids 4331051486294436', stderr: 'error: 积分余额不足\n', exit: 1 },
   ])
   try {
     const error = await adapter()
@@ -490,15 +528,15 @@ test('集成：命令要求我们填不了的参数 → 拒绝调用，不猜参
     { match: 'version', stdout: 'weibo-cli 1.0.0\n' },
     { match: 'doctor', stdout: 'ok\n' },
     {
-      match: 'commands show statuses/show',
+      match: 'commands show statuses show_batch/biz',
       stdout: JSON.stringify({
         name: 'statuses/show',
         params: [{ name: 'id', required: true }, { name: 'uid', required: true }],
       }),
     },
-    { match: 'commands show comments/list', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
+    { match: 'commands show comments show/biz', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
     { match: 'commands list', stdout: JSON.stringify(GOOD_CATALOG) },
-    { match: 'statuses/show', stdout: JSON.stringify(STATUS) },
+    { match: 'statuses show_batch/biz --ids 4331051486294436', stdout: JSON.stringify(STATUS) },
   ])
   try {
     const error = await adapter()
@@ -528,10 +566,10 @@ test('集成：响应结构对不上 → malformed_response，不返回空 Threa
   useFakeCli([
     { match: 'version', stdout: 'weibo-cli 1.0.0\n' },
     { match: 'doctor', stdout: 'ok\n' },
-    { match: 'commands show statuses/show', stdout: JSON.stringify(GOOD_STATUS_SCHEMA) },
-    { match: 'commands show comments/list', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
+    { match: 'commands show statuses show_batch/biz', stdout: JSON.stringify(GOOD_STATUS_SCHEMA) },
+    { match: 'commands show comments show/biz', stdout: JSON.stringify(GOOD_COMMENT_SCHEMA) },
     { match: 'commands list', stdout: JSON.stringify(GOOD_CATALOG) },
-    { match: 'statuses/show', stdout: JSON.stringify({ unexpected: 'shape' }) },
+    { match: 'statuses show_batch/biz --ids 4331051486294436', stdout: JSON.stringify({ unexpected: 'shape' }) },
   ])
   try {
     const error = await adapter()

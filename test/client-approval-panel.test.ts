@@ -720,8 +720,8 @@ test('批准页面不显示任何凭据', async () => {
     settings: payload({
       values: {
         ...(payload().values as Record<string, unknown>),
-        tiebaCookie: 'ST=SUPERSECRET',
-        llmApiKey: 'sk-SUPERSECRET',
+        tiebaCookie: 'ST=fixture-supersecret-0001',
+        llmApiKey: 'sk-fixture-supersecret-00000001',
       },
     }),
   })

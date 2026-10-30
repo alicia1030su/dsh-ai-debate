@@ -130,6 +130,14 @@ window.__ModuleLoader__.load({
       tabPublish: '发表与安全',
       tabApprove: '发表授权',
       tabPlatforms: '平台',
+      platformLiveTitle: '实时连接状态',
+      platformLiveIntro:
+        '下面是插件刚刚探测到的真实状态，不是清单推测。无法检查的项目会显示「未知」，不会被当成通过。',
+      platformLiveRefresh: '重新探测',
+      platformLiveRefreshing: '正在探测…',
+      platformLiveNone: '这个平台没有提供实时诊断（不代表它可用）。',
+      platformLiveFailed: '诊断读取失败',
+      platformLiveUnknown: '未知',
       tabSecurity: '安全与防注入',
       securityIntro: '防注入保护默认开启。确定性规则（身份、目标、凭据、立场）没有关闭开关——能关掉的只有语义审核的严格度。',
       securityProtectionOn: '防注入保护已开启',
@@ -389,6 +397,14 @@ window.__ModuleLoader__.load({
       tabPublish: 'Publishing',
       tabApprove: 'Authorisation',
       tabPlatforms: 'Platforms',
+      platformLiveTitle: 'Live connection state',
+      platformLiveIntro:
+        'Probed just now by the plugin, not inferred from the manifest. Anything that could not be checked shows as unknown, never as passing.',
+      platformLiveRefresh: 'Re-probe',
+      platformLiveRefreshing: 'Probing…',
+      platformLiveNone: 'This platform provides no live diagnostic (which does not mean it works).',
+      platformLiveFailed: 'Diagnostic failed',
+      platformLiveUnknown: 'unknown',
       tabStatus: 'Status',
 
       ownerUserId: 'Owner Tieba numeric id',
@@ -826,6 +842,8 @@ window.__ModuleLoader__.load({
         this.failed = null
         this.notice = null
         this.probes = {}
+        /** Live per-platform blocks from the last platform read (v0.2.13 §四). */
+        this.platformBlocks = undefined
         this.status = null
         this.previews = null
         /**
@@ -878,6 +896,7 @@ window.__ModuleLoader__.load({
           failed: this.failed,
           notice: this.notice,
           probes: this.probes,
+        platformBlocks: this.platformBlocks,
           status: this.status,
           previews: this.previews,
           approveState: this.approveState,
@@ -1182,6 +1201,37 @@ window.__ModuleLoader__.load({
           this.probes = {
             ...this.probes,
             [action]: { state: 'failed', error: error instanceof Error ? error.message : String(error) },
+          }
+        } finally {
+          this.publish()
+        }
+      }
+
+      /**
+       * Re-probe the platforms' live diagnostics (v0.2.13 §四).
+       *
+       * This is the refresh button. It POSTs `refresh-platforms`, which asks each adapter to
+       * probe again *ignoring any cached verdict* — the whole reason the button exists, since
+       * without it the page could only ever show what the first probe of the process concluded.
+       */
+      async refreshPlatforms() {
+        this.probes = { ...this.probes, platforms: { state: 'running' } }
+        this.publish()
+        try {
+          const answer = await callJson(ROUTE_ACTION, {
+            method: 'POST',
+            body: { action: 'refresh-platforms' },
+          })
+          this.platformBlocks =
+            answer && Array.isArray(answer.platforms) ? answer.platforms : []
+          this.probes = { ...this.probes, platforms: { state: 'done' } }
+        } catch (error) {
+          this.probes = {
+            ...this.probes,
+            platforms: {
+              state: 'failed',
+              error: error instanceof Error ? error.message : String(error),
+            },
           }
         } finally {
           this.publish()
@@ -2633,8 +2683,130 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * One platform's live diagnostic (v0.2.13 §四).
+     *
+     * Renders whatever the Host sent, including the negative answers, and never upgrades an
+     * un-checked line to a passing one. That is the point: the page exists so the owner can
+     * tell "connected" from "not connected", not so it can look reassuring.
+     */
+    function PlatformLiveBlock(props) {
+      const { t, entry, refresh, refreshing } = props
+
+      const toneOf = (value) => {
+        if (value === 'read_ok') return 'dsd-badge-ok'
+        if (value === 'not_implemented') return 'dsd-badge-warn'
+        if (
+          value === 'cli_missing' ||
+          value === 'not_authorised' ||
+          value === 'service_inactive' ||
+          value === 'permission_insufficient' ||
+          value === 'quota_exhausted'
+        ) {
+          return 'dsd-badge-warn'
+        }
+        return 'dsd-badge-bad'
+      }
+
+      const header = h(
+        'div',
+        {
+          className: 'dsd-inline',
+          style: { marginTop: 10, alignItems: 'baseline', gap: 8, flexWrap: 'wrap' },
+        },
+        h('p', { className: 'dsd-sect-title', style: { margin: 0 } }, t('platformLiveTitle')),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsd-btn dsd-btn-ghost',
+            disabled: refreshing === true,
+            onClick: () => {
+              if (typeof refresh === 'function') refresh()
+            },
+          },
+          refreshing === true ? t('platformLiveRefreshing') : t('platformLiveRefresh'),
+        ),
+      )
+
+      // No block: the platform never answered. Say so rather than drawing nothing.
+      if (entry === undefined || entry === null) {
+        return h(
+          'div',
+          { className: 'dsd-block', style: { marginTop: 8 } },
+          header,
+          h('p', { className: 'dsd-hint' }, t('platformLiveNone')),
+        )
+      }
+
+      if (entry.error !== undefined) {
+        return h(
+          'div',
+          { className: 'dsd-block', style: { marginTop: 8 } },
+          header,
+          h('p', { className: 'dsd-hint' }, t('platformLiveFailed') + '：' + plainText(entry.error)),
+        )
+      }
+
+      const live = entry.state || {}
+      const lines = Array.isArray(live.lines) ? live.lines : []
+
+      return h(
+        'div',
+        { className: 'dsd-block', style: { marginTop: 8 } },
+        header,
+        h('p', { className: 'dsd-hint', style: { marginBottom: 8 } }, t('platformLiveIntro')),
+        h(
+          'dl',
+          { className: 'dsd-kv' },
+          lines.map((line, index) => {
+            const isUnknown = line.state === 'not_implemented'
+            return [
+              h(
+                'dt',
+                { key: 'live-t-' + index },
+                h(
+                  'span',
+                  { className: 'dsd-badge ' + toneOf(line.state) },
+                  isUnknown ? t('platformLiveUnknown') : plainText(line.message),
+                ),
+              ),
+              h(
+                'dd',
+                { key: 'live-d-' + index },
+                isUnknown ? plainText(line.message) : null,
+                Array.isArray(line.steps) && line.steps.length > 0
+                  ? h(
+                      'ul',
+                      { className: 'dsd-notes' },
+                      line.steps.map((step, stepIndex) =>
+                        h('li', { key: stepIndex }, plainText(step)),
+                      ),
+                    )
+                  : null,
+              ),
+            ]
+          }),
+        ),
+      )
+    }
+
+    /**
+     * The live block for one manifest row, matched by platform id.
+     *
+     * Matching by id rather than by index matters: the manifest and the diagnostic are produced
+     * by two different walks, so pairing them positionally would show one platform's state
+     * under another platform's name.
+     */
+    function liveEntryFor(state, row) {
+      const blocks = state.platformBlocks
+      if (!Array.isArray(blocks)) return undefined
+      return blocks.find((block) => block && block.platform === row.id)
+    }
+
     function PlatformsSection(props) {
-      const { t, state } = props
+      // `store` is part of the shared props every section receives; the refresh button needs it.
+      const { t, state, store } = props
       const rows = state.view.platforms
 
       if (!Array.isArray(rows)) {
@@ -2760,6 +2932,17 @@ window.__ModuleLoader__.load({
                   h('ul', { className: 'dsd-notes' }, row.constraints.map((line, index) => h('li', { key: index }, plainText(line)))),
                 )
               : null,
+
+            // The live diagnostic for this platform (v0.2.13 §四). It sits after the static
+            // manifest so the overview stays on top and the measured state answers
+            // "is it actually working right now".
+            h(PlatformLiveBlock, {
+              key: 'live',
+              t,
+              entry: liveEntryFor(state, row),
+              refresh: () => store.refreshPlatforms(),
+              refreshing: !!(state.probes.platforms && state.probes.platforms.state === 'running'),
+            }),
           ),
         ),
       )

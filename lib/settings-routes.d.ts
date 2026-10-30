@@ -146,6 +146,23 @@ export interface SettingsRouteDeps {
     /** Read the publish ledger and session counters. */
     diagnostics(): Promise<Diagnostics>;
     /**
+     * Live per-platform diagnostic, for the platform section of the page (v0.2.13 §四).
+     *
+     * ## Two properties that matter more than the shape
+     *
+     * 1. **It is reached only through the guarded route.** The page cannot read an account's CLI
+     *    state without an authenticated session, the same fence every other sensitive read uses.
+     * 2. **A platform that cannot answer contributes an `error`, not silence.** Returning an
+     *    empty list for "the probe threw" would render as "no platforms to check" — which a reader
+     *    would take as all-clear. The failure has to be visible.
+     *
+     * Optional so route tests written before this existed keep compiling; when absent the page
+     * shows "no live diagnostic available" rather than a passing state.
+     */
+    platformDiagnostics?(options?: {
+        readonly refresh?: boolean;
+    }): Promise<readonly PlatformDiagnosticBlock[]>;
+    /**
      * Candidates that are waiting for a human approval, newest first.
      *
      * This is what makes the approval section possible: the page cannot approve something
@@ -432,6 +449,29 @@ export interface Diagnostics {
     };
     readonly dshVersion?: string;
     readonly pluginVersion: string;
+    /**
+     * Per-platform live state (v0.2.13 §四).
+     *
+     * ## Why this is an opaque block rather than typed fields
+     *
+     * This module is platform-neutral by design; importing a Weibo type here would mean editing
+     * the route layer every time a platform is added. The adapter and the page agree on the
+     * shape, and the route only carries it.
+     *
+     * A platform that has nothing to report contributes **no entry**, which the client renders
+     * as "this platform has no live diagnostic" — never as all-clear. That distinction is the
+     * whole point: an absent probe must not look like a passing one.
+     */
+    readonly platforms?: readonly PlatformDiagnosticBlock[];
+}
+/** One platform's diagnostic, shaped by the adapter that produced it. */
+export interface PlatformDiagnosticBlock {
+    readonly platform: string;
+    readonly displayName: string;
+    /** Present only when the adapter answered. Absent means "no probe ran". */
+    readonly state?: unknown;
+    /** Why there is no state, when there is none. */
+    readonly error?: string;
 }
 /**
  * The cheap structural fence: loopback peer plus browser same-origin markers.

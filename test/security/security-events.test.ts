@@ -22,7 +22,7 @@ import {
 
 test('摘录里不会留下凭据', () => {
   const cases = [
-    'sk-abcdefghijklmnopqrstuvwxyz123456',
+    'sk-fixture-abcdefghijklmnopqrstu',
     'm0sk_OtQ7BaGeBkhytYlLFYXvtTdTNsTZ',
     'BDUSS=abcdefgh; STOKEN=xyz',
     'Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig',
@@ -113,7 +113,7 @@ test('渲染出的行只包含脱敏内容', () => {
     summary: '回复攻击主人',
     decision: 'block',
     postId: 'c1',
-    excerpt: '主人你就是个傻子，sk-abcdefghijklmnop',
+    excerpt: '主人你就是个傻子，sk-fixture-abcdefghij',
   })
   const lines = renderEvents([event])
   assert.equal(lines.length, 1)

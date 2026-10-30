@@ -28,6 +28,7 @@
  */
 
 import type { Dispute, Participant, Statement } from './analyzer.js'
+import { judgeRelation, type ConflictVerdict } from './conflict.js'
 import { extractClaims, isSubstantive } from './analyzer.js'
 import type {
   BriefAgreedFact,
@@ -192,7 +193,7 @@ function bystanders(dispute: Dispute): BriefBystander[] {
  * Each entry states a *reason*, not just a topic, so a reviewer can tell "we did not read
  * that" from "the two accounts disagree about it".
  */
-function uncertainties(input: BuildBriefInput): BriefUncertainty[] {
+function uncertainties(input: BuildBriefInput, verdict?: ConflictVerdict): BriefUncertainty[] {
   const out: BriefUncertainty[] = []
   const { dispute, collected } = input
 
@@ -232,6 +233,19 @@ function uncertainties(input: BuildBriefInput): BriefUncertainty[] {
       reason: '平台只给了被回复人的显示名，没有给评论 id；同名或改名的情形下可能连错。',
     })
   }
+  // The semantic relation between the two positions (v0.2.13 §三).
+  //
+  // This is the entry that keeps a machine reading of "do they actually disagree" from being
+  // treated as settled. When the judge could not prove a contradiction — or proved one only
+  // weakly — the reviewer is told so explicitly instead of being handed a confident sentence.
+  if (verdict !== undefined && verdict.requiresReview) {
+    out.push({
+      point: '双方是否真的存在分歧，尚未确认',
+      reason:
+        `${verdict.reason}` +
+        '（这是基于文本结构的判断，不是语义理解；请人工确认后再决定回应方向。）',
+    })
+  }
   return out
 }
 
@@ -254,7 +268,7 @@ function directions(input: BuildBriefInput, hasChallenge: boolean): BriefDirecti
  * Only risks this build can actually see. A generic "注意言辞" would train the reviewer to
  * ignore the list.
  */
-function risks(input: BuildBriefInput): string[] {
+function risks(input: BuildBriefInput, verdict?: ConflictVerdict): string[] {
   const out: string[] = []
   const { dispute, collected } = input
   if (!collected.complete) {
@@ -267,6 +281,21 @@ function risks(input: BuildBriefInput): string[] {
     out.push(
       `这一层还有 ${dispute.bystanders.length} 位其他参与者；回复只面向对手，不要把他们卷进来。`,
     )
+  }
+  // A reply written against a nonexistent dispute is worse than no reply (v0.2.13 §三).
+  if (verdict !== undefined) {
+    if (verdict.relation === 'different_topics') {
+      out.push(
+        '双方讨论的似乎不是同一件事：如果按「反驳」来写，会像在攻击一个对方没提出的观点。' +
+          '建议先确认争论到底是什么，或改成澄清式回应。',
+      )
+    } else if (verdict.relation === 'different_preference') {
+      out.push(
+        '双方只是喜好不同：这类差别没有对错，用反驳口吻会显得在争一件不需要争的事。',
+      )
+    } else if (verdict.relation === 'unknown') {
+      out.push('无法确认双方是否真的对立：回复前请人工核对，不要默认对手在攻击主人。')
+    }
   }
   return out
 }
@@ -290,17 +319,38 @@ export function buildBrief(input: BuildBriefInput): {
 
   // Positions. The summary names an actual claim, not a mood, and the evidence is the posts
   // it came from.
+  //
+  // ## Why the summary falls back to the whole statement (v0.2.13)
+  //
+  // `extractClaims` drops questions, which is right for "arguments" but wrong here. The e2e
+  // fixture's opponent says "你凭什么说成本会翻倍？有数据吗？" — a genuine challenge and the
+  // most important thing about their position — and `extractClaims` reduced it to the bare
+  // fragment "有数据吗". Comparing "成本会翻倍" against "有数据吗" found no shared subject, so
+  // the judge could not see the dispute that obviously exists.
+  //
+  // The position summary is what the conflict judge reads, so it must keep the subject the
+  // opponent is actually addressing. Using the first substantive statement verbatim is both
+  // more faithful and more useful to the judge.
+  const firstSubstantive = (statements: readonly Statement[]): string | undefined => {
+    for (const statement of statements) {
+      if (!isSubstantive(statement.content)) continue
+      return summarise(statement.content, 120)
+    }
+    return undefined
+  }
+
   const ownerClaims = extractClaims(mine, 3)
   const opponentClaims = extractClaims(theirs, 3)
 
   let ownerPosition: BriefPosition = {
     side: 'owner',
-    summary: ownerClaims[0] ?? '（主人的具体主张未能从句子里提取出来，请人工核对原帖）',
+    summary: firstSubstantive(mine) ?? ownerClaims[0] ?? '（主人的具体主张未能从句子里提取出来，请人工核对原帖）',
     evidence: idsOf(mine),
   }
   let opponentPosition: BriefPosition = {
     side: 'opponent',
-    summary: opponentClaims[0] ?? '（对方的具体主张未能从句子里提取出来，请人工核对原帖）',
+    summary:
+      firstSubstantive(theirs) ?? opponentClaims[0] ?? '（对方的具体主张未能从句子里提取出来，请人工核对原帖）',
     evidence: idsOf(theirs),
   }
 
@@ -314,12 +364,21 @@ export function buildBrief(input: BuildBriefInput): {
     if (argumentsList.length >= 5) break
   }
 
-  // Disagreements: where the two sides' claims are both present and not shared. Derived from
-  // the two positions so it cannot drift from them.
+  // Disagreements are decided by `conflict.ts`, not by "both sides have evidence".
+  //
+  // v0.2.12 asserted a contradiction on exactly that condition, which made two unrelated
+  // statements ("我喜欢吃苹果" / "我喜欢喝乌龙茶") into "两者不能同时成立". The verdict now
+  // comes from a structural judge that is allowed to answer `unknown`, and only a real
+  // contradiction produces a disagreement line.
+  const verdict = judgeRelation({
+    ownerText: ownerPosition.summary,
+    opponentText: opponentPosition.summary,
+  })
   const disagreements: string[] = []
-  if (ownerPosition.evidence.length > 0 && opponentPosition.evidence.length > 0) {
+  if (verdict.isContradiction) {
     disagreements.push(
-      `主人主张「${summarise(ownerPosition.summary, 40)}」，对方主张「${summarise(opponentPosition.summary, 40)}」，两者不能同时成立。`,
+      `主人主张「${summarise(ownerPosition.summary, 40)}」，对方主张「${summarise(opponentPosition.summary, 40)}」；` +
+        `${verdict.reason}`,
     )
   }
 
@@ -367,9 +426,9 @@ export function buildBrief(input: BuildBriefInput): {
     arguments: argumentsList,
     challenges: briefChallenges,
     openQuestions,
-    uncertainties: uncertainties(input),
+    uncertainties: uncertainties(input, verdict),
     directions: directions(input, briefChallenges.length > 0),
-    risks: risks(input),
+    risks: risks(input, verdict),
     bystanders: bystanders(dispute),
   }
 
