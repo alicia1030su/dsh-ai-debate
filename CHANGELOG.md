@@ -2,6 +2,88 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.16] — 2026-10-30
+
+把「可复现」从一句承诺变成一条能被别人重跑的命令。**核心变化：源码 ZIP 补上
+`pnpm-lock.yaml` 与编译后的 `lib/`，因此可以在全新机器上从零装依赖、编译、测试、
+打包出字节一致的 TGZ；GitHub Actions 在 Node 22.18 与 Node 24 上真跑通过，
+过程中暴露的两处 CI 缺陷已修。**
+
+### 一、P0 源码包缺锁文件与编译产物
+
+**缺陷**：v0.2.15 的白名单 `ALLOWED_DIRS` / `ALLOWED_FILES` 都没有收录
+`pnpm-lock.yaml` 和 `lib/`，而工作目录里两者都在。结果是下载源码包的人
+跑不了 `pnpm install --frozen-lockfile`，从 GitHub 安装也找不到入口。
+
+**为什么守卫没抓到**：`ci-guard.mjs` 检查的是「锁文件覆盖了每个依赖」，
+不是「锁文件在包里」。两句话听起来像同一件事，实际上差了整整一层。
+
+**修复**：
+- `scripts/source-zip.mjs` 的 `ALLOWED_FILES` 收录 `pnpm-lock.yaml`。
+- `lib/` **不**作为普通目录整包放行，而是单列 `BUILD_OUTPUT_DIRS`，
+  只允许 `.js` / `.d.ts` / `.js.map` / `.d.ts.map`。整目录放行的意思是
+  「哪天有人往里丢个 `.env`，也会一起发出去」。
+- `scripts/ci-guard.mjs` 新增 §4b：直接读 ZIP 中央目录，不信打包脚本
+  自己报的清单——打包规则和应用规则出自同一份代码时，两个 bug 会互相抵消。
+- 删除 `client/client.cjs.broken`（145 KB，全仓库零引用）。
+
+锁文件不是抄来的：删掉后重新生成，与新文件逐字节相同；`pnpm install
+--frozen-lockfile` 退出码 0。`lib/` 从零重建，232 个产物与 58 个源文件
+一一对应，缺失 0、多余 0。
+
+### 二、「全新目录能复现」必须自己先跑一遍
+
+新增 `scripts/v0216-fresh-build.mjs`：解压源码包到临时目录、删掉交付的
+`lib/`、用**全新 pnpm store**（共享 store 会从本机缓存满足安装，让
+「可复现」变成自我认证）装依赖、编译、类型检查、跑全部测试、打包，
+再与开发机的 TGZ 比 sha256。九个步骤全部通过，产物字节完全一致。
+
+`findPnpm()` 刻意不做第三种猜测：先看 `PNPM_BIN`，再从 PATH 找，
+找不到就报错要求显式指定。
+
+### 三、CI 守卫不能靠 `CI` 环境变量猜归档建好了没有
+
+首轮 Actions 两个 Node 同时挂在
+`CI 完整性：runner 真的执行了磁盘上的全部测试文件`。守卫当时用
+`process.env.CI` 当作「归档应该已经生成」的证据，而 `ci.yml` 里测试步骤
+排在「生成并扫描公开源码包」之前：CI 为真、归档未生成也是真，一个正常
+的执行顺序被判定为失败。
+
+「我在 CI 里吗」回答不了「归档建好了吗」。改为由调用方显式声明：
+守卫接受 `--require-archive`，只有生成归档之后的那一步传它。
+
+### 四、凭据扫描只能有一套规则
+
+第二轮 Actions 又挂在「确认没有把凭据提交进仓库」，命中的是
+`test/v0215-source-zip-security.test.ts` 里的假 Cookie。根因是同一件事
+有两套规则：工作流里两条内联 `grep`，仓库里另有 `scripts/audit-leaks.mjs`。
+审计脚本认得 `fixture-` 前缀（它自己的文档就是这么写的），内联 grep 不认。
+
+工作流改为直接跑 `node scripts/audit-leaks.mjs`，规则只剩一份；给
+`BDUSS` / `BAIDUID` 补上 `(?!fixture-)` 否词，与 `ST` / `sk-` 保持一致。
+
+### 五、真实远端验收
+
+仓库 `alicia1030su/dsh-ai-debate`，分支 `v0.2.16-ci-lockfile-and-lib`，
+PR #1，Run 41107919423：Node 22.18 与 Node 24 两个 Job 均 success，
+各 1062 项测试通过（1 项 skip 是「尚未打包时跳过本仓库扫描」的诚实分支），
+477 条目源码包与 246 条目 TGZ 双扫描零命中，CI 守卫退出码 0。
+
+### 新增测试（9 项，合计 1062 项）
+
+- `test/v0216-archive-guard.test.ts`（5）：无归档且未声明时跳过并通过、
+  声明后无归档必须失败、守卫不得再引用 `process.env.CI` 判断归档、
+  两个工作流都传了 `--require-archive`、生成步骤排在守卫之前。
+- `test/v0216-credential-scan.test.ts`（4）：工作流不得再有内联 Cookie 规则、
+  四条规则都带 `(?!fixture-)`、本仓库对扫描是绿的、真形态 Cookie 必须让
+  扫描失败——否则「放过 fixture」可能退化成「整体失灵」。
+
+### 六、仍未完成（如实记录）
+
+- 微博真实读取：本机无官方 CLI、无 OAuth 授权，未验证。
+- 贴吧真实发表回读：无授权的测试账号与测试帖，未验证。
+- 正式 Release 未创建（需要单独授权）。
+
 ## [0.2.15] — 2026-10-30
 
 发布安全、微博身份语义与 CI 真实性加固。**核心变化：源码 ZIP 从「排除清单」改为白名单，

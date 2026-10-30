@@ -148,17 +148,17 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:<GitHub用户名>/dsh-ai-debate#v0.2.15
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.16
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 Release 下载 `dsh-ai-debate-0.2.15.tgz`：
+使用仓库根目录构建好的 `dsh-ai-debate-0.2.16.tgz`（正式 Release 尚未创建）。
 
 ```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.15.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.16.tgz
 ```
 
 ### 方式三：本地目录安装（开发者）
