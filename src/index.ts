@@ -32,6 +32,9 @@ import {
   cancelInFlight,
   editCandidate,
   inFlightPublishCount,
+  runAnalysis,
+  runGeneration,
+  runPublish,
   stopSession,
   type Runtime,
 } from './runtime.js'
@@ -1511,6 +1514,62 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
      * session is a working cache with a TTL. Reading the session would make "already published"
      * quietly expire back to "not attempted" — which is the state that gets a reply re-sent.
      */
+    /**
+     * Collect and analyse a discussion from the workbench (v0.2.22 §二).
+     *
+     * The agent tool and this route call the same function; the difference is who supplied the
+     * link. Collecting is read-only with respect to the platform and cannot publish, so reaching
+     * it from the page does not add a new way to write.
+     */
+    analyzeThread: async (input) => {
+      try {
+        const output = await runAnalysis(runtimeView, {
+          url: input.url,
+          ...(input.postId === undefined ? {} : { postId: input.postId }),
+          ...(input.ownerInstruction === undefined ? {} : { ownerInstruction: input.ownerInstruction }),
+        })
+        return { ok: true, sessionId: output.sessionId }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    /** Generate candidates for an existing session (v0.2.22 §三). */
+    generateCandidates: async (input) => {
+      try {
+        const output = await runGeneration(runtimeView, {
+          sessionId: input.sessionId,
+          ...(input.style === undefined ? {} : { persona: { style: input.style as never } }),
+          ...(input.ownerInstruction === undefined ? {} : { ownerInstruction: input.ownerInstruction }),
+        })
+        // One call produces one candidate, deliberately: comparing two drafts means generating
+        // twice, and each generation bumps the version — which retires any approval of the
+        // previous draft. Reporting a count of 1 is the honest answer, not a placeholder.
+        return {
+          ok: true,
+          candidates: 1,
+          ...(output.needsInput === true
+            ? { message: output.needsInputReason ?? '模型要求补充信息后才能起草' }
+            : {}),
+        }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    /** Publish one approved candidate through the normal pipeline (v0.2.22 §四). */
+    publishApproved: async (input) => {
+      const report = await runPublish(runtimeView, {
+        sessionId: input.sessionId,
+        candidateId: input.candidateId,
+        approvedText: input.approvedText,
+        humanApproved: true,
+      })
+      return {
+        ok: report.ok,
+        status: report.status,
+        message: report.message,
+        ...(report.postId === undefined ? {} : { postId: report.postId }),
+      }
+    },
     editCandidate: async (input) => editCandidate(runtimeView, input),
     workbench: async ({ sessionId }: { readonly sessionId?: string }) => {
       const session =

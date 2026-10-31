@@ -265,6 +265,46 @@ export interface SettingsRouteDeps {
     readonly text: string
   }): Promise<{ readonly ok: boolean; readonly message?: string; readonly candidateVersion?: number; readonly textHash?: string }>
   /**
+   * Collect and analyse one discussion (v0.2.22 §二).
+   *
+   * The same `runAnalysis` the agent tool uses, reached from the owner's form. It reads the
+   * thread and produces the session + reconstruction; it never publishes, and it cannot choose
+   * the target on the owner's behalf.
+   */
+  analyzeThread?(input: {
+    readonly url: string
+    readonly postId?: string
+    readonly ownerInstruction?: string
+  }): Promise<{ readonly ok: boolean; readonly message?: string; readonly sessionId?: string }>
+  /**
+   * Generate candidates for an existing session (v0.2.22 §三).
+   *
+   * Reuses the generator and the persona; each call bumps the candidate version, which is what
+   * retires any earlier approval.
+   */
+  generateCandidates?(input: {
+    readonly sessionId: string
+    readonly style?: string
+    readonly ownerInstruction?: string
+  }): Promise<{ readonly ok: boolean; readonly message?: string; readonly candidates?: number }>
+  /**
+   * Publish one approved candidate (v0.2.22 §四/§五).
+   *
+   * Deliberately goes through `runPublish` — the only path that can reach a platform — so the
+   * workbench inherits the capability gate, the approval check, the ledger and the read-back
+   * rather than reimplementing any of them.
+   */
+  publishApproved?(input: {
+    readonly sessionId: string
+    readonly candidateId: string
+    readonly approvedText: string
+  }): Promise<{
+    readonly ok: boolean
+    readonly status: string
+    readonly message: string
+    readonly postId?: string
+  }>
+  /**
    * Candidates that are waiting for a human approval, newest first.
    *
    * This is what makes the approval section possible: the page cannot approve something
@@ -1413,6 +1453,52 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
         sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
         candidateId: typeof body.candidateId === 'string' ? body.candidateId : '',
         text: typeof body.text === 'string' ? body.text : '',
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
+    // Collect and analyse a discussion (v0.2.22 §二). The owner pastes a link; everything after
+    // that is the same code the agent tool runs.
+    if (action === 'analyze-thread') {
+      if (deps.analyzeThread === undefined) {
+        writeJson(response, 200, { ok: false, message: '当前构建没有接上讨论收集（analyzeThread 未提供）' })
+        return
+      }
+      const outcome = await deps.analyzeThread({
+        url: typeof body.url === 'string' ? body.url : '',
+        ...(typeof body.postId === 'string' && body.postId !== '' ? { postId: body.postId } : {}),
+        ...(typeof body.ownerInstruction === 'string' ? { ownerInstruction: body.ownerInstruction } : {}),
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
+    // Generate candidates (v0.2.22 §三). Reuses the generator and persona; each call bumps the
+    // candidate version, which is what retires an earlier approval.
+    if (action === 'generate-candidates') {
+      if (deps.generateCandidates === undefined) {
+        writeJson(response, 200, { ok: false, message: '当前构建没有接上候选生成（generateCandidates 未提供）' })
+        return
+      }
+      const outcome = await deps.generateCandidates({
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+        ...(typeof body.style === 'string' && body.style !== '' ? { style: body.style } : {}),
+        ...(typeof body.ownerInstruction === 'string' ? { ownerInstruction: body.ownerInstruction } : {}),
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
+    // Publish one approved candidate (v0.2.22 §四). This route does not approve anything and does
+    // not retry: `runPublish` owns the ledger, the capability gate and the read-back, and it
+    // refuses an approval that no longer matches the bytes.
+    if (action === 'publish-approved') {
+      if (deps.publishApproved === undefined) {
+        writeJson(response, 200, { ok: false, status: 'refused', message: '当前构建没有接上工作台发表' })
+        return
+      }
+      const outcome = await deps.publishApproved({
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+        candidateId: typeof body.candidateId === 'string' ? body.candidateId : '',
+        approvedText: typeof body.approvedText === 'string' ? body.approvedText : '',
       })
       writeJson(response, 200, outcome)
       return

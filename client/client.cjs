@@ -330,6 +330,11 @@ window.__ModuleLoader__.load({
       workbenchRefresh: '刷新状态',
       workbenchRefreshing: '正在读取…',
       workbenchLoadFailed: '读取工作台失败',
+      workbenchLinkLabel: '讨论链接（粘贴后点「读取讨论」）',
+      workbenchAnalyze: '读取讨论',
+      workbenchGenerate: '生成候选',
+      workbenchPublishOnce: '发表这一条（只会发一次）',
+      workbenchWorking: '处理中…',
       // v0.2.21 §三/§四: the one-off publish verification panel.
       verifyTitle: '发表能力验收',
       verifyHint:
@@ -640,6 +645,11 @@ window.__ModuleLoader__.load({
       workbenchRefresh: 'Refresh',
       workbenchRefreshing: 'Reading…',
       workbenchLoadFailed: 'Could not read the workbench',
+      workbenchLinkLabel: 'Discussion link (paste it, then press Read discussion)',
+      workbenchAnalyze: 'Read discussion',
+      workbenchGenerate: 'Generate candidates',
+      workbenchPublishOnce: 'Publish this one (once)',
+      workbenchWorking: 'Working…',
       // v0.2.21 §三/§四: the one-off publish verification panel.
       verifyTitle: 'Publish capability verification',
       verifyHint:
@@ -1194,6 +1204,47 @@ window.__ModuleLoader__.load({
       setNotice(text) {
         this.notice = text
         this.publish()
+      }
+
+      /**
+       * Run one workbench write (v0.2.22 §二/§三/§四).
+       *
+       * One method for the three actions because they share every safety property: each is a
+       * single POST to the existing action route, each is rejected server-side if its gate
+       * refuses, and each re-reads the state afterwards. Splitting them into three near-copies
+       * would be three places for the "re-read after write" step to be forgotten.
+       *
+       * There is no retry here and no retry button anywhere in the panel: an action whose
+       * outcome is unknown must be resolved by a human, not by sending it again.
+       */
+      async runWorkbenchAction(action, payload) {
+        this.workbenchState = { state: 'running', action }
+        this.publish()
+        try {
+          const result = await callJson(ROUTE_ACTION, {
+            method: 'POST',
+            body: JSON.stringify({ action, ...payload }),
+          })
+          this.workbenchState = { state: 'ready' }
+          this.workbenchEdit = { state: 'done', action, result }
+          this.publish()
+          await this.loadWorkbench(
+            payload && typeof payload.sessionId === 'string' ? payload.sessionId : undefined,
+          )
+          return result
+        } catch (error) {
+          this.workbenchState = {
+            state: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+          }
+          this.workbenchEdit = {
+            state: 'failed',
+            action,
+            reason: error instanceof Error ? error.message : String(error),
+          }
+          this.publish()
+          return undefined
+        }
       }
 
       /**
@@ -2928,6 +2979,9 @@ window.__ModuleLoader__.load({
       const view = state.workbench
       const edit = state.workbenchEdit
       const [draft, setDraft] = useState(null)
+      // The link field starts empty and is never prefilled from the session: pasting a link is
+      // the owner's step, and a remembered one would read as "this is the thread you meant".
+      const [draftUrl, setDraftUrl] = useState('')
       const busy = edit && edit.state === 'running'
 
       const title = h(
@@ -3062,6 +3116,81 @@ window.__ModuleLoader__.load({
           )
         : null
 
+      // ---- the three write actions, each behind its own gate --------------
+      //
+      // "Collect" and "generate" spend work but change nothing on the platform. "Publish" is
+      // irreversible, so it is only offered when the derived state says an approval still binds
+      // the bytes *and* the capability gate would pass — and even then the server re-checks.
+      const linkForm = h(
+        'div',
+        { className: 'dsd-sect' },
+        h('p', { className: 'dsd-hint' }, t('workbenchLinkLabel')),
+        h('input', {
+          type: 'text',
+          className: 'dsd-field',
+          value: draftUrl,
+          disabled: busy,
+          onChange: (event) => setDraftUrl(event.target.value),
+        }),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsd-btn',
+            disabled: busy || draftUrl.trim() === '',
+            onClick: () => store.runWorkbenchAction('analyze-thread', { url: draftUrl.trim() }),
+          },
+          busy ? t('workbenchWorking') : t('workbenchAnalyze'),
+        ),
+      )
+
+      const step = wb.step
+      // Generated locally rather than reusing the `newest` declared further down: these
+      // controls are built before that binding exists, and reading it here threw the whole
+      // section during render (a temporal-dead-zone error, not a visible message).
+      const newestForAction =
+        Array.isArray(view.candidates) && view.candidates.length > 0
+          ? view.candidates[view.candidates.length - 1]
+          : undefined
+      // Offering generation whenever a session exists is deliberate: comparing two drafts means
+      // generating twice, and the second generation retires the first approval — documented,
+      // safe behaviour, not a reason to hide the button.
+      const canGenerate = view.sessionId !== undefined
+      const generateButton = canGenerate
+        ? h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsd-btn',
+              disabled: busy,
+              onClick: () => store.runWorkbenchAction('generate-candidates', { sessionId: view.sessionId }),
+            },
+            busy ? t('workbenchWorking') : t('workbenchGenerate'),
+          )
+        : null
+
+      // The publish button is the only irreversible control in this panel. It is offered only
+      // when every precondition the server would check is already visible as satisfied here, and
+      // it carries the *exact* text on screen — so what gets approved is what gets sent.
+      const publishButton =
+        step === 'publish' && newestForAction !== undefined
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsd-btn dsd-btn-primary',
+                disabled: busy,
+                onClick: () =>
+                  store.runWorkbenchAction('publish-approved', {
+                    sessionId: view.sessionId,
+                    candidateId: newestForAction.replyId,
+                    approvedText: newestForAction.text,
+                  }),
+              },
+              busy ? t('workbenchWorking') : t('workbenchPublishOnce'),
+            )
+          : null
+
       const candidates = Array.isArray(view.candidates) ? view.candidates : []
       const newest = candidates.length === 0 ? undefined : candidates[candidates.length - 1]
 
@@ -3117,11 +3246,14 @@ window.__ModuleLoader__.load({
         { className: 'dsd-sect' },
         title,
         h('p', { className: 'dsd-hint' }, t('workbenchHint')),
+        linkForm,
         facts,
         blockers,
         gaps,
         readback,
         candidateBlock,
+        generateButton,
+        publishButton,
         // Stated on the page, not only in the source: the absence of a resend button is a
         // product decision the owner should be able to see the reason for.
         h('p', { className: 'dsd-hint' }, t('workbenchNoResend')),

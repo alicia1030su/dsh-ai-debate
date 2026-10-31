@@ -311,3 +311,62 @@ test('工作台是独立标签页，排在验收之后', () => {
   assert.match(SOURCE, /tabWorkbench: '工作台'/)
   assert.match(SOURCE, /tabWorkbench: 'Workbench'/)
 })
+
+// ---------------------------------------------------------------------------
+// v0.2.22 §一/§四: the three write actions, and the one that must stay gated
+// ---------------------------------------------------------------------------
+
+test('链接、读取讨论、生成候选三个控件都在页面上', async () => {
+  const { text, buttons, unmount } = await render({ state: 'ready' }, view())
+  try {
+    assert.equal(text.includes('workbenchLinkLabel'), true, '没有粘贴链接的地方，第一步就走不了')
+    assert.match(buttons.join(' '), /workbenchAnalyze/)
+    assert.match(buttons.join(' '), /workbenchGenerate/)
+  } finally {
+    unmount()
+  }
+})
+
+test('发表按钮只在「批准仍绑定当前正文」这一步出现', async () => {
+  // approve step: publishing must NOT be offered — the whole point of the gate.
+  const approveStep = await render({ state: 'ready' }, view({ step: 'approve' }))
+  try {
+    assert.doesNotMatch(
+      approveStep.buttons.join(' '),
+      /workbenchPublishOnce/,
+      '还没批准就出现发表按钮，等于让页面替主人跳过批准',
+    )
+  } finally {
+    approveStep.unmount()
+  }
+
+  const publishStep = await render({ state: 'ready' }, view({ step: 'publish' }))
+  try {
+    assert.match(publishStep.buttons.join(' '), /workbenchPublishOnce/)
+    assert.match(publishStep.buttons.join(' '), /只会发一次|workbenchPublishOnce/)
+  } finally {
+    publishStep.unmount()
+  }
+})
+
+test('结果未知时不再提供发表按钮', async () => {
+  const { buttons, unmount } = await render({ state: 'ready' }, view({ step: 'readback', outcome: 'unknown' }))
+  try {
+    assert.doesNotMatch(
+      buttons.join(' '),
+      /workbenchPublishOnce/,
+      '结果未知还能再点一次发表，就是页面在制造重复回复',
+    )
+  } finally {
+    unmount()
+  }
+})
+
+test('发表动作走既有 action 路由，不由工作台直调平台', () => {
+  // The panel must reach the platform only through the action route; a direct fetch to a
+  // platform host inside client.cjs would be a second, ungated publish path.
+  assert.doesNotMatch(SOURCE, /tieba\.baidu\.com\/(mo|f)\/.*fetch/s, '工作台不得自己发请求给平台')
+  assert.match(SOURCE, /runWorkbenchAction\('publish-approved'/)
+  assert.match(SOURCE, /runWorkbenchAction\('analyze-thread'/)
+  assert.match(SOURCE, /runWorkbenchAction\('generate-candidates'/)
+})

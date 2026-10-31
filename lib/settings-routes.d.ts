@@ -213,6 +213,54 @@ export interface SettingsRouteDeps {
         readonly textHash?: string;
     }>;
     /**
+     * Collect and analyse one discussion (v0.2.22 §二).
+     *
+     * The same `runAnalysis` the agent tool uses, reached from the owner's form. It reads the
+     * thread and produces the session + reconstruction; it never publishes, and it cannot choose
+     * the target on the owner's behalf.
+     */
+    analyzeThread?(input: {
+        readonly url: string;
+        readonly postId?: string;
+        readonly ownerInstruction?: string;
+    }): Promise<{
+        readonly ok: boolean;
+        readonly message?: string;
+        readonly sessionId?: string;
+    }>;
+    /**
+     * Generate candidates for an existing session (v0.2.22 §三).
+     *
+     * Reuses the generator and the persona; each call bumps the candidate version, which is what
+     * retires any earlier approval.
+     */
+    generateCandidates?(input: {
+        readonly sessionId: string;
+        readonly style?: string;
+        readonly ownerInstruction?: string;
+    }): Promise<{
+        readonly ok: boolean;
+        readonly message?: string;
+        readonly candidates?: number;
+    }>;
+    /**
+     * Publish one approved candidate (v0.2.22 §四/§五).
+     *
+     * Deliberately goes through `runPublish` — the only path that can reach a platform — so the
+     * workbench inherits the capability gate, the approval check, the ledger and the read-back
+     * rather than reimplementing any of them.
+     */
+    publishApproved?(input: {
+        readonly sessionId: string;
+        readonly candidateId: string;
+        readonly approvedText: string;
+    }): Promise<{
+        readonly ok: boolean;
+        readonly status: string;
+        readonly message: string;
+        readonly postId?: string;
+    }>;
+    /**
      * Candidates that are waiting for a human approval, newest first.
      *
      * This is what makes the approval section possible: the page cannot approve something
