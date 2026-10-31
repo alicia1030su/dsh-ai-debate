@@ -446,6 +446,30 @@ function shellSteps(text) {
   return steps.filter((step) => step.lines.length > 0)
 }
 
+/**
+ * Collect the steps that call `actions/upload-artifact`, with their raw text.
+ *
+ * These steps have no shell to inspect — their failure modes live in the `with:`
+ * block, which is why section 9's shell analysis can never see them.
+ */
+function uploadSteps(text) {
+  const steps = []
+  let current = null
+  for (const raw of text.split(/\r?\n/)) {
+    const named = /^\s*- name:\s*(.+)$/.exec(raw)
+    if (named !== null) {
+      current = { name: named[1].trim(), text: '' }
+      steps.push(current)
+      continue
+    }
+    if (current === null) continue
+    const line = raw.trim()
+    if (line.startsWith('#')) continue
+    current.text += `${raw}\n`
+  }
+  return steps.filter((step) => step.text.includes('upload-artifact'))
+}
+
 for (const name of ['ci.yml', 'release.yml']) {
   const file = join(root, '.github', 'workflows', name)
   if (!existsSync(file)) continue
@@ -482,6 +506,27 @@ for (const name of ['ci.yml', 'release.yml']) {
     const hasPipefail = /pipefail/.test(step.lines.join('\n'))
     if (!hasPipefail) {
       fail(`${name} 的步骤「${step.name}」里有管道但没有 \`pipefail\`，左侧命令失败会被右侧吞掉：${piped[0]}`)
+    }
+  }
+
+  // --- 10. An upload that finds nothing must fail, not warn ------------------
+  //
+  // v0.2.18 shipped with a step named 「上传交付状态报告」 that uploaded nothing.
+  // The log carried exactly one line — `##[warning]No files were found with the
+  // provided path: .ship/delivery-status-*.json. No artifacts will be uploaded.`
+  // — and the step, and the whole run, were green. Two separate defaults made
+  // that possible: upload-artifact@v4.4 skips hidden files, and it only warns
+  // when the glob matches nothing.
+  //
+  // Same family as section 9: a step that did nothing reported success.
+  for (const step of uploadSteps(text)) {
+    if (!/if-no-files-found:\s*error/.test(step.text)) {
+      fail(`${name} 的上传步骤「${step.name}」没有写 \`if-no-files-found: error\`，找不到文件时只警告，步骤照样绿`)
+    }
+    const paths = [...step.text.matchAll(/^\s*path:\s*(.+)$/gm)].map((match) => match[1].trim())
+    const hidden = paths.some((path) => path.split(/[/\\]/).some((part) => /^\.[A-Za-z_]/.test(part)))
+    if (hidden && !/include-hidden-files:\s*true/.test(step.text)) {
+      fail(`${name} 的上传步骤「${step.name}」的路径含隐藏目录，但没写 \`include-hidden-files: true\`，upload-artifact@v4.4 起会直接跳过这些文件`)
     }
   }
 }
