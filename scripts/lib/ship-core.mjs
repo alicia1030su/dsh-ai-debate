@@ -119,6 +119,204 @@ export const SENSITIVE_RULES = [
 ]
 
 /**
+ * Lines that only look like code.
+ *
+ * A comment can mention `approve` or `cookie` all day without changing what runs. If the
+ * marker rules below did not skip them, then documenting a decision would trip the gate
+ * meant to protect it — and a gate that fires on prose gets switched off within a week.
+ */
+const COMMENT_ONLY_LINE = /^\s*(\/\/|\/\*|\*|\*\/|#)/
+
+/**
+ * ## 大文件里的敏感区域（v0.2.21）
+ *
+ * `src/publisher.ts`、`src/runtime.ts`、`src/settings-routes.ts` 与平台的 `adapter.ts` 都不是
+ * 单一用途的文件：它们同时装着编排、展示、路由注册和读路径。把整份文件标成敏感，等于每次
+ * 改一行注释、加一个只读诊断字段都要人守着 —— 那种守卫最后一定会被绕过，因为它挡的是工作
+ * 而不是风险。
+ *
+ * 所以这里的粒度是**行**：只有当改动落到「发表、批准、能力、凭据、身份、回读」这些语义上
+ * 的行，才停下来要授权。判据是改动行里的标识符，外加一条：纯注释行不算。
+ *
+ * 这不是完美的语义分析 —— 它抓不到「把敏感逻辑挪进另一个文件」。但配合下面按路径整份拦的
+ * `src/safety.ts`、`src/verification.ts`，以及 `src/security/**`，剩下的绕道要么在别处也会
+ * 被抓到，要么需要人真的读懂代码才写得出来，而那已经不属于「悄悄自动合并」的范畴。
+ */
+export const SENSITIVE_LINE_MARKERS = [
+  {
+    id: 'composition-root-publish',
+    // v0.2.21 P1：`src/index.ts` 是装配根，真正的发表闸门就接在这里。
+    //
+    // 行级而不是整份：这个文件绝大多数内容是工具注册与配置装配，每次加一个工具都要人守着，
+    // 守卫就会被绕过。但 `assertCapability` 的实现、验收证据的接入、`configuredAccountOf` /
+    // `liveAccountOf` 都在这里 —— 改掉它们等于换掉「谁在发、能不能发」的判定。
+    test: (path) => path === 'src/index.ts',
+    markers: [
+      /assertCapability/,
+      /effectiveCapability/,
+      /adapterVersionOf/,
+      /configuredAccountOf/,
+      /liveAccountOf/,
+      /claimVerificationRecord/,
+      /putVerificationRecord/,
+      /verificationViewOf|buildVerificationService/,
+      /approv/i,
+      /publish/i,
+      /capabilit/i,
+      /credential/i,
+      /cookie/i,
+      /platformAccounts|aiAccountUserId/,
+    ],
+    reason: '改动了装配根里的发表闸门、账号绑定或验收证据接入',
+  },
+  {
+    id: 'store-atomic-claim',
+    // v0.2.21 P1：`src/store.ts` 是状态持久化与跨进程锁。
+    //
+    // 行级而不是整份：这里绝大多数是会话、去重、用量这些与安全无关的结构。风险集中在
+    // 「谁能原子地抢占一份授权」和「什么记录会被保留或丢弃」两处 —— 那些名字一旦出现在
+    // 改动行里，就该有人看一眼。
+    test: (path) => path === 'src/store.ts',
+    markers: [
+      /claimVerificationRecord|putVerificationRecord|getVerificationRecords/,
+      /\btransact\b/,
+      /acquireLock|lockTimeout|LockHandle/,
+      /PRESERVED_FIELDS/,
+      /function prune|prune\(/,
+      /validateStore/,
+      /approval/i,
+      /dedupe/i,
+      /ownerKey/i,
+    ],
+    reason: '改动了状态持久化、跨进程锁或授权抢占的原子性',
+  },
+  {
+    id: 'publish-orchestration',
+    test: (path) => path === 'src/publisher.ts',
+    markers: [
+      /publish/i,
+      /approv/i,
+      /authoriz/i,
+      /capabilit/i,
+      /credential/i,
+      /humanApproved/,
+      /checkPublishPolicy/,
+      /assertCapability/,
+      /dedupe/i,
+      /inFlight/,
+      /targetSnapshot/,
+      /hasStableAuthor/,
+      /sendOnce/,
+      /readBack|readback|回读/,
+    ],
+    reason: '改动了发表编排（发表、人工批准、能力校验、凭据或回读）',
+  },
+  {
+    id: 'runtime-publish-auth',
+    test: (path) => path === 'src/runtime.ts',
+    markers: [
+      /publish/i,
+      /approv/i,
+      /authoriz/i,
+      /capabilit/i,
+      /credential/i,
+      /cookie/i,
+      /verif/i,
+      /assertCapability/,
+      /assertSessionCanGenerate/,
+      /ownerKey/,
+    ],
+    reason: '改动了运行时里的真实发表或授权逻辑',
+  },
+  {
+    id: 'settings-auth-credentials',
+    test: (path) => path === 'src/settings-routes.ts',
+    markers: [
+      /cookie/i,
+      /credential/i,
+      /secret/i,
+      /token/i,
+      /apiKey|api_key/i,
+      /passwor/i,
+      /approv/i,
+      /publish/i,
+      /verif/i,
+      /authoriz/i,
+      /ownerKey|ownerUserId/i,
+      /session/i,
+    ],
+    reason: '改动了设置页里的授权或凭据操作',
+  },
+  {
+    id: 'platform-adapter-write',
+    // 平台的 adapter 同时负责读与写。写路径（发帖、回复、发表）必须有人看过；读数不行。
+    test: (path) => /^src\/platforms\/[^/]+\/adapter\.ts$/i.test(path),
+    markers: [
+      /\bpublish/i,
+      /\breply\b|\breplies\b/i,
+      /\bcomment/i,
+      /\bpost\b|\bposts\b/i,
+      /\bsend\b/i,
+      /\bsubmit\b/i,
+      /captcha|challenge/i,
+    ],
+    reason: '改动了真实平台适配器的写入路径',
+  },
+  {
+    id: 'tool-publish-approval',
+    test: (path) => path === 'src/tools.ts',
+    markers: [
+      /\bpublish/i,
+      /\bapprov/i,
+      /\bconfirm\b/i,
+      /debate_publish_reply/,
+    ],
+    reason: '改动了发表工具的批准参数',
+  },
+]
+
+/**
+ * Files that are entirely about one sensitive thing, so the whole file is the unit.
+ *
+ * `src/safety.ts` is the publish policy itself and `src/verification.ts` is the one-off
+ * publish-verification flow. Neither has a "read-only corner": every function in them is a
+ * decision about whether something may be sent. Splitting them by line would be pretending
+ * to a precision that does not exist.
+ */
+export const SENSITIVE_WHOLE_FILES = [
+  {
+    id: 'publish-policy',
+    path: 'src/safety.ts',
+    reason: '改动了发表策略本身（互动模式、人工确认、暂停条件）',
+  },
+  {
+    id: 'publish-verification',
+    path: 'src/verification.ts',
+    reason: '改动了一次性发表验收流程（授权、一次性、回读判定）',
+  },
+  {
+    id: 'publish-verification-runner',
+    path: 'src/verification-runner.ts',
+    reason: '改动了发表验收的执行链路（真实调用、持久化、回读）',
+  },
+  {
+    id: 'capability-evidence',
+    path: 'src/capability-evidence.ts',
+    reason: '改动了能力证据判定（决定什么算「已验证」）',
+  },
+  {
+    id: 'publish-verification-service',
+    path: 'src/verification-service.ts',
+    reason: '改动了发表验收的装配（哪个账号、哪个适配器版本、哪些记录算数）',
+  },
+  {
+    id: 'publish-verification-view',
+    path: 'src/verification-view.ts',
+    reason: '改动了验收页面的读数口径（哪些能力算已验证、报告字段怎么拼）',
+  },
+]
+
+/**
  * `package.json` 只有在动到这些字段时才算敏感。
  *
  * 整个文件标成敏感会让每一次版本号变更都停下来问人，那等于没有自动交付。真正危险的只有：
@@ -136,6 +334,16 @@ export const SENSITIVE_PACKAGE_FIELDS = [
 /**
  * 判断一批变更是否需要人来点。
  *
+ * 三类判据，从粗到细：
+ *
+ * 1. `SENSITIVE_RULES` —— 整类路径（工作流、扫描规则、打包规则、`src/security/**`、平台发表文件）
+ * 2. `SENSITIVE_WHOLE_FILES` —— 整份文件只谈一件事的（发表策略、验收流程）
+ * 3. `SENSITIVE_LINE_MARKERS` —— 大文件里落到敏感语义的行（发表、批准、能力、凭据、回读）
+ *
+ * 第 3 类的「行」是 `addedLines` / `removedLines`，调用方从 `git diff` 取。只读的时候
+ * 拿不到改动行，这时第 3 类不会命中 —— 调用方必须**先**确认自己确实拿到了 diff，
+ * 拿不到就直接失败，否则「没看见改动」会被读成「没有敏感改动」。
+ *
  * @param {Array<{path: string, addedLines?: string[], removedLines?: string[]}>} changes
  * @returns {{sensitive: boolean, reasons: Array<{id: string, path: string, reason: string}>}}
  */
@@ -143,16 +351,32 @@ export function classifySensitive(changes) {
   const reasons = []
   const seen = new Set()
 
+  const push = (id, path, reason) => {
+    const key = `${id}:${path}`
+    if (seen.has(key)) return
+    seen.add(key)
+    reasons.push({ id, path, reason })
+  }
+
   for (const change of changes ?? []) {
     const path = String(change?.path ?? '').split('\\').join('/')
     if (path === '') continue
 
     for (const rule of SENSITIVE_RULES) {
+      if (rule.test(path)) push(rule.id, path, rule.reason)
+    }
+
+    for (const rule of SENSITIVE_WHOLE_FILES) {
+      if (path === rule.path) push(rule.id, path, rule.reason)
+    }
+
+    for (const rule of SENSITIVE_LINE_MARKERS) {
       if (!rule.test(path)) continue
-      const key = `${rule.id}:${path}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      reasons.push({ id: rule.id, path, reason: rule.reason })
+      const touched = [...(change.addedLines ?? []), ...(change.removedLines ?? [])]
+      // 纯注释行不算：文档里提到 `approve` 不等于改了批准逻辑。
+      const code = touched.filter((line) => line.trim() !== '' && !COMMENT_ONLY_LINE.test(line))
+      const hit = rule.markers.find((marker) => code.some((line) => marker.test(line)))
+      if (hit !== undefined) push(rule.id, path, rule.reason)
     }
 
     if (path === 'package.json') {

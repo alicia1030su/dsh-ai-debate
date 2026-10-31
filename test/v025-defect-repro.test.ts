@@ -191,13 +191,25 @@ async function attempt(options: {
 // Defect 1
 // ---------------------------------------------------------------------------
 
-test('复现 1a（对照）：allow 候选在 limited_auto 无批准时可以发表', async () => {
-  // The control. Without it, "review was refused" would also hold on a machine
-  // where nothing publishes — which is exactly how the first version of this file
-  // reported a false pass.
+test('复现 1a（v0.2.21 起反转）：allow 候选在 limited_auto 无批准时也不能发表', async () => {
+  // 这条原来是**对照组**：`allow` + `limited_auto` + 无批准 → 发表成功，用来证明
+  // 「review 被拒绝」不是因为这台机器上根本发不出去。
+  //
+  // v0.2.21 §二 把关系改了：受限模式不再有自动额度，任何真实发表都要有该候选的人工批准记录。
+  // 所以对照组不再需要——它现在与「review 被拒绝」一起被同一个理由挡住。为了不让这条测试
+  // 变成空断言（两边都因为别的原因红），它同时断言拒绝码**必须是缺批准**，而不是别的。
   const report = await attempt({ decision: 'allow', mode: 'limited_auto', humanApproved: false })
-  assert.equal(report.ok, true, `对照组应当能发表，实际：${report.errorCode ?? '-'} ${report.message}`)
-  assert.equal(report.published, 1)
+  assert.equal(
+    report.ok,
+    false,
+    `受限模式在无人工批准时发表了（这是 v0.2.20 的行为，v0.2.21 起不允许）：published=${report.published}`,
+  )
+  assert.equal(report.published, 0, '无批准的候选不得产生任何平台写操作')
+  assert.match(
+    String(report.errorCode ?? ''),
+    /approval/,
+    `拒绝理由必须指向缺少人工批准，实际：${report.errorCode ?? '-'} ${report.message}`,
+  )
 })
 
 test('复现 1：review 候选在 limited_auto 无批准时仍能发表', async () => {

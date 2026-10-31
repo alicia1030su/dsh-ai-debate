@@ -91,9 +91,18 @@ export interface PlatformRuntime {
     /**
      * Check a capability before a write, throwing when it is not proven.
      *
-     * Present here so the publish path has one mandatory gate rather than relying
-     * on each caller to remember. `supported` is required; `unverified`,
-     * `degraded`, `permission_required` and `unavailable` all refuse.
+     * ## Evidence may satisfy the declaration, but only from inside this gate (v0.2.21 P0-3)
+     *
+     * The declaration is the static ceiling and nothing at runtime edits it. What a *record* can
+     * do is satisfy it: a one-off verification that actually published and read the reply back,
+     * naming the same platform, capability, account and adapter build, is proof that the ceiling
+     * was reached for this deployment. Before P0-3 the verification panel computed that
+     * `effective` state and the publish path ignored it — so the panel could say "verified" while
+     * every real publish was still refused, or (worse, in the other arrangement) the panel's
+     * opinion and the gate's could disagree.
+     *
+     * The evidence is read through the same `capability-evidence.ts` rules the panel and the
+     * diagnostic report use, so all three answer the same question the same way.
      */
     assertCapability(platform: string, capability: import('./platforms/contracts.js').CapabilityName): void;
 }
