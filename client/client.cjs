@@ -333,6 +333,7 @@ window.__ModuleLoader__.load({
       workbenchLinkLabel: '讨论链接（粘贴后点「读取讨论」）',
       workbenchAnalyze: '读取讨论',
       workbenchGenerate: '生成候选',
+      workbenchApprove: '批准这一条',
       workbenchPublishOnce: '发表这一条（只会发一次）',
       workbenchWorking: '处理中…',
       // v0.2.21 §三/§四: the one-off publish verification panel.
@@ -648,6 +649,7 @@ window.__ModuleLoader__.load({
       workbenchLinkLabel: 'Discussion link (paste it, then press Read discussion)',
       workbenchAnalyze: 'Read discussion',
       workbenchGenerate: 'Generate candidates',
+      workbenchApprove: 'Approve this one',
       workbenchPublishOnce: 'Publish this one (once)',
       workbenchWorking: 'Working…',
       // v0.2.21 §三/§四: the one-off publish verification panel.
@@ -1204,6 +1206,43 @@ window.__ModuleLoader__.load({
       setNotice(text) {
         this.notice = text
         this.publish()
+      }
+
+      /**
+       * Approve the candidate the workbench is showing (v0.2.22 §四).
+       *
+       * Uses the **Host-provided** expectation, echoed back unmodified. The page never computes
+       * it: if it did, "approve what I am looking at" would become "approve what I remember",
+       * which is the hole v0.2.7 closed. A missing expectation is refused instead of being
+       * reconstructed from whatever is in the view now.
+       */
+      async approveWorkbenchCandidate(sessionId, candidateId, expected) {
+        if (!expected) {
+          this.workbenchEdit = {
+            state: 'failed',
+            reason: '缺少批准快照：请在「发表授权」页批准，或重新生成候选后再试。',
+          }
+          this.publish()
+          return undefined
+        }
+        this.workbenchEdit = { state: 'running' }
+        this.publish()
+        try {
+          const result = await callJson(ROUTE_APPROVE, {
+            method: 'POST',
+            body: JSON.stringify({ sessionId, candidateId, expected }),
+          })
+          this.workbenchEdit = { state: 'done', action: 'approve', result }
+        } catch (error) {
+          this.workbenchEdit = {
+            state: 'failed',
+            action: 'approve',
+            reason: error instanceof Error ? error.message : String(error),
+          }
+        }
+        this.publish()
+        await this.loadWorkbench(sessionId)
+        return this.workbenchEdit
       }
 
       /**
@@ -3191,6 +3230,36 @@ window.__ModuleLoader__.load({
             )
           : null
 
+      // The approve button is offered only when the Host supplied a complete expectation.
+      // Without one the record would describe a snapshot this page invented, and the publish
+      // path would later refuse it — worse, a page could "approve" a candidate the owner never
+      // saw the current version of.
+      const approveButton =
+        step === 'approve' && view.approveExpectation && newestForAction !== undefined
+          ? h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsd-btn',
+                disabled: busy,
+                onClick: () =>
+                  store.approveWorkbenchCandidate(
+                    view.sessionId,
+                    newestForAction.replyId,
+                    view.approveExpectation,
+                  ),
+              },
+              busy ? t('workbenchWorking') : t('workbenchApprove'),
+            )
+          : null
+
+      // Why the button is missing, when it is. Silence here would read as "approval is not a
+      // step", and the owner would look for the missing lever.
+      const approveBlockedLine =
+        step === 'approve' && !view.approveExpectation && view.approveBlocked
+          ? h('p', { className: 'dsd-hint dsd-hint-error' }, view.approveBlocked)
+          : null
+
       const candidates = Array.isArray(view.candidates) ? view.candidates : []
       const newest = candidates.length === 0 ? undefined : candidates[candidates.length - 1]
 
@@ -3252,6 +3321,8 @@ window.__ModuleLoader__.load({
         gaps,
         readback,
         candidateBlock,
+        approveBlockedLine,
+        approveButton,
         generateButton,
         publishButton,
         // Stated on the page, not only in the source: the absence of a resend button is a

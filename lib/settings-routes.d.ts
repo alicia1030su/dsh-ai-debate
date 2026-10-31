@@ -583,7 +583,26 @@ export interface WorkbenchView {
         readonly targetPostId: string;
         readonly createdAt: string;
         readonly violations: readonly string[];
+        /**
+         * The security assessment fingerprint, when one was recorded.
+         *
+         * Present so the workbench can submit an approval whose `expected` snapshot matches what it
+         * displayed. The approve route refuses a request without a complete snapshot — a page that
+         * "approves whatever is stored now" is exactly the v0.2.7 hole — so this is not an optional
+         * convenience, it is what makes approving from the workbench possible at all.
+         */
+        readonly assessmentFingerprint?: string;
     }[];
+    /**
+     * The full expectation the approve route requires, built from the facts above.
+     *
+     * `null` when it cannot be built (no bound publishing account, no assessment, no snapshot) —
+     * and then the workbench must *not* offer an approve button, because the record it would create
+     * could never authorise the publish it claims to.
+     */
+    readonly approveExpectation?: Record<string, unknown> | null;
+    /** Why the expectation is unavailable, when it is. */
+    readonly approveBlocked?: string;
     /** Why the page cannot render a workbench at all, when it cannot. */
     readonly blockers: readonly string[];
 }

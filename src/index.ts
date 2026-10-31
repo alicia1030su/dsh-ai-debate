@@ -1641,6 +1641,39 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
         ...(lastAttempt === undefined ? {} : { lastAttempt }),
       })
 
+      // The approval snapshot the page must echo back (v0.2.22 §四).
+      //
+      // The approve route refuses a request whose `expected` is missing or stale, on purpose:
+      // "approve whatever happens to be stored now" is the v0.2.7 hole. Building the snapshot
+      // here — from the same store read that produced the view — is what lets the workbench
+      // approve at all, and when any half of it is missing the page must not offer the button.
+      const publishingAccount = (() => {
+        const bound = aiAccountFor(bindingsOf(effectiveConfig()), platform)?.account
+        return (bound?.accountId ?? bound?.displayName ?? '').trim()
+      })()
+      const assessmentFingerprint = candidate?.security?.fingerprint ?? ''
+      const approveBlocked =
+        candidate === undefined
+          ? '还没有候选'
+          : publishingAccount === ''
+            ? '还没有为这个平台绑定 AI 发帖账号，无法创建批准：发布时无法确认用哪个账号发言。'
+            : assessmentFingerprint === ''
+              ? '这条候选没有安全评估快照，无法创建批准。请重新生成一次候选。'
+              : undefined
+      const approveExpectation =
+        approveBlocked !== undefined || candidate === undefined
+          ? null
+          : {
+              sessionId: session.id,
+              candidateId: candidate.replyId,
+              candidateVersion: candidate.candidateVersion ?? 0,
+              platform,
+              targetPostId: candidate.targetPostId,
+              publishingAccount,
+              textHash: candidate.textHash,
+              assessmentFingerprint,
+            }
+
       return {
         ok: true,
         sessionId: session.id,
@@ -1648,6 +1681,8 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
         threadUrl: session.threadUrl,
         threadTitle: session.threadTitle,
         workbench: derived,
+        approveExpectation,
+        ...(approveBlocked === undefined ? {} : { approveBlocked }),
         candidates: session.candidates.map((entry) => ({
           replyId: entry.replyId,
           text: entry.text,
@@ -1658,6 +1693,9 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           targetPostId: entry.targetPostId,
           createdAt: entry.createdAt,
           violations: entry.violations,
+          ...(entry.security === undefined
+            ? {}
+            : { assessmentFingerprint: entry.security.fingerprint }),
         })),
         blockers: [...derived.blockers, ...(freshness.applies ? [] : [freshness.reason])],
       }

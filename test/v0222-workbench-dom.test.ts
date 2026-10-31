@@ -370,3 +370,61 @@ test('发表动作走既有 action 路由，不由工作台直调平台', () => 
   assert.match(SOURCE, /runWorkbenchAction\('analyze-thread'/)
   assert.match(SOURCE, /runWorkbenchAction\('generate-candidates'/)
 })
+
+// ---------------------------------------------------------------------------
+// v0.2.22 §四: approving from the workbench, and never without a snapshot
+// ---------------------------------------------------------------------------
+
+test('有完整快照时才出现批准按钮，批准走既有 approve 路由', async () => {
+  const withSnapshot = await render({ state: 'ready' }, {
+    ...view({ step: 'approve' }),
+    approveExpectation: {
+      sessionId: 's1',
+      candidateId: 'c1',
+      candidateVersion: 1,
+      platform: 'tieba',
+      targetPostId: 'p-2',
+      publishingAccount: 'ai-42',
+      textHash: 'h1',
+      assessmentFingerprint: 'fp-1',
+    },
+  })
+  try {
+    assert.match(withSnapshot.buttons.join(' '), /workbenchApprove/)
+  } finally {
+    withSnapshot.unmount()
+  }
+  // And it goes through the approve route, not through a new endpoint.
+  assert.match(SOURCE, /callJson\(ROUTE_APPROVE/)
+  assert.match(SOURCE, /approveWorkbenchCandidate/)
+})
+
+test('没有快照时不给批准按钮，并说明缺什么', async () => {
+  const blocked = await render({ state: 'ready' }, {
+    ...view({ step: 'approve' }),
+    approveExpectation: null,
+    approveBlocked: '还没有为这个平台绑定 AI 发帖账号',
+  })
+  try {
+    assert.doesNotMatch(
+      blocked.buttons.join(' '),
+      /workbenchApprove/,
+      '没有快照还给批准按钮，就是让页面造一个它没看到过的版本',
+    )
+    assert.match(blocked.text, /还没有为这个平台绑定 AI 发帖账号/, '缺什么要说清楚')
+  } finally {
+    blocked.unmount()
+  }
+})
+
+test('批准按钮不会出现在非批准步骤', async () => {
+  const publishStep = await render({ state: 'ready' }, {
+    ...view({ step: 'publish' }),
+    approveExpectation: { sessionId: 's1', candidateId: 'c1' },
+  })
+  try {
+    assert.doesNotMatch(publishStep.buttons.join(' '), /workbenchApprove/)
+  } finally {
+    publishStep.unmount()
+  }
+})
