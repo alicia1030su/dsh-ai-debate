@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Credential-leak scan.
  *
  * Fixtures are named `fixture-…` so this scan can tell them from a real secret:
@@ -13,9 +13,9 @@ const root = join(import.meta.dirname, '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 
 const PATTERNS = [
-  { re: /BDUSS=[A-Za-z0-9]{10,}/, label: 'BDUSS cookie' },
+  { re: /BDUSS=(?!fixture-)[A-Za-z0-9]{10,}/, label: 'BDUSS cookie' },
   { re: /\bST=(?!fixture-)[A-Za-z0-9]{8,}/, label: 'ST cookie' },
-  { re: /BAIDUID=[A-Za-z0-9]{10,}/, label: 'BAIDUID cookie' },
+  { re: /BAIDUID=(?!fixture-)[A-Za-z0-9]{10,}/, label: 'BAIDUID cookie' },
   { re: /\bsk-(?!fixture-)[A-Za-z0-9]{20,}/, label: 'API key (sk-)' },
   { re: /as_sk_[A-Za-z0-9]{10,}/, label: 'API key (as_sk_)' },
 ]

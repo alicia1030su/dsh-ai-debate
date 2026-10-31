@@ -165,6 +165,137 @@ if (!existsSync(pkgPath)) {
   }
 }
 
+// --- 4b. The source archive must be buildable on its own -------------------
+
+/**
+ * ## Why this section exists (v0.2.16 §一)
+ *
+ * Section 4 checks that the lockfile *in the working tree* covers every dependency. That was true
+ * in v0.2.15 and stayed true, while the published source ZIP contained no `pnpm-lock.yaml` and no
+ * `lib/` at all — the allowlist that decides what gets zipped simply omitted both. So the archive
+ * could not satisfy the very workflow that ships it: `pnpm install --frozen-lockfile` would fail
+ * on the first command.
+ *
+ * "The file exists here" and "the file is in the archive" are different claims, and only the
+ * second one reaches a user. This section asserts the second.
+ *
+ * It reads the ZIP's central directory rather than trusting the packer's own summary, for the same
+ * reason `scan-archive.mjs` does not import the packer: a bug in the decision and a bug in the
+ * report would otherwise cancel out.
+ */
+function zipEntryNames(file) {
+  const bytes = readFileSync(file)
+  const names = []
+  for (let i = 0; i + 46 <= bytes.length; i += 1) {
+    // Central directory file header signature.
+    if (bytes.readUInt32LE(i) !== 0x02014b50) continue
+    const nameLength = bytes.readUInt16LE(i + 28)
+    names.push(bytes.toString('utf8', i + 46, i + 46 + nameLength))
+  }
+  return names
+}
+
+/**
+ * ## The artifact check is conditional, the rule check is not
+ *
+ * Asserting only "the ZIP on disk contains the lockfile" has a hole of its own: whoever just
+ * unzipped the archive into a clean directory has no such ZIP, and `pnpm test` would fail there
+ * for a reason that has nothing to do with their code. That would make the guard punish the exact
+ * workflow it is supposed to protect.
+ *
+ * So the section runs in two tiers:
+ *
+ * 1. **Always** — read the packer and assert it still names the lockfile and the build-output
+ *    directory. This is the rule that was wrong in v0.2.15, and a text assertion on it cannot be
+ *    defeated by a missing artifact.
+ * 2. **When the artifact exists** — open it and check what actually landed inside. This catches a
+ *    rule that looks right but is applied wrongly.
+ *
+ * Tier 2 is skippable locally, but the decision is **explicit, never inferred from `CI`**.
+ *
+ * An earlier version of this file keyed off `process.env.CI`. That was wrong, and real CI proved
+ * it: `test/v0215-ci-integrity.test.ts` runs this guard from inside the test suite, and in `ci.yml`
+ * the test step comes *before* the step that builds the archive. So `CI` was set, the ZIP was not
+ * there yet, and the guard failed the suite it was supposed to protect.
+ *
+ * "Am I in CI?" does not answer "has the artifact been built yet?". Only the caller knows that, so
+ * the caller says so: `--require-archive` in the workflow step that runs after packaging, and
+ * nothing in the test suite. The flag is opt-in, so a forgotten flag shows up as an honest skip
+ * rather than a false green.
+ */
+const requireArchive = process.argv.includes('--require-archive') || process.env.CI_GUARD_REQUIRE_ARCHIVE === '1'
+const sourceZipPacker = join(root, 'scripts', 'source-zip.mjs')
+if (existsSync(sourceZipPacker)) {
+  const packer = readFileSync(sourceZipPacker, 'utf8')
+  if (!/'pnpm-lock\.yaml'/.test(packer)) {
+    fail('scripts/source-zip.mjs 的 ALLOWED_FILES 没有收录 pnpm-lock.yaml，源码包将无法安装依赖')
+  }
+  if (!/BUILD_OUTPUT_DIRS|'lib'/.test(packer)) {
+    fail('scripts/source-zip.mjs 没有把 lib/ 作为构建产物目录收录，源码包将缺少编译产物')
+  } else if (!/BUILD_OUTPUT_DIRS/.test(packer)) {
+    fail('source-zip.mjs 把 lib/ 当成普通源码目录整包放行；它应当只发布 .js/.d.ts/.map')
+  }
+}
+
+if (existsSync(pkgPath)) {
+  const version = JSON.parse(readFileSync(pkgPath, 'utf8')).version
+  const sourceZip = join(root, '..', `dsh-ai-debate-source-${version}.zip`)
+
+  if (!existsSync(sourceZip)) {
+    // Only the step that just built the archive may demand its presence. Everything else — the
+    // test suite especially — is a checkout where "not built yet" is the normal state.
+    if (requireArchive) {
+      fail(
+        `--require-archive 已指定，但找不到源码包 ${sourceZip}。前面的「生成并扫描公开源码包」步骤没有产出它。`,
+      )
+    } else {
+      note('源码包尚未生成，跳过归档内容检查（打包规则已单独校验）')
+    }
+  } else {
+    const entries = zipEntryNames(sourceZip)
+    const has = (name) => entries.includes(name)
+
+    if (entries.length === 0) {
+      fail(`源码包 ${sourceZip} 读不出任何条目，格式可能已损坏`)
+    }
+
+    // The two files v0.2.15 was missing. Each one breaks the build for whoever downloads it.
+    if (!has('pnpm-lock.yaml')) {
+      fail('源码包缺少 pnpm-lock.yaml：下载者跑不了 pnpm install --frozen-lockfile')
+    }
+    if (!has('lib/index.js')) {
+      fail('源码包缺少 lib/index.js：从 GitHub 安装时入口不存在')
+    }
+
+    const libEntries = entries.filter((name) => name.startsWith('lib/'))
+    if (libEntries.length === 0) {
+      fail('源码包里的 lib/ 是空的')
+    }
+
+    // Compiled output only. A `lib/` carrying anything else means someone put a file there by
+    // hand, and a whole-directory allowance would have published it.
+    const unexpected = libEntries.filter(
+      (name) => !/\.(js|d\.ts|js\.map|d\.ts\.map)$/.test(name),
+    )
+    if (unexpected.length > 0) {
+      fail(`源码包的 lib/ 里有非编译产物：${unexpected.slice(0, 5).join(', ')}`)
+    }
+
+    // The archive is public by definition; these must never be inside it.
+    const leaked = entries.filter(
+      (name) =>
+        name.split('/').includes('node_modules') ||
+        /(^|\/)\.env$/.test(name) ||
+        /(^|\/)\.dsh(\/|$)/.test(name),
+    )
+    if (leaked.length > 0) {
+      fail(`源码包里有不该发布的路径：${leaked.slice(0, 5).join(', ')}`)
+    }
+
+    note(`源码包 ${entries.length} 条目，含锁文件与 ${libEntries.length} 个编译产物`)
+  }
+}
+
 // --- 5. Release archive must not carry junk -------------------------------
 
 /**
