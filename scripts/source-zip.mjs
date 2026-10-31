@@ -33,12 +33,23 @@
  */
 import { lstat, readdir, readFile, writeFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
-import { join, posix, relative, sep } from 'node:path'
+import { join, posix, relative, resolve, sep } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 
 const root = process.cwd()
 const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
-const outFile = join(root, '..', `dsh-ai-debate-source-${version}.zip`)
+
+// Where the archive lands. Default is the directory *above* the project, which is where a
+// developer expects to find it and where CI's own housekeeping has always looked.
+//
+// CI has one hard requirement the default cannot satisfy: `actions/upload-artifact@v4` rejects
+// any path containing `..` — "Relative pathing '.' and '..' is not allowed". The release job
+// therefore passes --out ., and the archive is written into the workspace instead. Keeping one
+// script with one behaviour would mean either breaking local workflow or leaving the release
+// job permanently red, so the output directory is a parameter rather than a constant.
+const outFlag = process.argv.indexOf('--out')
+const outDir = outFlag === -1 ? join(root, '..') : resolve(root, process.argv[outFlag + 1] ?? '.')
+const outFile = join(outDir, `dsh-ai-debate-source-${version}.zip`)
 
 // --- 1. The allowlist -------------------------------------------------------
 

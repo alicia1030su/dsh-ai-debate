@@ -239,14 +239,23 @@ if (existsSync(sourceZipPacker)) {
 
 if (existsSync(pkgPath)) {
   const version = JSON.parse(readFileSync(pkgPath, 'utf8')).version
-  const sourceZip = join(root, '..', `dsh-ai-debate-source-${version}.zip`)
 
-  if (!existsSync(sourceZip)) {
+  // `source-zip.mjs` writes beside the project by default and into it with `--out .` (CI needs
+  // the latter: upload-artifact refuses any path containing `..`). Look in both places, parent
+  // first, so this guard agrees with either invocation instead of demanding one of them.
+  const archiveCandidates = [
+    join(root, '..', `dsh-ai-debate-source-${version}.zip`),
+    join(root, `dsh-ai-debate-source-${version}.zip`),
+  ]
+  const sourceZip = archiveCandidates.find((candidate) => existsSync(candidate))
+
+  if (sourceZip === undefined) {
     // Only the step that just built the archive may demand its presence. Everything else — the
     // test suite especially — is a checkout where "not built yet" is the normal state.
     if (requireArchive) {
       fail(
-        `--require-archive 已指定，但找不到源码包 ${sourceZip}。前面的「生成并扫描公开源码包」步骤没有产出它。`,
+        `--require-archive 已指定，但找不到源码包（找过 ${archiveCandidates.join(' 与 ')}）。` +
+          '前面的「生成并扫描公开源码包」步骤没有产出它。',
       )
     } else {
       note('源码包尚未生成，跳过归档内容检查（打包规则已单独校验）')

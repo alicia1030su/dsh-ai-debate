@@ -92,8 +92,12 @@ jobs:
 
           # The source archive is a release asset too: it is what a reader needs to
           # audit or rebuild, and it is produced by the same script a developer runs.
-          node scripts/source-zip.mjs
-          SOURCE_ZIP="../dsh-ai-debate-source-${PKG_VERSION}.zip"
+          #
+          # --out . is not cosmetic. upload-artifact@v4 refuses any path containing `..`
+          # ("Relative pathing '.' and '..' is not allowed"), so the archive has to land
+          # inside the workspace to become an asset. The first tagged release failed here.
+          node scripts/source-zip.mjs --out .
+          SOURCE_ZIP="dsh-ai-debate-source-${PKG_VERSION}.zip"
           if [ ! -f "$SOURCE_ZIP" ]; then
             echo "::error::没有生成 $SOURCE_ZIP"
             exit 1
