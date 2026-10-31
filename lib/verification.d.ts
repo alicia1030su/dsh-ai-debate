@@ -60,6 +60,22 @@ export interface VerificationAuthorization {
     /** Which capability this run is meant to prove. */
     readonly capability: CapabilityName;
     /**
+     * For `comment.reply`: the floor the reply must be attached under.
+     *
+     * Required for a reply and meaningless for a new comment, because the read-back has to check
+     * the **parent**, and "wherever it ended up" is not something the owner authorized. Left
+     * optional at the type level so a `comment.publish` authorization does not have to invent a
+     * value; `checkVerification` refuses a reply authorization that leaves it empty.
+     */
+    readonly authorizedFloorId?: string;
+    /**
+     * For `comment.reply`: the exact comment being answered (楼中楼).
+     *
+     * Same reasoning as `authorizedFloorId`: without it the read-back can only confirm "a reply
+     * exists somewhere under the floor", which is the weaker claim this flow must not accept.
+     */
+    readonly replyToPostId?: string;
+    /**
      * The exact reply text, pre-approved by the owner.
      *
      * Required rather than generated: the point of verification is to observe what
@@ -109,6 +125,15 @@ export interface VerificationRecord {
     readonly authorizedBy: string;
     readonly approvedText: string;
     readonly startedAt: string;
+    /**
+     * The adapter build this attempt ran against.
+     *
+     * Stamped at attempt time, not looked up later: replacing the publish method must not inherit
+     * the previous adapter's evidence, and the only moment that knows which build actually ran is
+     * this one. Without it, `capability-evidence.ts` has nothing to compare and would either
+     * over-promote (old success, new code) or refuse to promote at all.
+     */
+    readonly adapterVersion?: string;
     readonly outcome: 'pending' | 'succeeded' | 'failed' | 'uncertain';
     /** The post id the platform returned, when it returned one. */
     readonly publishedPostId?: string;

@@ -17,6 +17,7 @@
  * database would add an install dependency for no benefit at this size.
  */
 import type { TargetSnapshot } from './types.js';
+import type { CapabilityName } from './platforms/contracts.js';
 import type { ApprovalRecord } from './security/approvals.js';
 /**
  * A store failure the caller is expected to act on.
@@ -274,6 +275,18 @@ export interface StoreData {
      * thing — nothing has been approved.
      */
     readonly approvals?: readonly ApprovalRecord[];
+    /**
+     * One-off publish verification records, oldest first (v0.2.21 §三).
+     *
+     * This is the durable half of the verification flow. It is written **before** the network
+     * call (`outcome: 'pending'`) and again after, so a crash mid-publish leaves "attempted,
+     * outcome unknown" rather than silence. The second write upserts by `key`, which is what makes
+     * "one authorization, one publish" true across process restarts instead of only in memory.
+     *
+     * Optional for the same reason `security` and `approvals` are: a store written by an earlier
+     * version has no such list, and "no records" means "nothing has been verified yet".
+     */
+    readonly verification?: readonly VerificationRecordRow[];
 }
 /**
  * The persisted form of a security event.
@@ -293,6 +306,40 @@ export interface SecurityEventRecord {
     readonly postId?: string;
     readonly decision?: string;
     readonly excerpt?: string;
+}
+/**
+ * The persisted form of one publish-verification attempt.
+ *
+ * Structurally identical to `VerificationRecord` in `verification.ts`, declared separately so
+ * persistence keeps knowing nothing about that module's types — the same arrangement
+ * `SecurityEventRecord` uses.
+ */
+export interface VerificationRecordRow {
+    readonly key: string;
+    readonly platform: string;
+    readonly capability: CapabilityName;
+    readonly authorizedAccountId: string;
+    readonly authorizedThreadId: string;
+    readonly authorizedBy: string;
+    readonly approvedText: string;
+    readonly startedAt: string;
+    /**
+     * The adapter build this attempt ran against (v0.2.21 §三.9).
+     *
+     * Absent on records written before the field existed, and absent is treated as "unknown build",
+     * which never promotes a capability.
+     */
+    readonly adapterVersion?: string;
+    readonly outcome: 'pending' | 'succeeded' | 'failed' | 'uncertain';
+    readonly publishedPostId?: string;
+    readonly readBack?: {
+        readonly postFound: boolean;
+        readonly authorMatched: boolean;
+        readonly textMatched: boolean;
+        readonly parentMatched: boolean;
+        readonly notes: readonly string[];
+    };
+    readonly failure?: string;
 }
 /** Empty store. */
 export declare function emptyStore(): StoreData;
@@ -601,6 +648,17 @@ export declare class DebateStore {
     appendSecurityEvent(event: SecurityEventRecord, limit: number): Promise<void>;
     /** Sessions for one thread, newest first. */
     sessionsForThread(threadId: string): readonly StoredSession[];
+    /** Every verification record, oldest first. */
+    getVerificationRecords(): readonly VerificationRecordRow[];
+    /**
+     * Record one verification attempt, upserting by `key`.
+     *
+     * Upsert rather than append is the whole point: the runner writes a `pending` row before the
+     * network call and the outcome after, and those two writes describe **one** attempt. Appending
+     * both would make "was this authorization used?" answerable two different ways depending on
+     * which row a reader happened to look at.
+     */
+    putVerificationRecord(record: VerificationRecordRow): Promise<void>;
     /** The dedupe record for a trigger, if any. */
     findDedupe(key: string): DedupeRecord | undefined;
     /**
@@ -680,7 +738,7 @@ export declare function validateStore(value: unknown): {
  * interface: adding a field to `StoreData` without deciding what happens to it in
  * `prune()` now fails loudly instead of losing data quietly.
  */
-export declare const PRESERVED_FIELDS: readonly ["version", "sessions", "dedupe", "usage", "security", "approvals"];
+export declare const PRESERVED_FIELDS: readonly ["version", "sessions", "dedupe", "usage", "security", "approvals", "verification"];
 /**
  * How many sessions are still actionable, and whether that exceeds the cap.
  *

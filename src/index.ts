@@ -22,6 +22,8 @@ import { Config, DEFAULT_CONFIG, resolveConfig } from './config.js'
 import { loggerOf, type PluginContext } from './host.js'
 import { DebateStore } from './store.js'
 import type { ThreadRef } from './types.js'
+import { buildVerificationService } from './verification-service.js'
+import { verificationViewOf } from './verification-view.js'
 import {
   buildLlm,
   policyFromConfig,
@@ -39,6 +41,45 @@ import { CAPABILITY_NAMES, markOf, stateOf } from './platforms/contracts.js'
 import type { PlatformCapabilityMatrix } from './platforms/contracts.js'
 import { AdapterManager } from './platforms/adapter-manager.js'
 import { platformSettingsOf } from './runtime.js'
+
+/**
+ * The account this deployment would post as, per platform (v0.2.21 §三.9).
+ *
+ * Read from the platform's own settings rather than from a single top-level field: the tieba
+ * account lives at `aiAccountUserId`, and a second platform would keep its own id wherever its
+ * provider puts it. Checking the known names in one place means a platform that stores the id
+ * under a name this function does not know is reported as "no account configured" — a blocker
+ * the owner can see — instead of silently binding evidence to `undefined`.
+ */
+function configuredAccountOf(
+  config: ReturnType<typeof resolveConfig>,
+  platform: string,
+): string | undefined {
+  const settings = platformSettingsOf(config, platform) as Record<string, unknown>
+  for (const key of ['aiAccountUserId', 'accountUserId', 'userId']) {
+    const value = settings[key]
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  }
+  return undefined
+}
+
+/**
+ * The account the live session currently reports, or `undefined` when it cannot be read.
+ *
+ * Deliberately *not* falling back to the configured id: §三.4 requires this to be the account the
+ * session actually belongs to, and substituting the intended one would make the check compare a
+ * value with itself — always equal, never useful.
+ */
+async function liveAccountOf(runtime: Runtime, platform: string): Promise<string | undefined> {
+  try {
+    const probe = await checkLogin(runtime)
+    if (typeof probe.userId === 'string' && probe.userId.trim() !== '') return probe.userId.trim()
+  } catch {
+    // A probe that throws means "unknown", which refuses the run — the safe direction.
+  }
+  void platform
+  return undefined
+}
 
 /**
  * Flatten a capability matrix into the row shape the settings page renders.
@@ -68,6 +109,7 @@ function flattenCapabilities(matrix: PlatformCapabilityMatrix): PlatformView['ca
 import { collectDiagnostics, checkLogin, previewPersonas, testModel, PLUGIN_VERSION } from './diagnostics.js'
 import { TERMINAL_STATES } from './store.js'
 import {
+  authorizationFromInput,
   makeSettingsRoutes,
   type ApprovalOutcome,
   type PauseOutcome,
@@ -1248,6 +1290,82 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
         }
       }
       return blocks
+    },
+    /**
+     * The one-off publish verification (v0.2.21 §三).
+     *
+     * ## Why the service is rebuilt per request instead of held
+     *
+     * Every input it reads — the adapter, the live cookie jar, the record list — can change
+     * between the page rendering and the owner pressing the button. Caching the service would
+     * mean verifying against a snapshot of an account that has since been changed.
+     *
+     * ## Why the account id is read from configuration rather than guessed
+     *
+     * §三.9 binds evidence to an account. If this returned `undefined` the evidence would bind to
+     * nothing and match any account; a wrong-but-present id is worse. So the lookup is explicit:
+     * the platform's configured posting identity, and when that is absent the capability simply
+     * cannot be verified — the view reports it as a blocker instead of offering the button.
+     */
+    verification: async ({ platform }: { readonly platform: string }) => {
+      const service = buildVerificationService({
+        adapterFor: (id) => runtimeView.platforms?.adapterFor(id) ?? (id === runtimeView.adapter.id ? runtimeView.adapter : undefined),
+        declaredState: (id, capability) => {
+          const matrix = runtimeView.platforms?.capabilitiesOf(id)
+          // No matrix means "no declaration", which is `unavailable` — the honest reading, and
+          // one that cannot accidentally look like `supported`.
+          if (matrix === undefined) return 'unavailable' as const
+          return stateOf(matrix, capability).state
+        },
+        configuredAccountId: (id) => configuredAccountOf(effectiveConfig(), id),
+        liveAccountId: async (id) => liveAccountOf(runtimeView, id),
+        records: {
+          all: () => runtimeView.store.getVerificationRecords(),
+          put: (record) => runtimeView.store.putVerificationRecord(record),
+        },
+        now: () => new Date().toISOString(),
+      })
+      return verificationViewOf(service, platform)
+    },
+    /**
+     * Run one attempt.
+     *
+     * The refusal path lives inside the runner, not here: this only forwards the owner's form.
+     * Adding a check here would be a second place that decides whether publishing may happen, and
+     * the two could disagree — which is how "the panel said yes and the sender said no" happens.
+     */
+    runVerification: async (input) => {
+      const service = buildVerificationService({
+        adapterFor: (id) => runtimeView.platforms?.adapterFor(id) ?? (id === runtimeView.adapter.id ? runtimeView.adapter : undefined),
+        declaredState: (id, capability) => {
+          const matrix = runtimeView.platforms?.capabilitiesOf(id)
+          // No matrix means "no declaration", which is `unavailable` — the honest reading, and
+          // one that cannot accidentally look like `supported`.
+          if (matrix === undefined) return 'unavailable' as const
+          return stateOf(matrix, capability).state
+        },
+        configuredAccountId: (id) => configuredAccountOf(effectiveConfig(), id),
+        liveAccountId: async (id) => liveAccountOf(runtimeView, id),
+        records: {
+          all: () => runtimeView.store.getVerificationRecords(),
+          put: (record) => runtimeView.store.putVerificationRecord(record),
+        },
+        now: () => new Date().toISOString(),
+      })
+      const outcome = await service.verify(authorizationFromInput(input))
+      if ('code' in outcome) {
+        return { ok: false, upgraded: false, message: outcome.message, refusal: outcome.code }
+      }
+      return {
+        ok: outcome.ok,
+        upgraded: outcome.upgraded,
+        message: outcome.message,
+        ...(outcome.refusal !== undefined ? { refusal: outcome.refusal } : {}),
+        ...(outcome.record?.publishedPostId !== undefined
+          ? { publishedPostId: outcome.record.publishedPostId }
+          : {}),
+        ...(outcome.record?.readBack !== undefined ? { readBack: outcome.record.readBack } : {}),
+      }
     },
   }
 

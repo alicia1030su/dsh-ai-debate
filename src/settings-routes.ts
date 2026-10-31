@@ -27,6 +27,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
+import type { VerificationAuthorization } from './verification.js'
 import { resolveConfig, type ResolvedConfig } from './config.js'
 import type { CredentialPhase } from './credential-mirror.js'
 import {
@@ -223,6 +224,27 @@ export interface SettingsRouteDeps {
    * shows "no live diagnostic available" rather than a passing state.
    */
   platformDiagnostics?(options?: { readonly refresh?: boolean }): Promise<readonly PlatformDiagnosticBlock[]>
+  /**
+   * The one-off publish verification view, for the owner-only panel (v0.2.21 §三/§四).
+   *
+   * Reads the live account, the declared capabilities and every record. Optional for the same
+   * reason `platformDiagnostics` is: route tests written before this existed keep compiling, and
+   * a build without the publishing stack shows "this build cannot verify" rather than a green
+   * state it did not measure.
+   */
+  verification?(input: { readonly platform: string }): Promise<VerificationView>
+  /**
+   * Run exactly one verification attempt.
+   *
+   * Separate from `verification()` so the read-only view can be served without the write
+   * dependency existing at all: a deployment that never wants to publish once can leave this
+   * undefined, and the POST is then refused instead of quietly becoming a no-op.
+   *
+   * The input is the owner's form, verbatim. Nothing here fills a default — §三.2 requires the
+   * account, the thread, the target and the text to come from the owner, and a default is
+   * precisely the thing that would make them come from the code.
+   */
+  runVerification?(input: VerificationActionInput): Promise<VerificationRunView>
   /**
    * Candidates that are waiting for a human approval, newest first.
    *
@@ -447,10 +469,137 @@ export interface SecurityView {
 }
 
 /** The settings service face used here (structural; see `host.ts` for the why). */
+/**
+ * The fields the owner fills in for a one-off publish verification (v0.2.21 §三).
+ *
+ * Restated here instead of importing `VerificationAuthorization`: this module must stay loadable
+ * without the publishing stack, and a page-shaped interface is cheaper to keep honest than a
+ * type that quietly grows a default. Every field is required except the two parent ids, which
+ * only a nested reply needs.
+ */
+export interface VerificationActionInput {
+  readonly platform: string
+  readonly capability: 'comment.publish' | 'comment.reply'
+  readonly authorizedAccountId: string
+  readonly authorizedThreadId: string
+  readonly authorizedFloorId?: string
+  readonly replyToPostId?: string
+  readonly authorizedBy: string
+  readonly approvedText: string
+}
+
+/** The POST result for one verification attempt. */
+export interface VerificationRunView {
+  readonly ok: boolean
+  readonly message: string
+  /** Which refusal stopped it, when it did not publish. */
+  readonly refusal?: string
+  readonly publishedPostId?: string
+  readonly readBack?: {
+    readonly postFound: boolean
+    readonly authorMatched: boolean
+    readonly textMatched: boolean
+    readonly parentMatched: boolean
+    readonly notes: readonly string[]
+  }
+  /** True only when all four read-back facts held and the capability may be treated as proven. */
+  readonly upgraded: boolean
+}
+
+/**
+ * Turn the owner's form into the authorization the runner takes.
+ *
+ * Two rules, both from §三:
+ *
+ * - **The capability decides the family.** `comment.reply` requires a floor and a target post;
+ *   `comment.publish` must not inherit them, because a leftover id from a previous attempt would
+ *   silently move the next publish somewhere the owner did not pick.
+ * - **Nothing is defaulted.** A blank field stays blank, so `checkVerification` refuses it and the
+ *   owner sees which field is missing instead of a publish to an empty account id.
+ */
+export function authorizationFromInput(input: VerificationActionInput): VerificationAuthorization {
+  const base = {
+    platform: input.platform,
+    capability: input.capability,
+    authorizedAccountId: input.authorizedAccountId,
+    authorizedThreadId: input.authorizedThreadId,
+    authorizedBy: input.authorizedBy,
+    approvedText: input.approvedText,
+  }
+  if (input.capability !== 'comment.reply') return base
+  return {
+    ...base,
+    ...(input.authorizedFloorId !== undefined ? { authorizedFloorId: input.authorizedFloorId } : {}),
+    ...(input.replyToPostId !== undefined ? { replyToPostId: input.replyToPostId } : {}),
+  }
+}
+
 export interface SettingsService {
   writable: boolean
   update(namespace: string, patch: Record<string, unknown>): Promise<unknown>
   mutate(namespace: string, ops: readonly { op: 'unset'; path: readonly string[] }[]): Promise<unknown>
+}
+
+/**
+ * What the verification panel reads, and what the run action returns (v0.2.21 §三/§四).
+ *
+ * ## Why the view carries `expectedCapability` instead of the page computing it
+ *
+ * §三.4 requires the record's family, target and account to follow from the input. The page could
+ * derive that itself, but then there would be two derivations and the persisted record would
+ * follow whichever ran last. It is computed once, on the server, and echoed back so the owner
+ * sees exactly what will be checked before pressing the button — and the run action refuses a
+ * request whose `expectedCapability` disagrees with its own derivation.
+ */
+export interface VerificationView {
+  readonly ok: boolean
+  /** The account the configured session currently reports, read fresh. */
+  readonly liveAccountId?: string
+  readonly liveAccountName?: string
+  readonly adapterVersion?: string
+  readonly capabilities: readonly {
+    readonly capability: string
+    readonly declared: string
+    readonly effective: string
+    readonly reason: string
+  }[]
+  readonly records: readonly {
+    readonly key: string
+    readonly platform: string
+    readonly capability: string
+    readonly authorizedAccountId: string
+    readonly authorizedThreadId: string
+    readonly startedAt: string
+    readonly outcome: string
+    readonly publishedPostId?: string
+    readonly readBack?: {
+      readonly postFound: boolean
+      readonly authorMatched: boolean
+      readonly textMatched: boolean
+      readonly parentMatched: boolean
+      readonly notes: readonly string[]
+    }
+    readonly failure?: string
+  }[]
+  /** One line per reason this deployment cannot verify right now. Empty means "can try". */
+  readonly blockers: readonly string[]
+  /**
+   * The machine-readable half (§四).
+   *
+   * Same numbers the prose uses, in a shape a script can read: which capabilities are claimed,
+   * which were actually proven, and which are still only declared. `null` never appears here —
+   * an unknown state is `'unverified'`, because a script that sees `null` will treat it as "fine".
+   */
+  readonly report: {
+    readonly platform: string
+    readonly generatedAt: string
+    readonly capabilities: readonly {
+      readonly name: string
+      readonly declared: string
+      readonly effective: string
+      readonly evidence: readonly { readonly at: string; readonly accountId: string; readonly adapterVersion: string }[]
+    }[]
+  }
 }
 
 /** Result of probing the configured model endpoint. */
@@ -1031,6 +1180,44 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     writeJson(response, 200, platforms === undefined ? base : { ...base, platforms })
   })
 
+  /**
+   * The verification panel's read side (v0.2.21 §三/§四).
+   *
+   * GET with a `platform` query, behind the same `guard`: the live account name and the record
+   * history are both facts about the owner's own account, and an unauthenticated reader must not
+   * be able to enumerate them. A build without the publishing stack answers with an explicit
+   * "cannot verify" rather than an empty success.
+   */
+  const verificationRoute = guard(async (request, response) => {
+    if ((request.method ?? 'GET') !== 'GET') {
+      writeJson(response, 405, { error: `method not allowed: ${request.method ?? 'GET'}` })
+      return
+    }
+    if (deps.verification === undefined) {
+      writeJson(response, 200, {
+        ok: false,
+        capabilities: [],
+        records: [],
+        blockers: ['当前构建没有接上真实发表验收（verification 未提供）'],
+      })
+      return
+    }
+    const url = new URL(request.url ?? '/', 'http://localhost')
+    const platform = url.searchParams.get('platform') ?? ''
+    try {
+      writeJson(response, 200, await deps.verification({ platform }))
+    } catch (error) {
+      // A throwing read is reported, not swallowed: an empty panel would read as "nothing to
+      // verify", which is the opposite of what a failure means here.
+      writeJson(response, 200, {
+        ok: false,
+        capabilities: [],
+        records: [],
+        blockers: [`读取验收状态失败：${(error as Error).message}`],
+      })
+    }
+  })
+
   const actionRoute = guard(async (request, response) => {
     if ((request.method ?? 'GET') !== 'POST') {
       writeJson(response, 405, { error: `method not allowed: ${request.method ?? 'GET'}` })
@@ -1077,6 +1264,40 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     if (action === 'pause-now') {
       const outcome = await deps.stopAllActive()
       writeJson(response, 200, { ...outcome, view: await viewOfSettings(deps) })
+      return
+    }
+    // The one-off publish verification (v0.2.21 §三).
+    //
+    // Behind the same `guard` as every other action, and deliberately an action rather than a
+    // tool: the account, the thread, the target and the text are the owner's to type. A model
+    // that could call this would be choosing where to post, which is the one decision §三.2
+    // reserves for the human.
+    if (action === 'verify-publish') {
+      if (deps.runVerification === undefined) {
+        writeJson(response, 200, {
+          ok: false,
+          upgraded: false,
+          message: '当前构建没有接上真实发表验收（runVerification 未提供）',
+        } satisfies VerificationRunView)
+        return
+      }
+      const platform = typeof body.platform === 'string' ? body.platform : ''
+      const capability = body.capability
+      if (capability !== 'comment.publish' && capability !== 'comment.reply') {
+        writeJson(response, 400, { error: 'capability 只能是 comment.publish 或 comment.reply' })
+        return
+      }
+      const outcome = await deps.runVerification({
+        platform,
+        capability,
+        authorizedAccountId: typeof body.authorizedAccountId === 'string' ? body.authorizedAccountId : '',
+        authorizedThreadId: typeof body.authorizedThreadId === 'string' ? body.authorizedThreadId : '',
+        ...(typeof body.authorizedFloorId === 'string' ? { authorizedFloorId: body.authorizedFloorId } : {}),
+        ...(typeof body.replyToPostId === 'string' ? { replyToPostId: body.replyToPostId } : {}),
+        authorizedBy: typeof body.authorizedBy === 'string' ? body.authorizedBy : '',
+        approvedText: typeof body.approvedText === 'string' ? body.approvedText : '',
+      })
+      writeJson(response, 200, outcome)
       return
     }
     writeJson(response, 400, { error: `未知操作 "${String(action)}"` })
@@ -1135,6 +1356,7 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     { kind: 'exact', path: `${ROUTE_PREFIX}/secrets`, handler: secretRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/status`, handler: statusRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/action`, handler: actionRoute },
+    { kind: 'exact', path: `${ROUTE_PREFIX}/verification`, handler: verificationRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/approve`, handler: approveRoute },
   ]
 }
@@ -1145,6 +1367,7 @@ export const ROUTE_SECRETS = `${ROUTE_PREFIX}/secrets`
 export const ROUTE_STATUS = `${ROUTE_PREFIX}/status`
 export const ROUTE_ACTION = `${ROUTE_PREFIX}/action`
 export const ROUTE_APPROVE = `${ROUTE_PREFIX}/approve`
+export const ROUTE_VERIFICATION = `${ROUTE_PREFIX}/verification`
 
 /** A masked tail, exposed for the diagnostics panel's credential rows. */
 export { maskedTail }

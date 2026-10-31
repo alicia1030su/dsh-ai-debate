@@ -23,7 +23,7 @@
  *   means "no platform here", which callers must handle without throwing.
  */
 import type { PlatformAdapter, ThreadRef } from '../types.js';
-import { type CapabilityName, type LegacyCapabilityFlags, type PlatformCapabilityMatrix, type PlatformContext, type PlatformProvider } from './contracts.js';
+import { type CapabilityName, type CapabilityState, type LegacyCapabilityFlags, type PlatformCapabilityMatrix, type PlatformContext, type PlatformProvider } from './contracts.js';
 /** Raised when a URL belongs to no registered platform. */
 export declare class UnknownPlatformUrlError extends Error {
     readonly url: string;
@@ -127,8 +127,25 @@ export declare class PlatformRegistry {
      *
      * `unverified` is refused here on purpose: every write path funnels through
      * this check, and "the code exists" is not enough to send bytes to a stranger.
+     *
+     * ## Evidence may lift a declaration, but never edit it (v0.2.21 §三.9/.10)
+     *
+     * The declaration stays static — it is the ceiling, and nothing at runtime may rewrite it.
+     * What a verification record can do is *satisfy* it: `evidence.effective` is computed by
+     * `capability-evidence.ts` from a record that names the same platform, capability, account and
+     * adapter build, and that carries complete read-back evidence. So the only way to turn
+     * `unverified` into a pass here is to have actually published once and read the reply back
+     * with the same build — which is exactly the requirement, expressed as code instead of as a
+     * convention.
+     *
+     * An `evidence.effective` of anything other than `supported` is passed straight to
+     * `capabilityFailure`, so `permission_required` keeps its own error type (the owner can act on
+     * it) instead of being flattened into "unsupported".
      */
-    assertCapability(platform: string, capability: CapabilityName): void;
+    assertCapability(platform: string, capability: CapabilityName, evidence?: {
+        readonly effective: CapabilityState;
+        readonly reason: string;
+    }): void;
     /** The registry as plain JSON, for the settings and diagnostics pages. */
     diagnostics(): RegistryDiagnostics;
     /** Record a provider that could not be registered, so the page can explain it. */
