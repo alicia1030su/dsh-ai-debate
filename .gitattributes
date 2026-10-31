@@ -1,0 +1,32 @@
+# 行尾策略：一律 LF，不随克隆它的人的平台变。
+#
+# 为什么这件事必须写进仓库，而不是写进某个人的 `core.autocrlf` 设置：
+#
+# Git for Windows 的安装默认是 `core.autocrlf=true`，检出时把 LF 换成 CRLF。
+# 于是同一个提交，在 Windows 上克隆出来是 CRLF，在 Linux 上是 LF。`scripts/tar.mjs`
+# 打包时读的是**工作区**里的文件，所以两边打出来的 tgz 字节不同 —— 「源码 ZIP 能在
+# 全新环境复现正式 TGZ」这句话就不成立了，而且只会在别人机器上不成立。
+#
+# v0.2.20 的准备阶段就是被这件事绊了一下：在一次全新克隆里跑全量测试，
+# `test/v0216-artifact-determinism.test.ts` 的「归档里的文本文件不携带多余的 CR」失败，
+# 因为它看到工作区是 CRLF。这不是测试太严，是仓库没有把行尾约定说出来。
+#
+# `eol=lf` 会让检出后的工作区一律是 LF，压过 `core.autocrlf=true` 的影响。
+* text=auto eol=lf
+
+# 二进制文件：不要让 Git 做任何行尾或编码转换，也不要在 diff 里当文本处理。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.zip binary
+*.tgz binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.pdf binary
+*.docx binary
+*.xlsx binary

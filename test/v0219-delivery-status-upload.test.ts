@@ -19,7 +19,7 @@
 
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -222,6 +222,110 @@ describe('v0.2.19 交付状态报告必须真的被上传', () => {
         files.length,
         `报告说跑了 ${String(report.tests.files)} 个文件，磁盘上有 ${files.length} 个`,
       )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+/**
+ * `success` 与 `blocked` 必须给出相反的结果 —— 同一种环境，一个必须红、一个必须绿。
+ *
+ * v0.2.19 的正式发布就是倒在这条线上的：那条测试用默认参数（`status=success`）跑报告脚本，
+ * 而标签构建里仓库根没有产物，脚本按「success 却没有附件」退出 1，发布被自己的测试拦住。
+ * 当时没有任何一条测试**分别**钉住这两种状态，于是「测试在什么环境下绿」取决于工作区里
+ * 恰好有没有上一次构建的产物。
+ *
+ * 下面两条测试在一个**现造的临时目录**里跑真脚本：`package.json` 与 `test/` 都是当场写的，
+ * 所以既不受仓库根有没有旧产物影响，也不受 `GITHUB_*` 环境残留影响。
+ */
+describe('v0.2.20 报告脚本必须把 success 与 blocked 分开判', () => {
+  const HEX40 = '0123456789abcdef0123456789abcdef01234567'
+
+  /** 造一个干净沙箱：有 package.json、有嵌套 test 目录，但**没有任何构建产物**。 */
+  function sandbox(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-report-sandbox-'))
+    writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name: 'sandbox', version: '9.9.9' })}\n`, 'utf8')
+    mkdirSync(join(dir, 'test', 'nested'), { recursive: true })
+    writeFileSync(join(dir, 'test', 'a.test.ts'), '// 假的测试文件\n', 'utf8')
+    writeFileSync(join(dir, 'test', 'nested', 'b.test.ts'), '// 假的测试文件\n', 'utf8')
+    writeFileSync(
+      join(dir, 'test.log'),
+      'ℹ tests 2\nℹ pass 2\nℹ fail 0\nℹ skipped 0\n',
+      'utf8',
+    )
+    return dir
+  }
+
+  /** 清掉会从外部环境漏进来的 GITHUB_*，保证这两条测试判的是脚本，不是调用它的地方。 */
+  function cleanEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env }
+    for (const key of Object.keys(env)) {
+      if (key.startsWith('GITHUB_')) delete env[key]
+    }
+    return { ...env, ...extra }
+  }
+
+  function runReport(dir: string, extraArgs: string[], env: Record<string, string> = {}) {
+    return spawnSync(
+      process.execPath,
+      [join(ROOT, 'scripts', 'delivery-status-report.mjs'), ...extraArgs],
+      { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000, env: cleanEnv(env) },
+    )
+  }
+
+  it('声称 success 却没有真实附件时必须失败', () => {
+    const dir = sandbox()
+    try {
+      const out = join(dir, 'report.json')
+      const result = runReport(
+        dir,
+        ['--test-log', join(dir, 'test.log'), '--status', 'success', '--stage', 'done', '--out', out],
+        { GITHUB_REF_NAME: 'v9.9.9', GITHUB_SHA: HEX40 },
+      )
+      assert.notEqual(result.status, 0, '没有附件却声称 success，脚本必须失败')
+      assert.match(
+        String(result.stderr ?? ''),
+        /附件/,
+        `失败理由里必须点明缺的是附件，实际是：${String(result.stderr ?? '')}`,
+      )
+      const report = JSON.parse(readFileSync(out, 'utf8')) as { status: string; artifacts: unknown[] }
+      assert.equal(report.status, 'failed', '自洽校验失败时，落盘的报告必须写 failed，而不是把 success 发出去')
+      assert.equal(report.artifacts.length, 0, '沙箱里本来就没有产物，报告不应该凭空写出附件')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('status=blocked 且没有附件时允许正常生成阻塞报告', () => {
+    const dir = sandbox()
+    try {
+      const out = join(dir, 'report.json')
+      const result = runReport(
+        dir,
+        [
+          '--test-log',
+          join(dir, 'test.log'),
+          '--status',
+          'blocked',
+          '--stage',
+          'release',
+          '--out',
+          out,
+        ],
+        { GITHUB_REF_NAME: 'v9.9.9', GITHUB_SHA: HEX40 },
+      )
+      assert.equal(result.status, 0, `blocked 不需要附件，应当能正常走完：${String(result.stderr ?? '')}`)
+      const report = JSON.parse(readFileSync(out, 'utf8')) as {
+        status: string
+        artifacts: unknown[]
+        failure: { reason?: string } | null
+        tests: { files: number | null }
+      }
+      assert.equal(report.status, 'blocked')
+      assert.equal(report.artifacts.length, 0, '没有产物就该写空数组，而不是留 null')
+      assert.ok(report.failure !== null, 'blocked 必须写明 failure，否则读的人不知道卡在哪')
+      assert.equal(report.tests.files, 2, '沙箱里有两个测试文件（含一个在子目录），递归计数应当是 2')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
