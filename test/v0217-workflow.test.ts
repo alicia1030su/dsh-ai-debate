@@ -30,6 +30,11 @@ function readWorkflow(name) {
  *
  * 返回 `{ text, header }`：`text` 是这一步的完整原文，`header` 是 `- name:` 那一行。
  * 只处理我们自己写的工作流，不追求通用 YAML 语义。
+ *
+ * 注释行不算进 `text`。理由是这个文件里的断言都在**找步骤**：「哪一步创建 Release」
+ * 「哪一步上传产物」。注释里提到某个命令，不等于这一步会执行它 —— v0.2.18 加了一段
+ * 解释管道吞码的注释，里面有个字面量 `gh release create`，于是四个测试一起把注释所在的
+ * 上一步当成了发布步骤。断言本身没有问题，是这层解析把散文当成了代码。
  */
 function stepsOf(workflow) {
   const lines = workflow.split(/\r?\n/)
@@ -65,7 +70,11 @@ function stepsOf(workflow) {
       }
     }
 
-    if (current !== null) current.text += `\n${line}`
+    if (current !== null) {
+      // 注释是给人看的，不是执行的；见上面那条说明。
+      if (trimmed.startsWith('#')) continue
+      current.text += `\n${line}`
+    }
   }
 
   if (current !== null) steps.push(current)

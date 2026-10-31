@@ -424,19 +424,33 @@ function tailLines(text, count) {
  * `.github/workflows/*.yml`」或「新建 `src/security/xxx.ts`」会被判成不敏感，
  * 自动合并上去 —— 而这恰好是最该拦的一类改动。所以未跟踪文件单独列出来，
  * 当成整文件新增。
+ *
+ * 另一处更隐蔽：这个函数以前在 `git diff` 失败时 `return []`，也就是
+ * 「拿不到改动清单」= 「没有改动」= 「不敏感」= 自动合并。安全判定的默认值
+ * 必须是「不知道就停」，不是「不知道就放行」。
  */
 function collectChanges(base) {
   const names = run('git', ['diff', '--name-only', base])
-  if (names.code !== 0) return []
+  if (names.code !== 0) {
+    fail('verify', `列不出相对 ${base} 的改动，敏感判定无从做起：${names.stderr.trim()}`)
+  }
   const tracked = names.stdout.trim().split(/\r?\n/).filter(Boolean)
 
   const others = run('git', ['ls-files', '--others', '--exclude-standard'])
-  const untracked = others.code === 0 ? others.stdout.trim().split(/\r?\n/).filter(Boolean) : []
+  if (others.code !== 0) {
+    fail('verify', `列不出未跟踪文件，新建的敏感文件会被漏判：${others.stderr.trim()}`)
+  }
+  const untracked = others.stdout.trim().split(/\r?\n/).filter(Boolean)
 
   const normalize = (path) => path.split('\\').join('/')
 
   const changes = tracked.map((path) => {
     const diff = run('git', ['diff', base, '--', path])
+    // 单文件 diff 失败时，addedLines 会是空数组，行级的敏感规则（例如某一行
+    // 新增了 `permissions: write-all`）就再也匹配不到 —— 只剩路径规则兜着。
+    if (diff.code !== 0) {
+      fail('verify', `读不出 ${normalize(path)} 的差异，没法判断它改了什么：${diff.stderr.trim()}`)
+    }
     const lines = diff.stdout.split(/\r?\n/)
     return {
       path: normalize(path),
@@ -819,8 +833,12 @@ function createTag(version, tagDecision, defaultBranch) {
   const push = run('git', ['push', 'origin', tag])
   if (push.code !== 0) fail('tag', `推送标签失败：${push.stdout}${push.stderr}`)
 
-  const objectSha = run('git', ['rev-list', '-n', '1', tag]).stdout.trim()
-  log(`已推送标签 ${tag}（指向 ${objectSha.slice(0, 12)}）`)
+  const objectSha = run('git', ['rev-list', '-n', '1', tag])
+  if (objectSha.code !== 0 || objectSha.stdout.trim() === '') {
+    // 标签已经推上去了，但读不回它指向的提交。此时如实报错比打印「指向 （空）」有用。
+    fail('tag', `标签 ${tag} 已推送，但读不到它指向的提交：${objectSha.stderr.trim()}`)
+  }
+  log(`已推送标签 ${tag}（指向 ${objectSha.stdout.trim().slice(0, 12)}）`)
   return { tag, created: true }
 }
 
@@ -1072,8 +1090,21 @@ async function main() {
     }
 
     // 合并后重新取 main 的真实提交，用它来判断标签指向哪里。
-    run('git', ['fetch', 'origin'])
-    const mainSha = run('git', ['rev-parse', `origin/${defaultBranch}`]).stdout.trim()
+    //
+    // 这两步以前都不看退出码，而它们恰好决定「标签打在哪个提交上」：
+    // fetch 失败时 `origin/<default>` 还是上一轮抓到的旧引用，rev-parse 失败时
+    // mainSha 是空串。前者会把标签指向合并前的提交，后者会让 decideTag 以
+    // 「expectedCommit 为空」为由拒绝 —— 两种结果都比一句明确的报错难查得多。
+    const fetchMain = run('git', ['fetch', 'origin'])
+    if (fetchMain.code !== 0) {
+      fail('tag', `git fetch 失败，接下来读到的是过期的 origin 引用：${fetchMain.stderr.trim()}`)
+    }
+    const mainShaResult = run('git', ['rev-parse', `origin/${defaultBranch}`])
+    if (mainShaResult.code !== 0) {
+      fail('tag', `读不到 origin/${defaultBranch} 的提交：${mainShaResult.stderr.trim()}`)
+    }
+    const mainSha = mainShaResult.stdout.trim()
+    if (mainSha === '') fail('tag', `origin/${defaultBranch} 的提交是空字符串，无法判断标签该指向哪里`)
     report.github.commitSha = mainSha
 
     const remoteTag = run('git', ['ls-remote', '--tags', 'origin', tagForVersion(version)])
@@ -1084,7 +1115,10 @@ async function main() {
       // annotated tag 在 ls-remote 里给的是 tag 对象的 SHA，要用 rev-list 才能拿到提交。
       tagCommit = run('git', ['rev-list', '-n', '1', tagForVersion(version)]).stdout.trim() || null
       if (tagCommit === null) {
-        run('git', ['fetch', 'origin', '--tags'])
+        const fetchTags = run('git', ['fetch', 'origin', '--tags'])
+        if (fetchTags.code !== 0) {
+          fail('tag', `标签 ${tagForVersion(version)} 在远端存在，但抓取标签失败，无法确认它指向哪个提交：${fetchTags.stderr.trim()}`)
+        }
         tagCommit = run('git', ['rev-list', '-n', '1', `origin/tags/${tagForVersion(version)}`]).stdout.trim() || null
       }
     }

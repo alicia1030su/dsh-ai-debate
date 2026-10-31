@@ -59,9 +59,24 @@ jobs:
       - name: 类型检查（含测试与脚本，棘轮）
         run: node scripts/test-typecheck.mjs
 
+      # ## 红色测试必须让这一步变红（v0.2.18）
+      #
+      # `set -e` 管不了管道。bash 取的是管道**最后**一个命令的退出码，而 `tee`
+      # 永远成功 —— 于是 `set -e` 加 `| tee` 的组合下，测试全红这一步照样绿，
+      # 发布照样往下走。唯一会报警的是末尾那份交付状态报告（它确实检查了计数），
+      # 但它跑在 `gh release create` **之后**，那时正式版本已经发出去了。
+      #
+      # `-o pipefail` 让管道返回最右侧的非零退出码，红测试会停在这一步。
+      # `-u` 是因为变量名打错时会静默展开成空串，而空串在这里的含义恰好是
+      # 「没有测试要跑」—— 那是最不该被当成正常的一种输入。
+      #
+      # 回归验证：test/v0218-no-swallowed-failure.test.ts 会真的用 bash 跑一遍
+      # 这两种写法，断言旧写法退出 0、新写法退出非零；scripts/ci-guard.mjs
+      # 第 9 节静态断言每一处管道都配了 pipefail。静态一条、动态一条，缺一不可：
+      # 静态的改得掉，动态的证明真跑起来是什么行为。
       - name: 自动化测试
         run: |
-          set -e
+          set -euo pipefail
           # Globbed so a new test file cannot be silently skipped by a stale list.
           # Tee'd to a file because the delivery status report reads the real counts from it;
           # re-deriving them from a summary string in YAML would be a second source of truth.
@@ -78,7 +93,10 @@ jobs:
       - name: 打包并校验
         id: pack
         run: |
-          set -e
+          # `-o pipefail` 在这里也是为了 `sha256sum | cut`：`cut` 拿到空输入照样退出 0，
+          # 于是 `sha256sum` 失败时 SHA256 会变成空串写进发布说明和 Release 元数据。
+          # 一个空的校验和比没有校验和更糟 —— 它看起来像已经校验过了。
+          set -euo pipefail
           node scripts/pack.mjs
           PKG_VERSION="$(node -p "require('./package.json').version")"
           TARBALL="dsh-ai-debate-${PKG_VERSION}.tgz"
@@ -87,6 +105,11 @@ jobs:
             exit 1
           fi
           SHA256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+          # 长度不对就停：下面的发布说明会把它印出来，空串或截断都是假证据。
+          if ! printf '%s' "$SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::安装包的 SHA-256 不是 64 位小写十六进制：'$SHA256'"
+            exit 1
+          fi
           echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
           echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
@@ -105,6 +128,10 @@ jobs:
             exit 1
           fi
           SOURCE_SHA256="$(sha256sum "$SOURCE_ZIP" | cut -d' ' -f1)"
+          if ! printf '%s' "$SOURCE_SHA256" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "::error::源码包的 SHA-256 不是 64 位小写十六进制：'$SOURCE_SHA256'"
+            exit 1
+          fi
           echo "source_zip=$SOURCE_ZIP" >> "$GITHUB_OUTPUT"
           echo "source_sha256=$SOURCE_SHA256" >> "$GITHUB_OUTPUT"
           echo "源码包完成：$SOURCE_ZIP（$SOURCE_SHA256）"

@@ -34,6 +34,19 @@ const RELEASE = join(ROOT, '.github', 'workflows', 'release.yml')
 
 const ciText = () => readFileSync(CI, 'utf8')
 const releaseText = () => readFileSync(RELEASE, 'utf8')
+
+/**
+ * 只留真的会被执行的行：注释里提到某个命令，不等于这一步会执行它。
+ * v0.2.18 在测试步骤上方加了一段解释管道吞码的注释，其中有个字面量
+ * `gh release create`，于是「哪一步创建 Release」这条断言把注释所在的
+ * 上一步当成了发布步骤。断言没问题，是切块时把散文当成了代码。
+ */
+const releaseCode = () =>
+  releaseText()
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
+
 const pkg = () => JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 
 /** Run a repository script and hand back its exit code and output. */
@@ -188,8 +201,7 @@ test('CI 完整性：扫描器能真的发现敏感文件（不是永远返回�
 // ---------------------------------------------------------------------------
 
 test('CI 完整性：创建 Release 只对标签触发，分支推送不能发布', () => {
-  const release = releaseText()
-  const createStep = release
+  const createStep = releaseCode()
     .split(/\n\s*- name:/)
     .find((block) => block.includes('gh release create'))
   assert.notEqual(createStep, undefined, '找不到创建 Release 的步骤')
