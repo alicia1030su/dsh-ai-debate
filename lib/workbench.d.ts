@@ -94,6 +94,21 @@ export interface WorkbenchState {
         readonly effective: string;
         readonly reason: string;
     };
+    /**
+     * The read-back facts behind `outcome`, when a read-back ran.
+     *
+     * §五 requires the interface to *separately* verify existence, author, body and parent. A
+     * single "confirmed" boolean is a summary of those four, and showing only the summary hides
+     * which one disagreed — the exact information needed to decide whether the reply is wrong or
+     * the check is.
+     */
+    readonly readBack?: {
+        readonly postFound: boolean;
+        readonly authorMatched: boolean;
+        readonly textMatched: boolean;
+        readonly parentMatched: boolean;
+        readonly notes: readonly string[];
+    };
 }
 /** What the caller must supply. Kept narrow so this stays a pure function of durable facts. */
 export interface WorkbenchInput {
@@ -117,6 +132,14 @@ export interface WorkbenchInput {
     readonly lastAttempt?: {
         readonly status: 'confirmed' | 'uncertain' | 'failed';
         readonly reason?: string;
+        /** The four read-back facts, when a read-back ran and reported them. */
+        readonly readBack?: {
+            readonly postFound: boolean;
+            readonly authorMatched: boolean;
+            readonly textMatched: boolean;
+            readonly parentMatched: boolean;
+            readonly notes: readonly string[];
+        };
     };
 }
 /**

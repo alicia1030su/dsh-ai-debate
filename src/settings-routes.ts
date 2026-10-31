@@ -253,6 +253,18 @@ export interface SettingsRouteDeps {
    */
   workbench?(input: { readonly sessionId?: string }): Promise<WorkbenchView>
   /**
+   * Edit one candidate's text (v0.2.22 §三).
+   *
+   * A separate write from approve/publish because it invalidates both: the response is the new
+   * version and hash, so the page can show that the old approval no longer applies instead of
+   * discovering it on the next publish attempt.
+   */
+  editCandidate?(input: {
+    readonly sessionId: string
+    readonly candidateId: string
+    readonly text: string
+  }): Promise<{ readonly ok: boolean; readonly message?: string; readonly candidateVersion?: number; readonly textHash?: string }>
+  /**
    * Candidates that are waiting for a human approval, newest first.
    *
    * This is what makes the approval section possible: the page cannot approve something
@@ -1385,6 +1397,22 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
         ...(typeof body.replyToPostId === 'string' ? { replyToPostId: body.replyToPostId } : {}),
         authorizedBy: typeof body.authorizedBy === 'string' ? body.authorizedBy : '',
         approvedText: typeof body.approvedText === 'string' ? body.approvedText : '',
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
+    // Editing a candidate's text (v0.2.22 §三). Behind the guard like every other write, and
+    // deliberately narrow: it rewrites prose and nothing else. It cannot approve, cannot publish,
+    // and cannot change the target — those are separate actions with their own gates.
+    if (action === 'edit-candidate') {
+      if (deps.editCandidate === undefined) {
+        writeJson(response, 200, { ok: false, message: '当前构建没有接上候选编辑（editCandidate 未提供）' })
+        return
+      }
+      const outcome = await deps.editCandidate({
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+        candidateId: typeof body.candidateId === 'string' ? body.candidateId : '',
+        text: typeof body.text === 'string' ? body.text : '',
       })
       writeJson(response, 200, outcome)
       return

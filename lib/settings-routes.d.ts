@@ -196,6 +196,23 @@ export interface SettingsRouteDeps {
         readonly sessionId?: string;
     }): Promise<WorkbenchView>;
     /**
+     * Edit one candidate's text (v0.2.22 §三).
+     *
+     * A separate write from approve/publish because it invalidates both: the response is the new
+     * version and hash, so the page can show that the old approval no longer applies instead of
+     * discovering it on the next publish attempt.
+     */
+    editCandidate?(input: {
+        readonly sessionId: string;
+        readonly candidateId: string;
+        readonly text: string;
+    }): Promise<{
+        readonly ok: boolean;
+        readonly message?: string;
+        readonly candidateVersion?: number;
+        readonly textHash?: string;
+    }>;
+    /**
      * Candidates that are waiting for a human approval, newest first.
      *
      * This is what makes the approval section possible: the page cannot approve something

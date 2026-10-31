@@ -30,6 +30,7 @@ import {
   buildLlm,
   policyFromConfig,
   cancelInFlight,
+  editCandidate,
   inFlightPublishCount,
   stopSession,
   type Runtime,
@@ -1510,6 +1511,7 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
      * session is a working cache with a TTL. Reading the session would make "already published"
      * quietly expire back to "not attempted" — which is the state that gets a reply re-sent.
      */
+    editCandidate: async (input) => editCandidate(runtimeView, input),
     workbench: async ({ sessionId }: { readonly sessionId?: string }) => {
       const session =
         sessionId === undefined
