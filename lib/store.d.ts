@@ -651,6 +651,23 @@ export declare class DebateStore {
     /** Every verification record, oldest first. */
     getVerificationRecords(): readonly VerificationRecordRow[];
     /**
+     * Re-read the verification records from disk before answering.
+     *
+     * ## Why a plain getter is not enough (v0.2.21 P0-1)
+     *
+     * `getVerificationRecords()` answers from *this instance's* copy, which only changes when this
+     * instance writes. Two plugin instances over one directory (the arrangement v0.2.7 made
+     * routine) therefore disagree: the instance that did not claim the authorization still sees
+     * none, and a settings page opened there would report "nothing has been verified yet" about a
+     * record that demonstrably exists.
+     *
+     * The read-only paths that show this to a human are async already, so they can pay one file
+     * read. The publish gate stays synchronous on purpose — a gate that awaits a disk read in the
+     * middle of a decision is a gate with a new failure mode — and is refreshed by the same call
+     * whenever a publish begins.
+     */
+    refreshVerificationRecords(): Promise<readonly VerificationRecordRow[]>;
+    /**
      * Record one verification attempt, upserting by `key`.
      *
      * Upsert rather than append is the whole point: the runner writes a `pending` row before the
@@ -659,6 +676,33 @@ export declare class DebateStore {
      * which row a reader happened to look at.
      */
     putVerificationRecord(record: VerificationRecordRow): Promise<void>;
+    /**
+     * Atomically claim one verification authorization, or report that it is spent.
+     *
+     * ## Why this cannot be "read the records, then write pending" (v0.2.21 P0-1)
+     *
+     * The runner used to do exactly that: read `getVerificationRecords()`, hand the resulting key
+     * set to `checkVerification()`, and only then `putVerificationRecord({ outcome: 'pending' })`.
+     * Both steps are correct on their own and useless together: two requests can both read an
+     * empty list, both conclude the authorisation is unused, and both publish. The gap is small,
+     * which is worse than a large one — it survives every manual test and shows up under exactly
+     * the load nobody reproduces.
+     *
+     * `transact()` is the existing primitive for this shape (v0.2.8 built it for approvals for the
+     * same reason). The check and the write happen inside one lock hold, against the document as
+     * it is on disk, so "is this authorization spent?" and "record that it is now" are one
+     * indivisible decision.
+     *
+     * Returns `{ claimed: false, existing }` — not an error — when the key is already present.
+     * A refusal is the normal outcome here, and the caller must be able to tell it apart from a
+     * disk failure. A write failure throws: the caller must **not** publish in that case.
+     */
+    claimVerificationRecord(record: VerificationRecordRow): Promise<{
+        claimed: true;
+    } | {
+        claimed: false;
+        existing: VerificationRecordRow;
+    }>;
     /** The dedupe record for a trigger, if any. */
     findDedupe(key: string): DedupeRecord | undefined;
     /**

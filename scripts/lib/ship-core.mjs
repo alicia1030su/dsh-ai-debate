@@ -144,6 +144,53 @@ const COMMENT_ONLY_LINE = /^\s*(\/\/|\/\*|\*|\*\/|#)/
  */
 export const SENSITIVE_LINE_MARKERS = [
   {
+    id: 'composition-root-publish',
+    // v0.2.21 P1：`src/index.ts` 是装配根，真正的发表闸门就接在这里。
+    //
+    // 行级而不是整份：这个文件绝大多数内容是工具注册与配置装配，每次加一个工具都要人守着，
+    // 守卫就会被绕过。但 `assertCapability` 的实现、验收证据的接入、`configuredAccountOf` /
+    // `liveAccountOf` 都在这里 —— 改掉它们等于换掉「谁在发、能不能发」的判定。
+    test: (path) => path === 'src/index.ts',
+    markers: [
+      /assertCapability/,
+      /effectiveCapability/,
+      /adapterVersionOf/,
+      /configuredAccountOf/,
+      /liveAccountOf/,
+      /claimVerificationRecord/,
+      /putVerificationRecord/,
+      /verificationViewOf|buildVerificationService/,
+      /approv/i,
+      /publish/i,
+      /capabilit/i,
+      /credential/i,
+      /cookie/i,
+      /platformAccounts|aiAccountUserId/,
+    ],
+    reason: '改动了装配根里的发表闸门、账号绑定或验收证据接入',
+  },
+  {
+    id: 'store-atomic-claim',
+    // v0.2.21 P1：`src/store.ts` 是状态持久化与跨进程锁。
+    //
+    // 行级而不是整份：这里绝大多数是会话、去重、用量这些与安全无关的结构。风险集中在
+    // 「谁能原子地抢占一份授权」和「什么记录会被保留或丢弃」两处 —— 那些名字一旦出现在
+    // 改动行里，就该有人看一眼。
+    test: (path) => path === 'src/store.ts',
+    markers: [
+      /claimVerificationRecord|putVerificationRecord|getVerificationRecords/,
+      /\btransact\b/,
+      /acquireLock|lockTimeout|LockHandle/,
+      /PRESERVED_FIELDS/,
+      /function prune|prune\(/,
+      /validateStore/,
+      /approval/i,
+      /dedupe/i,
+      /ownerKey/i,
+    ],
+    reason: '改动了状态持久化、跨进程锁或授权抢占的原子性',
+  },
+  {
     id: 'publish-orchestration',
     test: (path) => path === 'src/publisher.ts',
     markers: [

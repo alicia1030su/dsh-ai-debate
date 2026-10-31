@@ -84,6 +84,28 @@ export interface VerificationRecordStore {
    * the first rather than appending a contradicting row.
    */
   put(record: VerificationRecord): Promise<void>
+  /**
+   * Re-read the records from durable storage, when the store can do that at all.
+   *
+   * Optional because a test double has nothing to re-read. The real store provides it: the
+   * runner's pre-checks read `all()`, and with two plugin instances over one directory that
+   * answer comes from this instance's copy, which only changes when *this* instance writes.
+   * Refreshing first means the pre-check sees a claim made by the other process.
+   */
+  refresh?(): Promise<readonly VerificationRecord[]>
+  /**
+   * Atomically claim an authorization, or report that it is already spent (v0.2.21 P0-1).
+   *
+   * This is the operation that makes "one authorization, one publish" true under concurrency.
+   * Reading the record list and then writing `pending` are two separate observations, and two
+   * requests can interleave between them — both seeing "unused". Claiming must therefore be one
+   * indivisible step: check the key and write the `pending` row inside a single lock hold.
+   *
+   * Implementations must:
+   * - return `{ claimed: false, existing }` when the key is already present, without writing;
+   * - throw when the write fails, so the caller knows not to publish.
+   */
+  claim?(record: VerificationRecord): Promise<{ claimed: boolean; existing?: VerificationRecord }>
 }
 
 /** The result of one verification attempt, as reported to the owner and to the diagnostics page. */
@@ -152,7 +174,10 @@ export async function runVerification(
   authorization: VerificationAuthorization,
   deps: VerificationRunnerDeps,
 ): Promise<VerificationRunResult> {
-  const existing = deps.records.all()
+  // Read through the store rather than trusting this instance's copy: a second plugin process
+  // may already have claimed this authorization, and its write is only visible on disk.
+  const existing =
+    deps.records.refresh !== undefined ? await deps.records.refresh() : deps.records.all()
   const usedKeys = new Set(existing.map((record) => record.key))
 
   const liveAccountId = await deps.liveAccountId()
@@ -186,7 +211,50 @@ export async function runVerification(
     ...(deps.adapterVersion !== undefined ? { adapterVersion: deps.adapterVersion } : {}),
     outcome: 'pending',
   }
-  await deps.records.put(pending)
+
+  // ---- 3a. claim the authorization atomically, or stop here --------------
+  //
+  // The `usedKeys` check above is a *read*, and a read cannot authorize a write: two requests
+  // can both read an empty list and both proceed. The claim below is the actual gate — it
+  // checks the key and records `pending` in one atomic step, so exactly one caller wins.
+  //
+  // Two failure modes, deliberately handled differently:
+  //
+  // - **Already spent** → `claimed: false`. A refusal, not an error: the owner needs to know
+  //   the authorization was used, and nothing was sent.
+  // - **Write threw** (lock timeout, disk full, corrupt document) → rethrow. We do **not**
+  //   publish. A pending row that could not be recorded means a crash later would leave no
+  //   trace, and "no trace" is indistinguishable from "nothing was sent" — the exact state
+  //   that makes an automatic retry post twice.
+  if (deps.records.claim !== undefined) {
+    let claim: { claimed: boolean; existing?: VerificationRecord }
+    try {
+      claim = await deps.records.claim(pending)
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error)
+      return {
+        ok: false,
+        message:
+          `没能把这次验收写进状态文件，因此没有发表任何内容（${reason}）。` +
+          '没有记录就等于无法判断刚才有没有发出去，所以这里不重试',
+        upgraded: false,
+      }
+    }
+    if (!claim.claimed) {
+      return {
+        ok: false,
+        refusal: 'already_used',
+        message:
+          '这份授权已经用过一次（可能是并发提交，或上一次的中断请求）。' +
+          '一次性验收的设计就是只发一条——如果需要再验，请由主人重新指定并授权',
+        upgraded: false,
+      }
+    }
+  } else {
+    // Stores without `claim` are test doubles from before P0-1. They still work, but the
+    // caller has no concurrency guarantee — the real store always provides `claim`.
+    await deps.records.put(pending)
+  }
 
   const { ref, target } = targetFor(authorization)
 

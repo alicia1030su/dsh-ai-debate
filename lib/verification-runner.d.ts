@@ -73,6 +73,31 @@ export interface VerificationRecordStore {
      * the first rather than appending a contradicting row.
      */
     put(record: VerificationRecord): Promise<void>;
+    /**
+     * Re-read the records from durable storage, when the store can do that at all.
+     *
+     * Optional because a test double has nothing to re-read. The real store provides it: the
+     * runner's pre-checks read `all()`, and with two plugin instances over one directory that
+     * answer comes from this instance's copy, which only changes when *this* instance writes.
+     * Refreshing first means the pre-check sees a claim made by the other process.
+     */
+    refresh?(): Promise<readonly VerificationRecord[]>;
+    /**
+     * Atomically claim an authorization, or report that it is already spent (v0.2.21 P0-1).
+     *
+     * This is the operation that makes "one authorization, one publish" true under concurrency.
+     * Reading the record list and then writing `pending` are two separate observations, and two
+     * requests can interleave between them — both seeing "unused". Claiming must therefore be one
+     * indivisible step: check the key and write the `pending` row inside a single lock hold.
+     *
+     * Implementations must:
+     * - return `{ claimed: false, existing }` when the key is already present, without writing;
+     * - throw when the write fails, so the caller knows not to publish.
+     */
+    claim?(record: VerificationRecord): Promise<{
+        claimed: boolean;
+        existing?: VerificationRecord;
+    }>;
 }
 /** The result of one verification attempt, as reported to the owner and to the diagnostics page. */
 export interface VerificationRunResult {

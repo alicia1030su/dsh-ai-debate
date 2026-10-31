@@ -20,6 +20,16 @@ import type { VerificationService } from './verification-service.js';
  * `platform` may be empty — the page renders before the owner picks one — in which case the
  * capability list is empty and the blockers say what to do, rather than showing a green
  * "nothing declared".
+ *
+ * ## `live` is passed in, never inferred (v0.2.21 P0-2)
+ *
+ * The configured posting account and the account the session is actually logged in as are two
+ * different facts, and only the second one may be called "the live account". Before P0-2 this
+ * function put the configured id in the `liveAccountId` field, so the panel stated an identity it
+ * had never read — and an unknown session looked identical to a matching one.
  */
-export declare function verificationViewOf(service: VerificationService, platform: string): VerificationView;
+export declare function verificationViewOf(service: VerificationService, platform: string, live?: {
+    readonly accountId?: string;
+    readonly error?: string;
+}): VerificationView;
 //# sourceMappingURL=verification-view.d.ts.map

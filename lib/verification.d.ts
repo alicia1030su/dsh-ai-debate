@@ -94,6 +94,15 @@ export type VerificationRefusal =
  | 'already_used'
 /** A required authorization field is empty. */
  | 'incomplete_authorization'
+/**
+ * The account the live session belongs to could not be established (v0.2.21 P0-2).
+ *
+ * Distinct from `account_mismatch`: that one knows who is logged in and it is the wrong
+ * person; this one does not know. Both refuse, but the remedy differs — one asks the owner to
+ * log in as the right account, the other asks them to check the session at all — and a single
+ * message for both would send them looking in the wrong place.
+ */
+ | 'account_unknown'
 /** The live session is not the authorized account. */
  | 'account_mismatch'
 /** The target is not the authorized thread. */

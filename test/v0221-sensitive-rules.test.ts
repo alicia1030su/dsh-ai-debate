@@ -181,17 +181,19 @@ describe('v0.2.21 §一：修复后的阻断（每条规则都要能单独触发
       assert.ok(existsSync(join(ROOT, rule.path)), `SENSITIVE_WHOLE_FILES 指向了不存在的文件：${rule.path}`)
     }
     for (const rule of SENSITIVE_LINE_MARKERS) {
-      const sample = rule.test('src/publisher.ts')
-        ? 'src/publisher.ts'
-        : rule.test('src/runtime.ts')
-          ? 'src/runtime.ts'
-          : rule.test('src/settings-routes.ts')
-            ? 'src/settings-routes.ts'
-            : rule.test('src/platforms/tieba/adapter.ts')
-              ? 'src/platforms/tieba/adapter.ts'
-              : rule.test('src/tools.ts')
-                ? 'src/tools.ts'
-                : null
+      // Every real source file the rules can match. A rule that matches nothing would satisfy
+      // the assertions below vacuously, so the candidate list has to name each path the rules
+      // target — adding a rule means adding its file here, never loosening this check.
+      const candidates = [
+        'src/publisher.ts',
+        'src/runtime.ts',
+        'src/settings-routes.ts',
+        'src/platforms/tieba/adapter.ts',
+        'src/tools.ts',
+        'src/index.ts',
+        'src/store.ts',
+      ]
+      const sample = candidates.find((path) => rule.test(path)) ?? null
       assert.ok(sample !== null, `行级规则 ${rule.id} 的 test() 认不出任何一个真实文件`)
       assert.ok(existsSync(join(ROOT, sample)), `行级规则 ${rule.id} 指向了不存在的文件：${sample}`)
     }

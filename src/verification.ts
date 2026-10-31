@@ -101,6 +101,15 @@ export type VerificationRefusal =
   | 'already_used'
   /** A required authorization field is empty. */
   | 'incomplete_authorization'
+  /**
+   * The account the live session belongs to could not be established (v0.2.21 P0-2).
+   *
+   * Distinct from `account_mismatch`: that one knows who is logged in and it is the wrong
+   * person; this one does not know. Both refuse, but the remedy differs — one asks the owner to
+   * log in as the right account, the other asks them to check the session at all — and a single
+   * message for both would send them looking in the wrong place.
+   */
+  | 'account_unknown'
   /** The live session is not the authorized account. */
   | 'account_mismatch'
   /** The target is not the authorized thread. */
@@ -252,7 +261,27 @@ export function checkVerification(input: {
 
   // The live identity must be the authorized one. Publishing from a different
   // logged-in account would post as someone who never consented.
-  if (liveAccountId !== undefined && liveAccountId !== authorization.authorizedAccountId) {
+  //
+  // ## `undefined` is a refusal, not a skip (v0.2.21 P0-2)
+  //
+  // The previous form was `if (liveAccountId !== undefined && liveAccountId !== authorized)`.
+  // That reads as defensive but means "we could not find out who is logged in, so we will send
+  // it anyway" — and the record it then writes claims the authorised account made the post,
+  // which is exactly the claim this whole flow exists to be able to make truthfully.
+  //
+  // A read failure and a logged-out session both land here. Refusing is the only answer that
+  // keeps the record honest; the message tells the owner which of the two it looks like.
+  if (liveAccountId === undefined || liveAccountId.trim() === '') {
+    return {
+      ok: false,
+      refusal: 'account_unknown',
+      message:
+        '无法确认当前真实登录的是哪个账号，因此不会发表。' +
+        '验收要证明的是「这个账号能发」，读不到登录态就证明不了——' +
+        '请先在设置页确认登录状态，再回来验收',
+    }
+  }
+  if (liveAccountId !== authorization.authorizedAccountId) {
     return {
       ok: false,
       refusal: 'account_mismatch',

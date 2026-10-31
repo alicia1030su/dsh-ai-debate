@@ -553,8 +553,17 @@ export interface SettingsService {
  */
 export interface VerificationView {
   readonly ok: boolean
-  /** The account the configured session currently reports, read fresh. */
+  /**
+   * The account the live session **actually** reports right now (v0.2.21 P0-2).
+   *
+   * Absent when the session could not be read. It is deliberately not filled from configuration:
+   * the panel used to show the configured id under this name, which told the owner "this is who
+   * is logged in" when nobody had checked. A verification cannot proceed on an unknown account,
+   * so the absence has to survive into the view.
+   */
   readonly liveAccountId?: string
+  /** The configured posting identity. Separate field, because it is a *different fact*. */
+  readonly configuredAccountId?: string
   readonly liveAccountName?: string
   readonly adapterVersion?: string
   readonly capabilities: readonly {
