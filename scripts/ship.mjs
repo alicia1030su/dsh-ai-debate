@@ -548,7 +548,25 @@ function ensurePullRequest(version, branch, defaultBranch) {
   const open = parseJsonArray(existing.stdout)
   if (open.length > 0) {
     log(`已有 PR #${open[0].number}，复用`)
-    return { number: open[0].number, url: open[0].url, created: false }
+    return { number: open[0].number, url: open[0].url, state: 'OPEN', created: false }
+  }
+
+  // 续跑时会碰到 PR 已经被人工合并的情况。只看 `--state open` 会以为「没有 PR」，
+  // 于是要么重建一个（对已合并的分支重建 PR 会失败），要么再拦一次人工授权 ——
+  // 而人工合并本身就已经是那次授权，再要求一次等于让人永远卡在这一步。
+  const merged = run('gh', ['pr', 'list', '--head', branch, '--state', 'merged', '--json', 'number,url,mergeCommit'])
+  if (merged.code === 0) {
+    const closed = parseJsonArray(merged.stdout)
+    if (closed.length > 0) {
+      log(`PR #${closed[0].number} 已被合并，跳过创建`)
+      return {
+        number: closed[0].number,
+        url: closed[0].url,
+        state: 'MERGED',
+        mergeCommit: closed[0].mergeCommit?.oid ?? null,
+        created: false,
+      }
+    }
   }
 
   const body = buildPullRequestBody(version)
@@ -976,30 +994,38 @@ async function main() {
     }
 
     const sensitive = sensitiveCheck()
-    const decision = nextStep({ stage: 'pull_request', sensitive: sensitive.sensitive })
-    if (decision.blocked) {
-      report.status = 'blocked'
-      report.stage = 'pull_request'
-      report.failure = { stage: 'pull_request', reason: decision.reason, recovery: decision.recovery }
-      advanceState(state, { to: 'auto_merge', status: 'blocked', detail: { note: decision.reason, blocks: sensitive.reasons } })
+    if (pr.state === 'MERGED') {
+      // 走到这里说明上一轮停在了 PR，而人是手动合并的 —— 那次合并就是授权。
+      log(`PR #${pr.number} 已被合并（人工授权完成），跳过自动合并与等待检查`)
+      report.github.mergedCommitSha = pr.mergeCommit ?? null
+      advanceState(state, { to: 'tag', detail: { github: { mergedCommitSha: report.github.mergedCommitSha } } })
       saveState()
-      console.log(`\n[ship] 已停在人工审核：${decision.reason}`)
-      console.log(`[ship] PR：${pr.url}`)
-      console.log('[ship] 确认无误后手动 squash 合并，再跑 node scripts/ship.mjs --resume')
-      process.exitCode = 2
-      return
-    }
+    } else {
+      const decision = nextStep({ stage: 'pull_request', sensitive: sensitive.sensitive })
+      if (decision.blocked) {
+        report.status = 'blocked'
+        report.stage = 'pull_request'
+        report.failure = { stage: 'pull_request', reason: decision.reason, recovery: decision.recovery }
+        advanceState(state, { to: 'auto_merge', status: 'blocked', detail: { note: decision.reason, blocks: sensitive.reasons } })
+        saveState()
+        console.log(`\n[ship] 已停在人工审核：${decision.reason}`)
+        console.log(`[ship] PR：${pr.url}`)
+        console.log('[ship] 确认无误后手动 squash 合并，再跑 node scripts/ship.mjs --resume')
+        process.exitCode = 2
+        return
+      }
 
-    if (!reached('wait_checks')) {
-      enableAutoMerge(pr.number)
-      advanceState(state, { to: 'wait_checks' })
+      if (!reached('wait_checks')) {
+        enableAutoMerge(pr.number)
+        advanceState(state, { to: 'wait_checks' })
+        saveState()
+      }
+
+      const mergeInfo = await waitForMerge(pr.number)
+      if (mergeInfo.mergeCommit) report.github.mergedCommitSha = mergeInfo.mergeCommit
+      advanceState(state, { to: 'tag', detail: { github: { mergedCommitSha: mergeInfo.mergeCommit } } })
       saveState()
     }
-
-    const mergeInfo = await waitForMerge(pr.number)
-    if (mergeInfo.mergeCommit) report.github.mergedCommitSha = mergeInfo.mergeCommit
-    advanceState(state, { to: 'tag', detail: { github: { mergedCommitSha: mergeInfo.mergeCommit } } })
-    saveState()
 
     // 合并后重新取 main 的真实提交，用它来判断标签指向哪里。
     run('git', ['fetch', 'origin'])
