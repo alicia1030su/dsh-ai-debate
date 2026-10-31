@@ -177,6 +177,9 @@ jobs:
           path: |
             ${{ steps.pack.outputs.tarball }}
             ${{ steps.pack.outputs.source_zip }}
+          # 产物不存在就是失败。默认行为是「找不到文件只警告、步骤照旧成功」，
+          # 那等于把「这一次到底有没有产出安装包」判成通过。
+          if-no-files-found: error
           retention-days: 30
 
       - name: 创建 GitHub Release
@@ -233,5 +236,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: delivery-status-${{ steps.pack.outputs.version || github.run_id }}
+          # 两个参数缺一不可，v0.2.18 的正式发布就栽在这里：
+          # upload-artifact@v4.4 起默认跳过隐藏文件，而报告写在 .ship/（点开头的目录）里，
+          # 于是这一步什么也没传，却按「找不到文件只警告」的默认行为报告成功 ——
+          # 日志里只有一行 ##[warning]No files were found，运行整体是绿的。
+          # include-hidden-files 让它看得见 .ship/；if-no-files-found: error 让「报告不存在」
+          # 成为失败。上传的职责就是「把报告传上去」，没传成却报告成功，
+          # 等于把「有没有证据」判成通过。
+          include-hidden-files: true
+          if-no-files-found: error
           path: .ship/delivery-status-*.json
           retention-days: 90
