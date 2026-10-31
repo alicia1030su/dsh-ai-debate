@@ -33,6 +33,26 @@ No artifacts will be uploaded.
 `if-no-files-found`；路径里出现点开头的目录时，还必须写 `include-hidden-files: true`。
 写成守卫而不是写在文档里，是因为这类缺陷只在真发布时出现 —— 而真发布一周只有一次。
 
+### 二、报告里的测试文件数少报了三个
+
+报告传上去之后才看得见第二个问题：那份 `delivery-status-0.2.19.json` 里写着
+`tests.files: 93`，而仓库里实际有 **96** 个 `*.test.ts`。
+
+原因是计数只读了 `test/` 顶层：
+
+```js
+const testFileCount = readdirSync(join(root, 'test')).filter((name) => name.endsWith('.test.ts')).length
+```
+
+而 runner 的通配是递归的（`test/**/*.test.ts`），`test/fixtures/` 与 `test/security/`
+下还有三个文件在跑。`scripts/ci-guard.mjs` 数出来的是 96，因为它有自己的递归遍历 ——
+两个口径不一致，错的是报告那个。
+
+这份报告存在的意义，就是让人一眼看出「有没有少跑一个文件」。它自己把证据数少了三个，
+那就不是在报告状态，而是在提供一个看着像证据的数字。改成递归计数，
+并加了一条行为测试：真去跑一次报告脚本，断言 `files` 等于测试自己数出来的文件数 ——
+改回非递归，断言立刻红。
+
 ## [0.2.18] — 2026-10-31
 
 v0.2.17 是**用一条还没在真机上跑完过的流水线**发出去的：那次演练的每一步都是真做的，

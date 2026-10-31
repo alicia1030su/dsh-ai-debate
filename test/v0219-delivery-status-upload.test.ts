@@ -18,7 +18,9 @@
  */
 
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
@@ -146,5 +148,55 @@ describe('v0.2.19 交付状态报告必须真的被上传', () => {
     const step = stepsOf(workflow('release.yml')).find((item) => item.name === '上传交付状态报告')
     assert.ok(step)
     assert.match(step.text, /path:\s*\.ship\//, '工作流必须上传同一个目录，改名不能只在一边改')
+  })
+
+  /**
+   * 报告里的「测试文件数」必须与 `node --test "test/**\/*.test.ts"` 实际会跑的文件数一致。
+   *
+   * v0.2.19 第一次发布这台机器上的报告写的是 `files: 93`，而磁盘上有 96 个
+   * `*.test.ts` —— 因为计数只看了 `test/` 顶层，而 runner 的 glob 是递归的
+   * （`test/fixtures/` 与 `test/security/` 下还有三个）。少报三个文件，
+   * 正是这份报告存在的意义所要防的事：它得能让人看出「少跑了一个文件」。
+   *
+   * 这里直接跑一次真脚本，不看源码里写了什么 —— 把脚本改回非递归，files 会变 93，
+   * 断言就红。
+   */
+  it('报告里的测试文件数是递归数出来的，与实际会跑的文件数一致', () => {
+    const files: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (entry.name.endsWith('.test.ts')) files.push(full)
+      }
+    }
+    walk(join(ROOT, 'test'))
+
+    const flat = readdirSync(join(ROOT, 'test')).filter((name) => name.endsWith('.test.ts'))
+    assert.ok(
+      files.length > flat.length,
+      '这个仓库至少有一个测试文件不在 test/ 顶层；如果真变成全平铺，这条测试要跟着改，而不是留着空跑',
+    )
+
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-report-'))
+    try {
+      const log = join(dir, 'test.log')
+      writeFileSync(log, 'ℹ tests 1\nℹ pass 1\nℹ fail 0\nℹ skipped 0\n', 'utf8')
+      const out = join(dir, 'report.json')
+      const result = spawnSync(
+        process.execPath,
+        [join(ROOT, 'scripts', 'delivery-status-report.mjs'), '--test-log', log, '--out', out],
+        { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 },
+      )
+      assert.equal(result.status, 0, `报告脚本应当能跑完：${result.stderr ?? ''}`)
+      const report = JSON.parse(readFileSync(out, 'utf8')) as { tests: { files: number | null } }
+      assert.equal(
+        report.tests.files,
+        files.length,
+        `报告说跑了 ${String(report.tests.files)} 个文件，磁盘上有 ${files.length} 个`,
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

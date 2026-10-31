@@ -114,7 +114,21 @@ if (report.github.runs.ci === null) {
 
 // 测试文件数可以直接数：报告生成时仓库就在磁盘上。它与日志里的用例数一起，
 // 让「少跑了一个文件」这种事在报告里看得见。
-const testFileCount = readdirSync(join(root, 'test')).filter((name) => name.endsWith('.test.ts')).length
+//
+// 必须递归。`node --test "test/**/*.test.ts"` 是递归的，而 v0.2.19 之前的这里只数
+// 顶层目录 —— 报告里因此写 93，实际有 96 个文件在跑（test/fixtures/ 与 test/security/
+// 下还有三个）。一个把「证据有多少」数少了的报告，正是这一版要消灭的那类东西。
+function countTestFiles(dir) {
+  let count = 0
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) count += countTestFiles(full)
+    else if (entry.name.endsWith('.test.ts')) count += 1
+  }
+  return count
+}
+
+const testFileCount = countTestFiles(join(root, 'test'))
 
 if (testLogPath !== null) {
   if (!existsSync(testLogPath)) {
