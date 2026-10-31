@@ -160,6 +160,19 @@ describe('v0.2.19 交付状态报告必须真的被上传', () => {
    *
    * 这里直接跑一次真脚本，不看源码里写了什么 —— 把脚本改回非递归，files 会变 93，
    * 断言就红。
+   *
+   * ## 为什么显式传 `--status blocked`
+   *
+   * 这个脚本的默认 status 是 `success`，而 `success` 有一道自洽校验：必须有附件。
+   * 在标签构建里，工作流的测试步骤跑在**打包之前**，仓库根没有产物 —— 于是脚本
+   * 按 `status 是 success 但没有附件` 退出 1，这条测试跟着红。v0.2.19 第一次发布
+   * 就是这样倒的：它只在我的机器上绿，因为我的机器根上恰好躺着上一次构建的产物。
+   *
+   * **一条只有在构建产物存在时才通过的测试，测的不是被测代码，测的是环境。**
+   * 这里要验的是「报告里那个文件数怎么数」，与「这次构建有没有产出安装包」无关，
+   * 所以让它走 `blocked` 分支：blocked 不声称发布成功，也就不需要附件，
+   * 而 `tests.files` 仍然照常计算。顺带断言 status 确实是 blocked —— 证明脚本
+   * 听从了传进去的值，而不是又被环境左右。
    */
   it('报告里的测试文件数是递归数出来的，与实际会跑的文件数一致', () => {
     const files: string[] = []
@@ -185,11 +198,25 @@ describe('v0.2.19 交付状态报告必须真的被上传', () => {
       const out = join(dir, 'report.json')
       const result = spawnSync(
         process.execPath,
-        [join(ROOT, 'scripts', 'delivery-status-report.mjs'), '--test-log', log, '--out', out],
+        [
+          join(ROOT, 'scripts', 'delivery-status-report.mjs'),
+          '--test-log',
+          log,
+          '--status',
+          'blocked',
+          '--stage',
+          'release',
+          '--out',
+          out,
+        ],
         { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 },
       )
       assert.equal(result.status, 0, `报告脚本应当能跑完：${result.stderr ?? ''}`)
-      const report = JSON.parse(readFileSync(out, 'utf8')) as { tests: { files: number | null } }
+      const report = JSON.parse(readFileSync(out, 'utf8')) as {
+        status: string
+        tests: { files: number | null }
+      }
+      assert.equal(report.status, 'blocked', '脚本必须听从传入的 status，而不是按环境自行改口')
       assert.equal(
         report.tests.files,
         files.length,
