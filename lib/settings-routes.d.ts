@@ -187,6 +187,15 @@ export interface SettingsRouteDeps {
      */
     runVerification?(input: VerificationActionInput): Promise<VerificationRunView>;
     /**
+     * The publish workbench read model (v0.2.22 §一).
+     *
+     * Optional like the others: a build without the publishing stack shows "this build has no
+     * workbench" rather than an empty success.
+     */
+    workbench?(input: {
+        readonly sessionId?: string;
+    }): Promise<WorkbenchView>;
+    /**
      * Candidates that are waiting for a human approval, newest first.
      *
      * This is what makes the approval section possible: the page cannot approve something
@@ -453,6 +462,66 @@ export interface VerificationRunView {
  *   owner sees which field is missing instead of a publish to an empty account id.
  */
 export declare function authorizationFromInput(input: VerificationActionInput): VerificationAuthorization;
+/**
+ * The publish workbench's read model (v0.2.22 §一).
+ *
+ * Deliberately the same shape `deriveWorkbenchState()` returns plus the candidate list the owner
+ * needs to compare — the page renders what the server derived, so the "which step am I on"
+ * answer cannot differ between a refresh and the live process.
+ */
+export interface WorkbenchView {
+    readonly ok: boolean;
+    /** Present once a session exists. */
+    readonly sessionId?: string;
+    readonly platform?: string;
+    readonly threadUrl?: string;
+    readonly threadTitle?: string;
+    /** The derived steps and blockers, straight from `deriveWorkbenchState`. */
+    readonly workbench?: {
+        readonly step: string;
+        readonly steps: readonly {
+            readonly id: string;
+            readonly title: string;
+            readonly status: string;
+        }[];
+        readonly blockers: readonly string[];
+        readonly missingEvidence: readonly {
+            readonly what: string;
+            readonly detail: string;
+        }[];
+        readonly outcome: string;
+        readonly counts: {
+            readonly floors: number;
+            readonly nested: number;
+            readonly candidates: number;
+        };
+        readonly target?: {
+            readonly threadId: string;
+            readonly postId: string;
+            readonly kind: string;
+            readonly authorName?: string;
+        };
+        readonly capability?: {
+            readonly declared: string;
+            readonly effective: string;
+            readonly reason: string;
+        };
+    };
+    /** Candidates, newest last, for the compare-and-edit pane. */
+    readonly candidates?: readonly {
+        readonly replyId: string;
+        readonly text: string;
+        readonly strategy: string;
+        readonly candidateVersion: number;
+        readonly textHash: string;
+        readonly approved: boolean;
+        readonly targetPostId: string;
+        readonly createdAt: string;
+        readonly violations: readonly string[];
+    }[];
+    /** Why the page cannot render a workbench at all, when it cannot. */
+    readonly blockers: readonly string[];
+}
 export interface SettingsService {
     writable: boolean;
     update(namespace: string, patch: Record<string, unknown>): Promise<unknown>;
@@ -665,6 +734,7 @@ export declare const ROUTE_STATUS = "/api/dsh-ai-debate/status";
 export declare const ROUTE_ACTION = "/api/dsh-ai-debate/action";
 export declare const ROUTE_APPROVE = "/api/dsh-ai-debate/approve";
 export declare const ROUTE_VERIFICATION = "/api/dsh-ai-debate/verification";
+export declare const ROUTE_WORKBENCH = "/api/dsh-ai-debate/workbench";
 /** A masked tail, exposed for the diagnostics panel's credential rows. */
 export { maskedTail };
 /** The config the route family serves, resolved from a raw row config. */

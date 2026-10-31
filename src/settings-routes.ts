@@ -246,6 +246,13 @@ export interface SettingsRouteDeps {
    */
   runVerification?(input: VerificationActionInput): Promise<VerificationRunView>
   /**
+   * The publish workbench read model (v0.2.22 §一).
+   *
+   * Optional like the others: a build without the publishing stack shows "this build has no
+   * workbench" rather than an empty success.
+   */
+  workbench?(input: { readonly sessionId?: string }): Promise<WorkbenchView>
+  /**
    * Candidates that are waiting for a human approval, newest first.
    *
    * This is what makes the approval section possible: the page cannot approve something
@@ -532,6 +539,47 @@ export function authorizationFromInput(input: VerificationActionInput): Verifica
     ...(input.authorizedFloorId !== undefined ? { authorizedFloorId: input.authorizedFloorId } : {}),
     ...(input.replyToPostId !== undefined ? { replyToPostId: input.replyToPostId } : {}),
   }
+}
+
+/**
+ * The publish workbench's read model (v0.2.22 §一).
+ *
+ * Deliberately the same shape `deriveWorkbenchState()` returns plus the candidate list the owner
+ * needs to compare — the page renders what the server derived, so the "which step am I on"
+ * answer cannot differ between a refresh and the live process.
+ */
+export interface WorkbenchView {
+  readonly ok: boolean
+  /** Present once a session exists. */
+  readonly sessionId?: string
+  readonly platform?: string
+  readonly threadUrl?: string
+  readonly threadTitle?: string
+  /** The derived steps and blockers, straight from `deriveWorkbenchState`. */
+  readonly workbench?: {
+    readonly step: string
+    readonly steps: readonly { readonly id: string; readonly title: string; readonly status: string }[]
+    readonly blockers: readonly string[]
+    readonly missingEvidence: readonly { readonly what: string; readonly detail: string }[]
+    readonly outcome: string
+    readonly counts: { readonly floors: number; readonly nested: number; readonly candidates: number }
+    readonly target?: { readonly threadId: string; readonly postId: string; readonly kind: string; readonly authorName?: string }
+    readonly capability?: { readonly declared: string; readonly effective: string; readonly reason: string }
+  }
+  /** Candidates, newest last, for the compare-and-edit pane. */
+  readonly candidates?: readonly {
+    readonly replyId: string
+    readonly text: string
+    readonly strategy: string
+    readonly candidateVersion: number
+    readonly textHash: string
+    readonly approved: boolean
+    readonly targetPostId: string
+    readonly createdAt: string
+    readonly violations: readonly string[]
+  }[]
+  /** Why the page cannot render a workbench at all, when it cannot. */
+  readonly blockers: readonly string[]
 }
 
 export interface SettingsService {
@@ -1227,6 +1275,38 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     }
   })
 
+  /**
+   * The publish workbench's read side (v0.2.22 §一).
+   *
+   * Behind the same `guard` as every other read: the thread title, the candidate texts and the
+   * blockers are all facts about the owner's own session. No write happens here, and in
+   * particular **nothing in this route can re-send a publish** — refreshing the page must be
+   * safe by construction, not by remembering not to do it.
+   */
+  const workbenchRoute = guard(async (request, response) => {
+    if ((request.method ?? 'GET') !== 'GET') {
+      writeJson(response, 405, { error: `method not allowed: ${request.method ?? 'GET'}` })
+      return
+    }
+    if (deps.workbench === undefined) {
+      writeJson(response, 200, {
+        ok: false,
+        blockers: ['当前构建没有接上发表工作台（workbench 未提供）'],
+      } satisfies WorkbenchView)
+      return
+    }
+    const url = new URL(request.url ?? '/', 'http://localhost')
+    const sessionId = url.searchParams.get('sessionId') ?? undefined
+    try {
+      writeJson(response, 200, await deps.workbench(sessionId === undefined ? {} : { sessionId }))
+    } catch (error) {
+      writeJson(response, 200, {
+        ok: false,
+        blockers: [`读取工作台状态失败：${(error as Error).message}`],
+      } satisfies WorkbenchView)
+    }
+  })
+
   const actionRoute = guard(async (request, response) => {
     if ((request.method ?? 'GET') !== 'POST') {
       writeJson(response, 405, { error: `method not allowed: ${request.method ?? 'GET'}` })
@@ -1366,6 +1446,7 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     { kind: 'exact', path: `${ROUTE_PREFIX}/status`, handler: statusRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/action`, handler: actionRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/verification`, handler: verificationRoute },
+    { kind: 'exact', path: `${ROUTE_PREFIX}/workbench`, handler: workbenchRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/approve`, handler: approveRoute },
   ]
 }
@@ -1377,6 +1458,7 @@ export const ROUTE_STATUS = `${ROUTE_PREFIX}/status`
 export const ROUTE_ACTION = `${ROUTE_PREFIX}/action`
 export const ROUTE_APPROVE = `${ROUTE_PREFIX}/approve`
 export const ROUTE_VERIFICATION = `${ROUTE_PREFIX}/verification`
+export const ROUTE_WORKBENCH = `${ROUTE_PREFIX}/workbench`
 
 /** A masked tail, exposed for the diagnostics panel's credential rows. */
 export { maskedTail }
