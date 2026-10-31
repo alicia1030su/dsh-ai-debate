@@ -29,6 +29,10 @@ coverage/
 # 与当前混在一起，而且下次运行必然产生一个 dirty 工作区。
 .ship/
 
+# 界面截图用的演示状态文件（只看渲染，不进仓库、不进包）。
+.screenshot-store/
+
+
 # 注意：lib/ 是刻意提交的。
 # 它让用户从 GitHub 安装插件后无需自己编译 TypeScript，
 # 这是本项目的发布约定，见 README「安装」一节。

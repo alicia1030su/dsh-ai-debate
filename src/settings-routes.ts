@@ -246,6 +246,65 @@ export interface SettingsRouteDeps {
    */
   runVerification?(input: VerificationActionInput): Promise<VerificationRunView>
   /**
+   * The publish workbench read model (v0.2.22 §一).
+   *
+   * Optional like the others: a build without the publishing stack shows "this build has no
+   * workbench" rather than an empty success.
+   */
+  workbench?(input: { readonly sessionId?: string }): Promise<WorkbenchView>
+  /**
+   * Edit one candidate's text (v0.2.22 §三).
+   *
+   * A separate write from approve/publish because it invalidates both: the response is the new
+   * version and hash, so the page can show that the old approval no longer applies instead of
+   * discovering it on the next publish attempt.
+   */
+  editCandidate?(input: {
+    readonly sessionId: string
+    readonly candidateId: string
+    readonly text: string
+  }): Promise<{ readonly ok: boolean; readonly message?: string; readonly candidateVersion?: number; readonly textHash?: string }>
+  /**
+   * Collect and analyse one discussion (v0.2.22 §二).
+   *
+   * The same `runAnalysis` the agent tool uses, reached from the owner's form. It reads the
+   * thread and produces the session + reconstruction; it never publishes, and it cannot choose
+   * the target on the owner's behalf.
+   */
+  analyzeThread?(input: {
+    readonly url: string
+    readonly postId?: string
+    readonly ownerInstruction?: string
+  }): Promise<{ readonly ok: boolean; readonly message?: string; readonly sessionId?: string }>
+  /**
+   * Generate candidates for an existing session (v0.2.22 §三).
+   *
+   * Reuses the generator and the persona; each call bumps the candidate version, which is what
+   * retires any earlier approval.
+   */
+  generateCandidates?(input: {
+    readonly sessionId: string
+    readonly style?: string
+    readonly ownerInstruction?: string
+  }): Promise<{ readonly ok: boolean; readonly message?: string; readonly candidates?: number }>
+  /**
+   * Publish one approved candidate (v0.2.22 §四/§五).
+   *
+   * Deliberately goes through `runPublish` — the only path that can reach a platform — so the
+   * workbench inherits the capability gate, the approval check, the ledger and the read-back
+   * rather than reimplementing any of them.
+   */
+  publishApproved?(input: {
+    readonly sessionId: string
+    readonly candidateId: string
+    readonly approvedText: string
+  }): Promise<{
+    readonly ok: boolean
+    readonly status: string
+    readonly message: string
+    readonly postId?: string
+  }>
+  /**
    * Candidates that are waiting for a human approval, newest first.
    *
    * This is what makes the approval section possible: the page cannot approve something
@@ -532,6 +591,66 @@ export function authorizationFromInput(input: VerificationActionInput): Verifica
     ...(input.authorizedFloorId !== undefined ? { authorizedFloorId: input.authorizedFloorId } : {}),
     ...(input.replyToPostId !== undefined ? { replyToPostId: input.replyToPostId } : {}),
   }
+}
+
+/**
+ * The publish workbench's read model (v0.2.22 §一).
+ *
+ * Deliberately the same shape `deriveWorkbenchState()` returns plus the candidate list the owner
+ * needs to compare — the page renders what the server derived, so the "which step am I on"
+ * answer cannot differ between a refresh and the live process.
+ */
+export interface WorkbenchView {
+  readonly ok: boolean
+  /** Present once a session exists. */
+  readonly sessionId?: string
+  readonly platform?: string
+  readonly threadUrl?: string
+  readonly threadTitle?: string
+  /** The derived steps and blockers, straight from `deriveWorkbenchState`. */
+  readonly workbench?: {
+    readonly step: string
+    readonly steps: readonly { readonly id: string; readonly title: string; readonly status: string }[]
+    readonly blockers: readonly string[]
+    readonly missingEvidence: readonly { readonly what: string; readonly detail: string }[]
+    readonly outcome: string
+    readonly counts: { readonly floors: number; readonly nested: number; readonly candidates: number }
+    readonly target?: { readonly threadId: string; readonly postId: string; readonly kind: string; readonly authorName?: string }
+    readonly capability?: { readonly declared: string; readonly effective: string; readonly reason: string }
+  }
+  /** Candidates, newest last, for the compare-and-edit pane. */
+  readonly candidates?: readonly {
+    readonly replyId: string
+    readonly text: string
+    readonly strategy: string
+    readonly candidateVersion: number
+    readonly textHash: string
+    readonly approved: boolean
+    readonly targetPostId: string
+    readonly createdAt: string
+    readonly violations: readonly string[]
+    /**
+     * The security assessment fingerprint, when one was recorded.
+     *
+     * Present so the workbench can submit an approval whose `expected` snapshot matches what it
+     * displayed. The approve route refuses a request without a complete snapshot — a page that
+     * "approves whatever is stored now" is exactly the v0.2.7 hole — so this is not an optional
+     * convenience, it is what makes approving from the workbench possible at all.
+     */
+    readonly assessmentFingerprint?: string
+  }[]
+  /**
+   * The full expectation the approve route requires, built from the facts above.
+   *
+   * `null` when it cannot be built (no bound publishing account, no assessment, no snapshot) —
+   * and then the workbench must *not* offer an approve button, because the record it would create
+   * could never authorise the publish it claims to.
+   */
+  readonly approveExpectation?: Record<string, unknown> | null
+  /** Why the expectation is unavailable, when it is. */
+  readonly approveBlocked?: string
+  /** Why the page cannot render a workbench at all, when it cannot. */
+  readonly blockers: readonly string[]
 }
 
 export interface SettingsService {
@@ -1227,6 +1346,38 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     }
   })
 
+  /**
+   * The publish workbench's read side (v0.2.22 §一).
+   *
+   * Behind the same `guard` as every other read: the thread title, the candidate texts and the
+   * blockers are all facts about the owner's own session. No write happens here, and in
+   * particular **nothing in this route can re-send a publish** — refreshing the page must be
+   * safe by construction, not by remembering not to do it.
+   */
+  const workbenchRoute = guard(async (request, response) => {
+    if ((request.method ?? 'GET') !== 'GET') {
+      writeJson(response, 405, { error: `method not allowed: ${request.method ?? 'GET'}` })
+      return
+    }
+    if (deps.workbench === undefined) {
+      writeJson(response, 200, {
+        ok: false,
+        blockers: ['当前构建没有接上发表工作台（workbench 未提供）'],
+      } satisfies WorkbenchView)
+      return
+    }
+    const url = new URL(request.url ?? '/', 'http://localhost')
+    const sessionId = url.searchParams.get('sessionId') ?? undefined
+    try {
+      writeJson(response, 200, await deps.workbench(sessionId === undefined ? {} : { sessionId }))
+    } catch (error) {
+      writeJson(response, 200, {
+        ok: false,
+        blockers: [`读取工作台状态失败：${(error as Error).message}`],
+      } satisfies WorkbenchView)
+    }
+  })
+
   const actionRoute = guard(async (request, response) => {
     if ((request.method ?? 'GET') !== 'POST') {
       writeJson(response, 405, { error: `method not allowed: ${request.method ?? 'GET'}` })
@@ -1309,6 +1460,68 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
       writeJson(response, 200, outcome)
       return
     }
+    // Editing a candidate's text (v0.2.22 §三). Behind the guard like every other write, and
+    // deliberately narrow: it rewrites prose and nothing else. It cannot approve, cannot publish,
+    // and cannot change the target — those are separate actions with their own gates.
+    if (action === 'edit-candidate') {
+      if (deps.editCandidate === undefined) {
+        writeJson(response, 200, { ok: false, message: '当前构建没有接上候选编辑（editCandidate 未提供）' })
+        return
+      }
+      const outcome = await deps.editCandidate({
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+        candidateId: typeof body.candidateId === 'string' ? body.candidateId : '',
+        text: typeof body.text === 'string' ? body.text : '',
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
+    // Collect and analyse a discussion (v0.2.22 §二). The owner pastes a link; everything after
+    // that is the same code the agent tool runs.
+    if (action === 'analyze-thread') {
+      if (deps.analyzeThread === undefined) {
+        writeJson(response, 200, { ok: false, message: '当前构建没有接上讨论收集（analyzeThread 未提供）' })
+        return
+      }
+      const outcome = await deps.analyzeThread({
+        url: typeof body.url === 'string' ? body.url : '',
+        ...(typeof body.postId === 'string' && body.postId !== '' ? { postId: body.postId } : {}),
+        ...(typeof body.ownerInstruction === 'string' ? { ownerInstruction: body.ownerInstruction } : {}),
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
+    // Generate candidates (v0.2.22 §三). Reuses the generator and persona; each call bumps the
+    // candidate version, which is what retires an earlier approval.
+    if (action === 'generate-candidates') {
+      if (deps.generateCandidates === undefined) {
+        writeJson(response, 200, { ok: false, message: '当前构建没有接上候选生成（generateCandidates 未提供）' })
+        return
+      }
+      const outcome = await deps.generateCandidates({
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+        ...(typeof body.style === 'string' && body.style !== '' ? { style: body.style } : {}),
+        ...(typeof body.ownerInstruction === 'string' ? { ownerInstruction: body.ownerInstruction } : {}),
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
+    // Publish one approved candidate (v0.2.22 §四). This route does not approve anything and does
+    // not retry: `runPublish` owns the ledger, the capability gate and the read-back, and it
+    // refuses an approval that no longer matches the bytes.
+    if (action === 'publish-approved') {
+      if (deps.publishApproved === undefined) {
+        writeJson(response, 200, { ok: false, status: 'refused', message: '当前构建没有接上工作台发表' })
+        return
+      }
+      const outcome = await deps.publishApproved({
+        sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
+        candidateId: typeof body.candidateId === 'string' ? body.candidateId : '',
+        approvedText: typeof body.approvedText === 'string' ? body.approvedText : '',
+      })
+      writeJson(response, 200, outcome)
+      return
+    }
     writeJson(response, 400, { error: `未知操作 "${String(action)}"` })
   })
 
@@ -1366,6 +1579,7 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     { kind: 'exact', path: `${ROUTE_PREFIX}/status`, handler: statusRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/action`, handler: actionRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/verification`, handler: verificationRoute },
+    { kind: 'exact', path: `${ROUTE_PREFIX}/workbench`, handler: workbenchRoute },
     { kind: 'exact', path: `${ROUTE_PREFIX}/approve`, handler: approveRoute },
   ]
 }
@@ -1377,6 +1591,7 @@ export const ROUTE_STATUS = `${ROUTE_PREFIX}/status`
 export const ROUTE_ACTION = `${ROUTE_PREFIX}/action`
 export const ROUTE_APPROVE = `${ROUTE_PREFIX}/approve`
 export const ROUTE_VERIFICATION = `${ROUTE_PREFIX}/verification`
+export const ROUTE_WORKBENCH = `${ROUTE_PREFIX}/workbench`
 
 /** A masked tail, exposed for the diagnostics panel's credential rows. */
 export { maskedTail }
