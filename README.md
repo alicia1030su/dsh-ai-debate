@@ -155,11 +155,17 @@ dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#
 
 ### 方式二：本地 .tgz 安装包
 
-使用仓库根目录构建好的 `dsh-ai-debate-0.2.16.tgz`（正式 Release 尚未创建）。
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.16) 下载
+`dsh-ai-debate-0.2.16.tgz`，或在仓库根目录自行构建：
 
 ```bash
+node scripts/pack.mjs
 dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.16.tgz
 ```
+
+发布页同时附上 `dsh-ai-debate-source-0.2.16.zip`（含 `pnpm-lock.yaml` 与编译好的
+`lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
+应当得到与本机发布产物**字节一致**的 `.tgz`——校验和写在发布说明里，可以自行核对。
 
 ### 方式三：本地目录安装（开发者）
 

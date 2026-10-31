@@ -7,7 +7,8 @@
 把「可复现」从一句承诺变成一条能被别人重跑的命令。**核心变化：源码 ZIP 补上
 `pnpm-lock.yaml` 与编译后的 `lib/`，因此可以在全新机器上从零装依赖、编译、测试、
 打包出字节一致的 TGZ；GitHub Actions 在 Node 22.18 与 Node 24 上真跑通过，
-过程中暴露的两处 CI 缺陷已修。**
+v0.2.16 正式 Release 由真实标签触发并附上两个产物，过程中暴露的三处缺陷已修
+（源码包漏收文件、两处 CI 缺陷，以及打了标签才发现的发布工作流本身）。**
 
 ### 一、P0 源码包缺锁文件与编译产物
 
@@ -62,14 +63,47 @@
 工作流改为直接跑 `node scripts/audit-leaks.mjs`，规则只剩一份；给
 `BDUSS` / `BAIDUID` 补上 `(?!fixture-)` 否词，与 `ST` / `sk-` 保持一致。
 
-### 五、真实远端验收
+### 五、打了标签才发现的发布工作流缺陷
+
+PR 合并后打 `v0.2.16` 标签，Release 跑起来就挂了，而且是**从来就没成功过**的那一步：
+
+```
+##[error]Invalid pattern '../dsh-ai-debate-source-0.2.16.zip'.
+Relative pathing '.' and '..' is not allowed.
+```
+
+`source-zip.mjs` 一直把源码包写在项目**上一级**目录，而 `upload-artifact@v4` 不接受任何
+含 `..` 的路径。CI 之所以一直是绿的，是因为 `ci.yml` 只生成和扫描、从不上传；一走到
+Release 的上传步骤就断。**「CI 绿」不等于「发布路径通过」——上传动作只在标签上才发生。**
+
+改法不是把路径拼回去，而是让归档能落在指定目录：`source-zip.mjs` 接受 `--out <dir>`，
+默认仍是上一级（本地开发照旧），CI 传 `--out .` 让归档落在工作区内。`ci-guard` 同步改成
+先找上一级、再找工作区，两种调用都认，不再假装只有一种写法是对的。
+
+### 六、发布产物必须只由内容决定
+
+第一次拿到发布产物后逐个字节比了一遍，发现两处平台指纹：
+
+1. **gzip 头的 OS 字节**。`pack.mjs` 早把 gzip mtime 固定成 0，却漏了第 9 个字节——zlib 会
+   填进编译时的平台（Linux `0x03`、Windows `0x0a`）。结果 CI 发布的 TGZ 是 `ac7200c3…`，
+   同一份源码在 Windows 上重建是 `77234900…`：长度一致、只差 1 个字节。
+   **发布说明里印出来的校验和，恰好在本项目自己的开发机上对不上。**
+   修法是把该字节固定成 `255`（unknown），平台不再泄进产物。
+2. **两个文件的尾部 CR**。工作区里 `scripts/configure-stage.mjs` 与 `test/target.test.ts`
+   结尾是 CRLF 而仓库里是 LF，本地源码包因此比 GitHub 上的大 5 字节。
+
+修完后本机重建的源码包与 GitHub 发布的那份**字节完全一致**，TGZ 同理。
+
+### 七、真实远端验收
 
 仓库 `alicia1030su/dsh-ai-debate`，分支 `v0.2.16-ci-lockfile-and-lib`，
-PR #1，Run 41107919423：Node 22.18 与 Node 24 两个 Job 均 success，
+PR #1（已合并，合并提交 `df40eec`）：Node 22.18 与 Node 24 两个 Job 均 success，
 各 1062 项测试通过（1 项 skip 是「尚未打包时跳过本仓库扫描」的诚实分支），
 477 条目源码包与 246 条目 TGZ 双扫描零命中，CI 守卫退出码 0。
 
-### 新增测试（9 项，合计 1062 项）
+`v0.2.16` 标签由 `release.yml` 真正发布了 Release，附 246 条目 TGZ 与 479 条目源码包。
+
+### 新增测试（14 项，合计 1067 项）
 
 - `test/v0216-archive-guard.test.ts`（5）：无归档且未声明时跳过并通过、
   声明后无归档必须失败、守卫不得再引用 `process.env.CI` 判断归档、
@@ -77,12 +111,16 @@ PR #1，Run 41107919423：Node 22.18 与 Node 24 两个 Job 均 success，
 - `test/v0216-credential-scan.test.ts`（4）：工作流不得再有内联 Cookie 规则、
   四条规则都带 `(?!fixture-)`、本仓库对扫描是绿的、真形态 Cookie 必须让
   扫描失败——否则「放过 fixture」可能退化成「整体失灵」。
+- `test/v0216-artifact-determinism.test.ts`（5）：gzip 头 OS 必须 255 且 mtime 为 0、
+  同内容两次打包字节相同、内容改一字节产物必须变、`createTgz` 不得直接返回
+  `gzipSync` 的结果、归档里的文本文件不得出现 CRLF。
 
-### 六、仍未完成（如实记录）
+### 八、仍未完成（如实记录）
 
-- 微博真实读取：本机无官方 CLI、无 OAuth 授权，未验证。
-- 贴吧真实发表回读：无授权的测试账号与测试帖，未验证。
-- 正式 Release 未创建（需要单独授权）。
+- 微博真实读取：官方 CLI 已装（0.9.8），但 `weibo-cli doctor` 三项全红
+  （未注册登录 / 未完开发者认证 / 未开通服务），未验证。
+- 贴吧真实发表回读：本机出口被平台判定为受限，`tieba.baidu.com` 一律 403，
+  未验证。
 
 ## [0.2.15] — 2026-10-30
 

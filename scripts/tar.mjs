@@ -108,11 +108,25 @@ export function createTar(entries, mtimeMs = Date.now()) {
  *
  * The gzip mtime is pinned to zero so identical input produces identical bytes
  * on every machine, which is what makes a published checksum meaningful.
+ *
+ * Pinning the mtime is not enough on its own. zlib fills the header's OS byte with the
+ * platform it was compiled for: `0x03` on Linux, `0x0a` on Windows, `0x13` on macOS. The
+ * .tgz published by CI (Linux) therefore carried a byte a Windows build could never
+ * reproduce, and the checksum printed in the release notes was not verifiable on the
+ * machine the project is actually developed on. Byte 9 is overwritten with `255`
+ * ("unknown") so the platform stops leaking into the artifact; nothing else in the header
+ * moves, and the header is not covered by the CRC, so compression and integrity are
+ * untouched.
  * @param {Array<{ path: string, data: Buffer, mode?: number }>} entries files in archive order
  * @returns {Buffer} the .tgz bytes
  */
 export function createTgz(entries) {
-  return gzipSync(createTar(entries, 0), { level: 9, mtime: 0 })
+  const gz = gzipSync(createTar(entries, 0), { level: 9, mtime: 0 })
+  if (gz.length < 10 || gz[0] !== 0x1f || gz[1] !== 0x8b || gz[2] !== 0x08 || gz[3] !== 0x00) {
+    throw new Error('gzip 头不是预期的 10 字节无扩展格式，无法固定 OS 字节')
+  }
+  gz[9] = 255
+  return gz
 }
 
 /**
