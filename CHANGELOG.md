@@ -2,6 +2,164 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.17] — 2026-10-31
+
+把「交付」从一串需要人一次次下指令的步骤，变成一条能自己跑完、失败能自己交代清楚、
+并且**不敢悄悄绕过门禁**的链路。**核心变化：新增 `scripts/ship.mjs` 一条命令跑完
+建分支→验证→提交→推送→PR→自动合并→打标签→发 Release→核验附件；新增工作流自身的测试、
+Release 的无发布模拟、机器可读交付状态报告；修掉 v0.2.16 报告里三个提交被混成一个的问题，
+并拦住「移动已发布标签」这种会毁掉可复现性的操作。**
+
+### 一、一条命令，但门禁一步不少
+
+`scripts/ship.mjs` 编排十二个阶段，每个阶段的失败都写成「哪个阶段、什么原因、怎么恢复」：
+
+```
+preflight → branch → verify → commit → push → pull_request
+         → auto_merge → wait_checks → tag → release → verify_release → done
+```
+
+- `--dry-run` 只走到验证通过，不碰远端；`--resume` 从 `.ship/state.json` 续；`--status` 只看不动。
+- 状态原子写入（先写 `.tmp` 再 rename），中断时读者看到的要么是旧的完整状态，要么是新的。
+- 决策逻辑单列在 `scripts/lib/ship-core.mjs`（纯函数、无 I/O），因此可以离线穷举测试；
+  编排本身不测 —— 用替身测出来的「编排正确」和真实 GitHub 行为常常不是一回事，那部分交给真实演练。
+
+**不会为了自动化而绕过的东西**：
+
+- 合并用 `gh pr merge --squash --auto`，**代码里没有 `--admin`**，CI 守卫会断言这一点。
+- 推送永不 `--force`。
+- 提交前检查暂存区，出现 `.env` / `id_rsa` / `.netrc` / `.npmrc` / `.git-credentials` 直接停。
+- 凭据只走 `gh` 的 keyring 授权。脚本**不接受、不打印、不写入、不上传**任何 Token；
+  PR 正文与日志里没有凭据位。
+
+### 二、`waitForMerge` 曾经是一段假门禁
+
+仓库原来既没有分支保护也没有必需检查。这种情况下 `gh pr merge --auto` 会**立刻**合并 ——
+它没有任何东西要等。「等 CI 绿再合」在配置层面根本不成立，不管脚本里写多少等待逻辑。
+
+现在合并前先做三件事：
+
+1. 确认仓库允许 squash（否则 auto-merge 的工作方式不是约定的那样）；
+2. 从 `main` 的 ruleset 里读出真正的**必需检查**列表，一项都没有就停，并给出配置链接；
+3. 检查出错立刻报错退出，不等到超时 —— 那时候日志早就被后续运行挤走了。
+
+配套地，仓库侧开启了 `allow_auto_merge`、`delete_branch_on_merge`，并新建 ruleset
+`main 保护：必需检查 + 禁止删除 + 禁止强推`：必需 `编译与测试（Node 22.18）` 与
+`编译与测试（Node 24）`，禁止删除分支、禁止强推，`bypass_actors` 为空。
+**没有勾 Require approvals** —— 本仓库只有一个维护者，勾了会让 auto-merge 永远等不到人。
+
+### 三、敏感改动停在 PR，不自动合并
+
+`ship-core.mjs` 的 `SENSITIVE_RULES` 标记八类路径，命中时**不启用 auto-merge**，只把 PR 交给人：
+
+| 规则 | 覆盖 |
+| --- | --- |
+| `workflow` | `.github/workflows/*`（Actions 权限、触发条件、发布路径） |
+| `actions-config` | `CODEOWNERS`、`dependabot.yml` |
+| `scan-rules` | `audit-leaks.mjs`、`scan-archive.mjs`（扫描规则本身） |
+| `pack-rules` | `source-zip.mjs`、`pack.mjs`、`tar.mjs`（白名单与打包） |
+| `ship-logic` | `ship.mjs`、`ship-core.mjs`、`delivery-status.mjs`（发布逻辑） |
+| `security-boundary` | `src/security/**` |
+| `platform-publish` | `src/platforms/<平台>/(publish\|reply\|comment)*.ts` |
+| `plugin-loading` | `cordis.patch.yml` |
+
+`package.json` 只有动到 `dependencies` / `peerDependencies` / `optionalDependencies` /
+`engines` / `dsh` / `scripts` 才算敏感 —— 否则每改一次版本号都要停下来等人，等于没有自动化。
+
+结论：**改这条流水线自己，必须由人来合。** 这是有意的。
+
+### 四、Release 的发布说明不再只在打标签时执行
+
+那段逻辑原本是 `release.yml` 里的 `awk` 截 CHANGELOG + 一串 `echo` 拼安装段。它只在标签触发时
+才跑，所以写错了要等一次**公开的失败发版**才知道 —— v0.2.16 发布说明里的哈希与附件对不上正是
+这样漏出去的。
+
+现在它在 `scripts/lib/release-notes.mjs`（纯函数），由 `scripts/release-dry-run.mjs` 驱动：
+
+- CI 每次推送都跑一遍，检查安装命令、附件名、哈希格式、有没有占位词；
+- 发布时 `--emit /tmp/notes.md`，同一段代码，只是多写一个文件。
+
+实测忠实度：用 v0.2.16 的 CHANGELOG 与两个现成产物跑，产出 4185 字符 / 132 行，两个哈希
+（`48ad404b…`、`892ccdfe…`）与已发布的 v0.2.16 Release 附件**完全一致**。
+
+### 五、会变的数字交给机器，人只写「为什么」
+
+v0.2.16 的验收报告写着「发布提交 `f1c111c`」，而标签实际指向 `57ffec6`。那不是笔误：
+**报告写在提交里，无法写下自己所在提交的 SHA**，这个形式本身就不可能自洽。
+
+现在分工是：
+
+- Markdown 报告讲原因、取舍、踩过的坑，**不写会变的数字**；`docs/v0.2.16-acceptance.md`
+  也补了一张表，把合并提交 `df40eec` / 发布提交 `57ffec6` / 标签对象 `b3a6a39` 分开写清楚，
+  并说明这个版本被移动过两次标签、从 v0.2.17 起不再允许。
+- `delivery-status-<version>.json` 由发布当时的工作流生成，记录提交、标签、Run、两个附件的
+  字节数与 SHA-256。**未知一律写 `null`，不写占位字符串** —— 占位串会被读的人当成一个值，
+  `0` 会被当成「测过了，零失败」，两者都把「未验证」伪装成「已验证」。
+
+这份报告还有一条自我约束：声称 `success` 却不自洽（没有提交、没有标签、附件为空、测试数为 0、
+有失败数）时，它把自己的状态改成 `failed` 并以退出码 1 结束。**宁可变红，也不发出可疑证据。**
+
+### 六、版本治理
+
+`scripts/version.mjs check` 核对 `package.json` / `CHANGELOG.md` / `README.md` 三处版本一致，
+只认四种版本上下文（`#v<x>` 安装命令、`releases/tag/v<x>`、两个附件名）；
+历史叙述（「v0.2.12 起……」）不动。`set <version>` **先确认 CHANGELOG 已有该版本段落**才动文件，
+避免改到一半出现「代码已是新版、日志还是旧版」。
+
+README 里五处仍写着 0.2.16 的安装命令与附件名（发版后不会自动更新，用户会装到旧版），
+本次由 `node scripts/version.mjs set 0.2.17` 一次性改正，`check` 随后确认三处版本一致。
+
+### 七、这一版怎么发布的（如实记录）
+
+v0.2.17 是 `ship.mjs` 的第一个用户，而它的规则是「敏感改动停在 PR」。它自己几乎全是敏感改动
+（`ship.mjs`、`ship-core.mjs`、两个 workflow、`release-dry-run.mjs`、`delivery-status-report.mjs`、
+`release-notes.mjs`、`delivery-status.mjs`），所以这一版**不会**自动合并，而是：PR 由 `ship.mjs`
+自己建出来、CI 跑绿，然后停下等维护者点头。
+
+这不是流水线没做好，而是这套规则第一次生效时正确地拦住了最该拦的东西 ——
+**让改门禁的提交绕过门禁合进去，比任何一次失败的自动化都危险。**
+
+### 八、新增测试
+
+合计 158 项，全部通过（总数 1225 项，0 失败，0 跳过；v0.2.16 是 1067 项）：
+
+- `test/v0217-ship-core.test.ts`（37）：阶段表、敏感判定、标签/Release 冲突决策、状态机。
+  其中一条钉住了一个真实 bug：`advanceState` 原本只返回新对象，而调用方普遍忽略返回值，
+  于是每次推进都被丢掉，`--resume` 永远从 preflight 重来 —— 现在它原地修改并返回同一个对象。
+- `test/v0217-version-core.test.ts`（15）：版本上下文识别、`(?![\d.])` 前瞻
+  （`0.2.1`→`0.2.2` 不能把 `0.2.16` 改成 `0.2.26`）、幂等。
+- `test/v0217-delivery-status.test.ts`（31）：未知不能写成已知、自洽校验、测试日志解码。
+  最后这组是实测逼出来的：`node --test > log.txt` 在 PowerShell 下写出的是 **UTF-16LE**，
+  按 UTF-8 读会把「1225 项全过」读成「测试数为 0」。
+- `test/v0217-workflow.test.ts`（23）：工作流自身的属性 —— 双 Node、`set -e`、无 `|| true`、
+  无 `--admin`、标签守卫、`dry_run` 默认 true、上传路径不含 `..`、无凭据打印、
+  CI 里有 Release 无发布模拟、Release 会产出并上传交付状态报告、
+  以及**类型检查不得退回裸 `tsc`**（这条第一次跑是红的，因为我在注释里写了那个旧命令）。
+- `test/v0217-exception-paths.test.ts`（18）：五类异常路径 —— 故意失败的测试、
+  会失败的凭据扫描（并确认干净包仍然放行，否则等于奖励一个永远失败的扫描器）、
+  状态恢复、重复发布（标签指向别处就拒绝，不移动）、缺授权（敏感改动必须停下）。
+  这条也逼出一个真发现：子进程继承 `NODE_TEST_CONTEXT` 会让「故意失败」以退出码 0 结束。
+- `test/v0217-dsh-compat.test.ts`（34）：配置 schema 与历史配置迁移、旧存储状态兼容、
+  入口与打包一致性（`files` 不含 `src/`，依赖只允许 `@deepseek-ai/` 前缀）、
+  bundle patch 与 settings 命名空间三方一致、真实平台调用 Mock/Fixture/真实三档区分。
+
+### 九、测试代码的类型检查曾经是一道空转的闸门
+
+`ci.yml` 里那一步原本是 `tsc -p tsconfig.test.json`。它一直「通过」，因为它什么都没检查：
+`tsconfig.test.json` 继承基配置的 `exclude: ["node_modules","lib","test"]`，而 `include`
+**不能把已经在 `exclude` 里的目录加回来** —— `--listFilesOnly` 里一个测试文件都没有。
+
+这是 v0.2.17 最值得写下来的一条：**一道一直在绿的闸门，比没有闸门更危险。**
+
+修掉的第一个问题是配置本身（重写 `exclude`、补 `DOM` lib、放开 `allowJs`），
+第二个问题是修好之后才露出来的：测试代码里有 **316 条**历史类型错误，多数是 mock 对象的
+结构与真实类型不一致（`humanApproved` 参数换成 `sessionId/candidateId/approvedText` 这类），
+运行时不受影响，但一次性清零不是这一版该干的事。
+
+所以记基线，不关闸门：`scripts/test-typecheck.mjs` 读 `test-typecheck-baseline.json`，
+**只许变少、不许变多**。新增的类型错误立刻变红，历史债明确在案、可以逐步还。
+基线文件进源码包，否则「解压出来跑 CI 直接报缺基线」又是一次「本机能过、别人跑不了」。
+
 ## [0.2.16] — 2026-10-30
 
 把「可复现」从一句承诺变成一条能被别人重跑的命令。**核心变化：源码 ZIP 补上

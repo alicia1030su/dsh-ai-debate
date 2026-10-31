@@ -45,8 +45,17 @@ jobs:
       - name: 编译（严格模式）
         run: node_modules/.bin/tsc -p tsconfig.json
 
-      - name: 类型检查（含测试与脚本）
-        run: node_modules/.bin/tsc -p tsconfig.test.json
+      # ## 测试代码的类型检查为什么是棘轮（v0.2.17）
+      #
+      # 这一步原来就是 `tsc -p tsconfig.test.json`，而那份配置继承了基配置的
+      # `exclude: ["node_modules","lib","test"]` —— `include` 加不回来，于是它「编译成功」，
+      # 但 `--listFilesOnly` 里一个测试文件都没有。这道闸门跑了很久，什么都没检查。
+      #
+      # 修好之后露出真相：测试代码里有三百多条历史类型错误，多数是 mock 对象的结构不匹配，
+      # 不影响运行时。一次性清零不现实，但关掉闸门等于回到「绿得毫无意义」。
+      # 所以记基线：只许变少，不许变多。新引入的类型错误立刻变红，历史债明确在案。
+      - name: 类型检查（含测试与脚本，棘轮）
+        run: node scripts/test-typecheck.mjs
 
       - name: 自动化测试
         run: |
@@ -62,12 +71,16 @@ jobs:
       # It used to be produced only by the release workflow, so a broken packer or a leaked local
       # file would first be noticed when publishing. Building it on every push costs a second and
       # moves that discovery to the pull request.
+      #
+      # `--out .` matches what release.yml does. Building it in a *different* directory than the
+      # release does would make this step exercise a path that never ships: the first tagged
+      # release failed on `..` in an upload path while CI stayed green.
       - name: 生成并扫描公开源码包
         run: |
           set -e
-          node scripts/source-zip.mjs
+          node scripts/source-zip.mjs --out .
           VERSION="$(node -p "require('./package.json').version")"
-          SOURCE_ZIP="../dsh-ai-debate-source-${VERSION}.zip"
+          SOURCE_ZIP="dsh-ai-debate-source-${VERSION}.zip"
           # Independent scanner: it does not import the packer and uses its own rules, so a bug in
           # the allowlist cannot certify itself.
           node scripts/scan-archive.mjs "$SOURCE_ZIP"
@@ -79,6 +92,17 @@ jobs:
       # Those are properties of the repository, so they are asserted rather than assumed.
       - name: CI 守卫检查
         run: node scripts/ci-guard.mjs --require-archive
+
+      # ## Release 的无发布模拟（v0.2.17 §二）
+      #
+      # Everything that only happens when a tag is pushed lived in release.yml and was therefore
+      # never executed before publishing:截取 CHANGELOG、现算两个附件的哈希、拼安装命令。
+      # v0.2.16 的两个真实缺陷正是这样漏出去的。这一步把那段逻辑原样跑一遍，只是不建 Release，
+      # 于是「发布说明长什么样、哈希对不对」在 PR 阶段就能看到。
+      - name: Release 无发布模拟
+        run: |
+          set -e
+          RELEASE_DRY_RUN_PRINT=1 node scripts/release-dry-run.mjs
 
       # ## 凭据扫描交给项目自己的脚本（v0.2.16）
       #

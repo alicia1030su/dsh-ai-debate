@@ -148,22 +148,22 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.16
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.17
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.16) 下载
-`dsh-ai-debate-0.2.16.tgz`，或在仓库根目录自行构建：
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.17) 下载
+`dsh-ai-debate-0.2.17.tgz`，或在仓库根目录自行构建：
 
 ```bash
 node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.16.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.17.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.16.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.17.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 应当得到与本机发布产物**字节一致**的 `.tgz`——校验和写在发布说明里，可以自行核对。
 
@@ -1019,7 +1019,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**1053 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.1 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**1225 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.1 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1108,7 +1108,16 @@ node scripts/pack.mjs
 | `test/v0215-ci-integrity.test.ts` | 15 | TODO: 补充覆盖说明 |
 | `test/v0215-source-zip-security.test.ts` | 8 | TODO: 补充覆盖说明 |
 | `test/v0215-weibo-identity.test.ts` | 19 | TODO: 补充覆盖说明 |
-| **合计** | **1053** | |
+| `test/v0216-archive-guard.test.ts` | 5 | TODO: 补充覆盖说明 |
+| `test/v0216-artifact-determinism.test.ts` | 5 | TODO: 补充覆盖说明 |
+| `test/v0216-credential-scan.test.ts` | 4 | TODO: 补充覆盖说明 |
+| `test/v0217-delivery-status.test.ts` | 31 | TODO: 补充覆盖说明 |
+| `test/v0217-dsh-compat.test.ts` | 34 | TODO: 补充覆盖说明 |
+| `test/v0217-exception-paths.test.ts` | 18 | TODO: 补充覆盖说明 |
+| `test/v0217-ship-core.test.ts` | 37 | TODO: 补充覆盖说明 |
+| `test/v0217-version-core.test.ts` | 15 | TODO: 补充覆盖说明 |
+| `test/v0217-workflow.test.ts` | 23 | TODO: 补充覆盖说明 |
+| **合计** | **1225** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

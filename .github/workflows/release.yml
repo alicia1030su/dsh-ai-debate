@@ -56,14 +56,16 @@ jobs:
       - name: 编译（严格模式）
         run: node_modules/.bin/tsc -p tsconfig.json
 
-      - name: 类型检查（含测试与脚本）
-        run: node_modules/.bin/tsc -p tsconfig.test.json
+      - name: 类型检查（含测试与脚本，棘轮）
+        run: node scripts/test-typecheck.mjs
 
       - name: 自动化测试
         run: |
           set -e
           # Globbed so a new test file cannot be silently skipped by a stale list.
-          node --experimental-transform-types --test "test/**/*.test.ts"
+          # Tee'd to a file because the delivery status report reads the real counts from it;
+          # re-deriving them from a summary string in YAML would be a second source of truth.
+          node --experimental-transform-types --test "test/**/*.test.ts" 2>&1 | tee /tmp/test-output.log
 
       - name: 确认 lib/ 与源码一致
         run: |
@@ -157,41 +159,52 @@ jobs:
         run: |
           set -e
           TARBALL="${{ steps.pack.outputs.tarball }}"
-          SHA256="${{ steps.pack.outputs.sha256 }}"
           SOURCE_ZIP="${{ steps.pack.outputs.source_zip }}"
-          SOURCE_SHA256="${{ steps.pack.outputs.source_sha256 }}"
           VERSION="${{ steps.pack.outputs.version }}"
 
-          # 从 CHANGELOG.md 里截取当前版本的段落作为发布说明。
-          awk -v ver="## [$VERSION]" '
-            index($0, ver) == 1 { capture = 1; next }
-            capture && /^## \[/ { exit }
-            capture { print }
-          ' CHANGELOG.md > /tmp/notes.md
-
-          if [ ! -s /tmp/notes.md ]; then
-            echo "CHANGELOG.md 里没有 $VERSION 的条目，使用默认说明"
-            printf 'AI代吵架 v%s\n\n安装：\n```bash\ndsh plugin --profile <profile> add github:%s/dsh-ai-debate#v%s\n```\n' \
-              "$VERSION" "$GITHUB_REPOSITORY" "$VERSION" > /tmp/notes.md
-          fi
-
-          {
-            echo ""
-            echo "---"
-            echo ""
-            echo "### 安装"
-            echo ""
-            echo '```bash'
-            echo "dsh plugin --profile <profile> add github:${GITHUB_REPOSITORY}#v${VERSION}"
-            echo "# 或使用下方附件"
-            echo "dsh plugin --profile <profile> add ./${TARBALL}"
-            echo '```'
-            echo ""
-            echo "- 安装包 \`${TARBALL}\` SHA-256：\`${SHA256}\`"
-            echo "- 源码包 \`$(basename "${SOURCE_ZIP}")\` SHA-256：\`${SOURCE_SHA256}\`"
-          } >> /tmp/notes.md
+          # ## 发布说明由一处代码生成，不在这里手拼
+          #
+          # 这里原来是 awk 截 CHANGELOG + 一串 echo 拼安装段。它在打标签之前从不执行，
+          # 所以任何错误都要等一次真实发版才会暴露 —— v0.2.16 发布说明里的哈希与附件对不上，
+          # 就是这样漏出去的，而那已经是一份公开的发布说明。
+          #
+          # scripts/release-dry-run.mjs 是同一段逻辑，CI 每次推送都会带 --emit 跑到 /tmp/notes.md
+          # 走一遍（含哈希校验），到这一步只是把同样的结果写进 Release。
+          node scripts/release-dry-run.mjs --emit /tmp/notes.md
 
           gh release create "v${VERSION}" "$TARBALL" "$SOURCE_ZIP" \
             --title "AI代吵架 v${VERSION}" \
             --notes-file /tmp/notes.md \
             --verify-tag
+
+      # ## 交付状态报告（v0.2.17 §二）
+      #
+      # 这份 JSON 是本轮交付的事实记录：哪个提交、哪个标签、哪个 Run、两个附件各自的字节数与
+      # 哈希。它由握着这些值的进程在发布当时写下，所以不会像 Markdown 报告那样自指 ——
+      # v0.2.16 的验收文档写了「发布提交 f1c111c」，而标签实际指向 57ffec6，正是手写必然
+      # 遇到的死角。
+      #
+      # `if: always()` 是有意的：发布失败时这份报告最有用，它记下失败在哪一阶段、怎么恢复。
+      # 因此这里的 `continue-on-error` 不能加 —— 报告生成不了，说明这次交付连自证都做不到。
+      - name: 生成交付状态报告
+        if: always()
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -e
+          if [ -f /tmp/test-output.log ]; then
+            TESTLOG="--test-log /tmp/test-output.log"
+          else
+            TESTLOG=""
+          fi
+          node scripts/delivery-status-report.mjs \
+            $TESTLOG \
+            --note="发布产物由本次运行构建，哈希为本步骤现读磁盘计算"
+
+      - name: 上传交付状态报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-status-${{ steps.pack.outputs.version || github.run_id }}
+          path: .ship/delivery-status-*.json
+          retention-days: 90

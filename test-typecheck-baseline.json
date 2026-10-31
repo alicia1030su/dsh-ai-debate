@@ -1,0 +1,88 @@
+{
+  "schema": 1,
+  "baseline": 316,
+  "updatedAt": "2026-10-31T03:54:01.429Z",
+  "note": "测试代码里已知的类型错误数。只许下降：这个数字变大说明新代码引入了新的类型错误，闸门会变红。改小之后请用 node scripts/test-typecheck.mjs --update 收紧基线。",
+  "worstFiles": [
+    {
+      "file": "test/v0217-delivery-status.test.ts",
+      "count": 34
+    },
+    {
+      "file": "test/v0217-exception-paths.test.ts",
+      "count": 29
+    },
+    {
+      "file": "test/verification-and-auth.test.ts",
+      "count": 27
+    },
+    {
+      "file": "test/cordis-integration.test.ts",
+      "count": 22
+    },
+    {
+      "file": "test/client-approval-panel.test.ts",
+      "count": 20
+    },
+    {
+      "file": "test/v0217-ship-core.test.ts",
+      "count": 17
+    },
+    {
+      "file": "test/collector.test.ts",
+      "count": 15
+    },
+    {
+      "file": "test/client-react-dom.test.ts",
+      "count": 8
+    },
+    {
+      "file": "test/build-runtime-platforms.test.ts",
+      "count": 7
+    },
+    {
+      "file": "test/identity-and-limits.test.ts",
+      "count": 7
+    },
+    {
+      "file": "test/v0217-workflow.test.ts",
+      "count": 7
+    },
+    {
+      "file": "test/platform-contract.test.ts",
+      "count": 6
+    },
+    {
+      "file": "test/trigger-identity.test.ts",
+      "count": 6
+    },
+    {
+      "file": "test/v0215-source-zip-security.test.ts",
+      "count": 6
+    },
+    {
+      "file": "test/pipeline.test.ts",
+      "count": 5
+    },
+    {
+      "file": "test/v0211-weibo-cli.test.ts",
+      "count": 5
+    },
+    {
+      "file": "test/v0212-brief-pipeline.test.ts",
+      "count": 5
+    },
+    {
+      "file": "test/v0215-ci-integrity.test.ts",
+      "count": 5
+    },
+    {
+      "file": "test/v0216-archive-guard.test.ts",
+      "count": 5
+    },
+    {
+      "file": "test/v028-lock-recovery.test.ts",
+      "count": 5
+    }
+  ]
+}
