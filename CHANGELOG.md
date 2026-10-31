@@ -71,11 +71,34 @@ failed:1, skipped:1}`、`artifacts: []`、`tag: v0.2.19` —— 上一版修的�
 两条测试互为对照：**同一种环境（没有附件），`success` 必须红，`blocked` 必须绿。**
 只留一条的话，谁都可能靠放宽另一条弄出绿色。
 
-### 四、测试
+### 四、全新克隆里又抓到一处：行尾跟着克隆它的人的平台变
+
+上面两条测试写完，我把仓库**全新克隆**到一个空目录（无 `node_modules`、无任何构建产物）
+再跑一遍全量。测试红了一条：
+
+```
+✖ 归档里的文本文件不携带多余的 CR（行尾统一 LF）
+  AssertionError: scripts/configure-stage.mjs 里出现了 CRLF，仓库约定是 LF
+```
+
+原因不在测试，在仓库：**没有 `.gitattributes`**。Git for Windows 的安装默认
+`core.autocrlf=true`，检出时把 LF 换成 CRLF —— 同一个提交，Windows 上克隆出来是 CRLF，
+Linux 上是 LF。而 `scripts/tar.mjs` 打包读的是**工作区**里的文件，于是两边打出来的 tgz
+字节不同。
+
+这比一条测试红更要紧：**「源码 ZIP 能在全新环境复现正式 TGZ」这句话，只在我这台把
+`core.autocrlf` 设成 `false` 的机器上成立。** 换成任何一台默认安装 Git 的 Windows 机器，
+复现出来的产物就和 Release 上的对不上，而失败会出在别人身上。
+
+修法是把这个约定写进仓库，而不是写进某个人的 Git 设置：新增 `.gitattributes`，`* text=auto eol=lf`
+（`eol=lf` 压过 `core.autocrlf=true`），并把 `*.png`、`*.zip`、`*.tgz` 等标成 `binary`。
+`.gitattributes` 本来就在源码包白名单里，所以它自己也会跟着发出去。
+
+### 五、测试
 
 全量 1242 项：1241 通过、0 失败、1 跳过（`test/v0215-source-zip-security.test.ts` 里
 「本仓库自身对 audit-leaks 是绿的」—— CI 在打包之前跑测试，之后有独立的 `audit-leaks`
-步骤守着）。新增两条即上面第三节那两条。此外，本地跑全量测试前会先把构建产物挪走，
+步骤守着）。新增两条即第三节那两条。此外，本地跑全量测试前会先把构建产物挪走，
 模拟标签构建的真实条件；`ci-guard` 仍是第 10 节，一条检查都没减。
 
 ## [0.2.19] — 2026-10-31
