@@ -120,6 +120,11 @@ const ALLOWED_FILES = new Set([
   'pnpm-lock.yaml',
   'tsconfig.json',
   'tsconfig.test.json',
+  // ## 测试类型检查的基线（v0.2.17）
+  //
+  // `scripts/test-typecheck.mjs` 读这个文件决定「允许多少条历史类型错误」。它不在包里的话，
+  // 从源码包解压出来跑 CI 会直接报「缺少基线文件」—— 又是一次「本机能过、别人跑不了」。
+  'test-typecheck-baseline.json',
   'README.md',
   'LICENSE',
   'CHANGELOG.md',

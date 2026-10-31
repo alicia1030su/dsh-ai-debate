@@ -24,6 +24,11 @@ Thumbs.db
 coverage/
 *.tsbuildinfo
 
+# ship.mjs 的本地状态与交付状态报告。
+# 报告是「这一次运行」的证据，会随每次运行变化；把它提交进仓库等于让历史
+# 与当前混在一起，而且下次运行必然产生一个 dirty 工作区。
+.ship/
+
 # 注意：lib/ 是刻意提交的。
 # 它让用户从 GitHub 安装插件后无需自己编译 TypeScript，
 # 这是本项目的发布约定，见 README「安装」一节。

@@ -4,7 +4,12 @@
     "noEmit": true,
     "rootDir": ".",
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": ["node"],
+    "lib": ["ES2023", "DOM"],
+    "allowJs": true,
+    "checkJs": false
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "scripts/**/*.mjs"],
+  "//": "字段必须在本文件重写，否则这份配置名不副实。① exclude：基配置排除了 test/，而 include 不能把已经在 exclude 里的东西加回来 —— 继承来的情况下它会「编译成功」但一个测试文件都不检查，v0.2.17 才发现（--listFilesOnly 里 test/ 路径 0 个）。② lib：基配置只有 ES2023，客户端渲染测试要操作 DOM（querySelectorAll/click/textContent），不补 DOM 会让 91 条断言级错误变成「类型不存在」。③ allowJs/checkJs:false：scripts/lib/*.mjs 是纯 JS，测试按路径 import，没有声明文件就只能退化成 any。",
+  "exclude": ["node_modules", "lib"]
 }
