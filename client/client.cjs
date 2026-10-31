@@ -66,6 +66,9 @@ window.__ModuleLoader__.load({
     // v0.2.21: the verification panel's read side. Its write side is `action=verify-publish`
     // on the existing action route — a second write route would be a second place to guard.
     const ROUTE_VERIFICATION = `${API}/verification`
+    // v0.2.22: the publish workbench. Read-only; every write goes through the existing action /
+    // approve routes, so the workbench never becomes a second way to reach the platform.
+    const ROUTE_WORKBENCH = `${API}/workbench`
 
     /** Credential reference names (mirrors src/secrets.ts). */
     const REF_COOKIE = 'DSH_AI_DEBATE_TIEBA_COOKIE'
@@ -134,6 +137,7 @@ window.__ModuleLoader__.load({
       tabApprove: '发表授权',
       tabPlatforms: '平台',
       tabVerify: '验收',
+      tabWorkbench: '工作台',
       platformLiveTitle: '实时连接状态',
       platformLiveIntro:
         '下面是插件刚刚探测到的真实状态，不是清单推测。无法检查的项目会显示「未知」，不会被当成通过。',
@@ -287,6 +291,45 @@ window.__ModuleLoader__.load({
       recordsNotLoading: '点击刷新读取',
 
       approveTitle: '发表授权',
+      // v0.2.22: the publish workbench.
+      workbenchTitle: '发表工作台',
+      workbenchHint:
+        '从一条讨论链接走到发表确认。每一步都由持久记录推导，刷新页面会回到同一个位置，不会重放任何不可逆的操作。',
+      workbenchNoBuild: '当前构建没有接上工作台（workbench 未提供），所以这个区块读不到状态。',
+      workbenchStepNow: '当前步骤',
+      workbenchBlocked: '还不能往下走',
+      workbenchMissing: '缺失证据',
+      workbenchCounts: '已读取',
+      workbenchCountsLine: '楼层 {floors} 条 · 楼中楼 {nested} 条 · 候选 {candidates} 条',
+      workbenchTarget: '目标',
+      workbenchTargetLine: '帖子 {thread} · 回复 {post} · 形式 {kind}',
+      workbenchTargetFloor: '楼层',
+      workbenchTargetNested: '楼中楼',
+      workbenchCapability: '能力状态',
+      workbenchCapabilityLine: '声明 {declared} · 当前判定 {effective}',
+      workbenchOutcome: '发表结果',
+      workbenchOutcomeNotAttempted: '还没有发表过',
+      workbenchOutcomeSent: '请求已发出，回读尚未确认',
+      workbenchOutcomeConfirmed: '回读四项全部确认',
+      workbenchOutcomeRefused: '平台明确拒绝',
+      workbenchOutcomeUnknown: '结果不确定（不会自动重试）',
+      workbenchReadback: '回读核验',
+      workbenchReadbackFound: '回复存在',
+      workbenchReadbackAuthor: '作者一致',
+      workbenchReadbackText: '正文一致',
+      workbenchReadbackParent: '父级关系一致',
+      workbenchCandidates: '候选回复',
+      workbenchNoCandidates: '还没有候选。上一步需要先生成。',
+      workbenchEditLabel: '要发表的正文（可以直接改）',
+      workbenchSaveEdit: '保存修改',
+      workbenchSaving: '正在保存…',
+      workbenchEditSaved: '已保存。批准与安全评估已作废，需要重新批准才能发表。',
+      workbenchApproved: '已批准',
+      workbenchNotApproved: '未批准',
+      workbenchNoResend: '这里没有「重新发送」按钮：一次授权只发一次。要再发请新建一条候选并重新批准。',
+      workbenchRefresh: '刷新状态',
+      workbenchRefreshing: '正在读取…',
+      workbenchLoadFailed: '读取工作台失败',
       // v0.2.21 §三/§四: the one-off publish verification panel.
       verifyTitle: '发表能力验收',
       verifyHint:
@@ -437,6 +480,7 @@ window.__ModuleLoader__.load({
       tabApprove: 'Authorisation',
       tabPlatforms: 'Platforms',
       tabVerify: 'Verification',
+      tabWorkbench: 'Workbench',
       platformLiveTitle: 'Live connection state',
       platformLiveIntro:
         'Probed just now by the plugin, not inferred from the manifest. Anything that could not be checked shows as unknown, never as passing.',
@@ -557,6 +601,45 @@ window.__ModuleLoader__.load({
       recordsNotLoading: 'Refresh to read',
 
       approveTitle: 'Publishing authorisation',
+      // v0.2.22: the publish workbench.
+      workbenchTitle: 'Publish workbench',
+      workbenchHint:
+        'From a discussion link to a confirmed publish. Every step is derived from durable records, so reloading lands on the same place and never replays an irreversible action.',
+      workbenchNoBuild: 'This build has no workbench wired up, so this section cannot read its state.',
+      workbenchStepNow: 'Current step',
+      workbenchBlocked: 'Not yet',
+      workbenchMissing: 'Missing evidence',
+      workbenchCounts: 'Read',
+      workbenchCountsLine: '{floors} floors · {nested} nested replies · {candidates} candidates',
+      workbenchTarget: 'Target',
+      workbenchTargetLine: 'thread {thread} · reply {post} · {kind}',
+      workbenchTargetFloor: 'floor',
+      workbenchTargetNested: 'nested reply',
+      workbenchCapability: 'Capability',
+      workbenchCapabilityLine: 'declared {declared} · effective {effective}',
+      workbenchOutcome: 'Publish result',
+      workbenchOutcomeNotAttempted: 'Nothing published yet',
+      workbenchOutcomeSent: 'Request sent, read-back not confirmed',
+      workbenchOutcomeConfirmed: 'All four read-back facts confirmed',
+      workbenchOutcomeRefused: 'Refused by the platform',
+      workbenchOutcomeUnknown: 'Outcome unknown (never retried automatically)',
+      workbenchReadback: 'Read-back check',
+      workbenchReadbackFound: 'Reply exists',
+      workbenchReadbackAuthor: 'Author matches',
+      workbenchReadbackText: 'Body matches',
+      workbenchReadbackParent: 'Parent matches',
+      workbenchCandidates: 'Candidates',
+      workbenchNoCandidates: 'No candidates yet — the previous step generates them.',
+      workbenchEditLabel: 'The text that would be published (editable)',
+      workbenchSaveEdit: 'Save changes',
+      workbenchSaving: 'Saving…',
+      workbenchEditSaved: 'Saved. The approval and the assessment no longer apply — approve again before publishing.',
+      workbenchApproved: 'Approved',
+      workbenchNotApproved: 'Not approved',
+      workbenchNoResend: 'There is no resend button here: one authorisation publishes once. To say it differently, create a new candidate and approve that.',
+      workbenchRefresh: 'Refresh',
+      workbenchRefreshing: 'Reading…',
+      workbenchLoadFailed: 'Could not read the workbench',
       // v0.2.21 §三/§四: the one-off publish verification panel.
       verifyTitle: 'Publish capability verification',
       verifyHint:
@@ -708,6 +791,8 @@ window.__ModuleLoader__.load({
       // v0.2.21: verification is its own tab, after "platforms". It publishes for real, so it
       // must not be a button sitting quietly inside the platform list.
       { id: 'verify', label: 'tabVerify' },
+      // v0.2.22: the publish workbench, after verification — capability first, then the flow.
+      { id: 'workbench', label: 'tabWorkbench' },
       { id: 'security', label: 'tabSecurity' },
       { id: 'status', label: 'tabStatus' },
     ]
@@ -947,6 +1032,17 @@ window.__ModuleLoader__.load({
         this.verification = null
         this.verificationState = { state: 'idle' }
         this.verificationRun = null
+        /**
+         * Workbench state (v0.2.22 §一).
+         *
+         * `workbench` is the last served read model; `workbenchState` is the read's own
+         * three-way answer; `workbenchEdit` is the last edit attempt. Kept apart for the same
+         * reason as the verification trio: "we could not read" and "there is nothing" must not
+         * render the same, and an edit failure is a third thing again.
+         */
+        this.workbench = null
+        this.workbenchState = { state: 'idle' }
+        this.workbenchEdit = null
         this.listeners = new Set()
         this.store = createSnapshotStore(this.projection())
       }
@@ -993,6 +1089,9 @@ window.__ModuleLoader__.load({
           verification: this.verification,
           verificationState: this.verificationState,
           verificationRun: this.verificationRun,
+          workbench: this.workbench,
+          workbenchState: this.workbenchState,
+          workbenchEdit: this.workbenchEdit,
         }
       }
 
@@ -1095,6 +1194,66 @@ window.__ModuleLoader__.load({
       setNotice(text) {
         this.notice = text
         this.publish()
+      }
+
+      /**
+       * Read the workbench (v0.2.22 §一).
+       *
+       * Read-only by construction: the URL carries nothing but an optional session id, and the
+       * handler behind it performs no write. That is what makes refreshing safe — not a rule the
+       * page remembers, but the absence of a write in the code it calls.
+       */
+      async loadWorkbench(sessionId) {
+        this.workbenchState = { state: 'loading' }
+        this.publish()
+        try {
+          const suffix =
+            sessionId === undefined || sessionId === ''
+              ? ''
+              : `?sessionId=${encodeURIComponent(sessionId)}`
+          const answer = await callJson(`${ROUTE_WORKBENCH}${suffix}`)
+          this.workbench = answer || null
+          this.workbenchState = { state: 'ready' }
+        } catch (error) {
+          this.workbench = null
+          this.workbenchState = {
+            state: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+          }
+        }
+        this.publish()
+      }
+
+      /**
+       * Save an edited candidate body (§三).
+       *
+       * The response carries the new version and hash, and the page re-reads afterwards: an edit
+       * retires the approval, so showing the pre-edit approval next to the new text is exactly
+       * the "it says approved but it is not" state this version exists to remove.
+       */
+      async saveWorkbenchEdit(input) {
+        this.workbenchEdit = { state: 'running' }
+        this.publish()
+        try {
+          const result = await callJson(ROUTE_ACTION, {
+            method: 'POST',
+            body: JSON.stringify({
+              action: 'edit-candidate',
+              sessionId: input.sessionId,
+              candidateId: input.candidateId,
+              text: input.text,
+            }),
+          })
+          this.workbenchEdit = { state: 'done', result }
+        } catch (error) {
+          this.workbenchEdit = {
+            state: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+          }
+        }
+        this.publish()
+        await this.loadWorkbench(input.sessionId)
+        return this.workbenchEdit
       }
 
       /**
@@ -2742,6 +2901,234 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The publish workbench (v0.2.22 §一/§三/§五/§八).
+     *
+     * ## What this deliberately does not have
+     *
+     * No "publish again" button, no auto-retry, no way to re-send a request whose outcome is
+     * unknown. §五 requires the interface to *not* offer the one action that turns an unknown
+     * result into a duplicate post, and the honest way to guarantee that is to not build it.
+     * The step list ends at "read back confirmed" and the page says what to do instead.
+     *
+     * ## The five outcome states are rendered as five sentences
+     *
+     * "Sent but unconfirmed" and "confirmed" are different claims, and so are "refused" and
+     * "unknown". Collapsing them into a green tick is how an owner comes to believe a reply was
+     * verified when only its request left the process.
+     *
+     * ## Every field the owner needs before deciding is on screen
+     *
+     * Which platform, which account, which target post, which capability state, how much was
+     * actually read, what could not be read, and what the last attempt ended as. A workbench
+     * that hides any of these makes the decision for the owner.
+     */
+    function WorkbenchSection(props) {
+      const { t, state, store } = props
+      const read = state.workbenchState || { state: 'idle' }
+      const view = state.workbench
+      const edit = state.workbenchEdit
+      const [draft, setDraft] = useState(null)
+      const busy = edit && edit.state === 'running'
+
+      const title = h(
+        'div',
+        { className: 'dsd-sect-head' },
+        h('span', { className: 'dsd-sect-title', style: { margin: 0 } }, t('workbenchTitle')),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsd-btn',
+            disabled: read.state === 'loading',
+            onClick: () => store.loadWorkbench(view && view.sessionId),
+          },
+          read.state === 'loading' ? t('workbenchRefreshing') : t('workbenchRefresh'),
+        ),
+      )
+
+      if (read.state === 'failed') {
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          title,
+          h('p', { className: 'dsd-hint dsd-hint-error' }, `${t('workbenchLoadFailed')}：${read.reason || ''}`),
+        )
+      }
+      if (!view || typeof view !== 'object') {
+        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('workbenchHint')))
+      }
+      if (Array.isArray(view.blockers) && view.blockers.length > 0 && !view.workbench) {
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          title,
+          h('p', { className: 'dsd-hint dsd-hint-error' }, view.blockers.join('；') || t('workbenchNoBuild')),
+        )
+      }
+
+      const wb = view.workbench
+      if (!wb) {
+        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('workbenchNoBuild')))
+      }
+
+      const outcomeLabel = {
+        not_attempted: 'workbenchOutcomeNotAttempted',
+        sent_unconfirmed: 'workbenchOutcomeSent',
+        confirmed: 'workbenchOutcomeConfirmed',
+        refused: 'workbenchOutcomeRefused',
+        unknown: 'workbenchOutcomeUnknown',
+      }
+      const stepLine = (wb.steps || [])
+        .map((step) => {
+          const mark = step.status === 'done' ? '✅' : step.status === 'current' ? '▶' : '·'
+          return `${mark} ${step.title}`
+        })
+        .join('   ')
+
+      const blockers =
+        Array.isArray(wb.blockers) && wb.blockers.length > 0
+          ? h(
+              'div',
+              { className: 'dsd-hint dsd-hint-error' },
+              h('strong', null, t('workbenchBlocked')),
+              h('ul', null, wb.blockers.map((line) => h('li', { key: line }, line))),
+            )
+          : null
+
+      const gaps =
+        Array.isArray(wb.missingEvidence) && wb.missingEvidence.length > 0
+          ? h(
+              'div',
+              { className: 'dsd-hint' },
+              h('strong', null, t('workbenchMissing')),
+              h('ul', null, wb.missingEvidence.map((gap) => h('li', { key: gap.what }, `${gap.what}：${gap.detail}`))),
+            )
+          : null
+
+      const facts = h(
+        'div',
+        { className: 'dsd-hint' },
+        h('p', null, `${t('workbenchStepNow')}：${(wb.steps || []).find((s) => s.status === 'current')?.title ?? ''}`),
+        h('p', null, stepLine),
+        h(
+          'p',
+          null,
+          // Ids are concatenated rather than interpolated into a translated template: a
+          // translation that drops a placeholder would silently hide *which* post the reply
+          // would land on, which is the one fact this line exists to show.
+          `${t('workbenchCounts')}：` +
+            `${t('workbenchCountsLine')} ` +
+            `(floors=${wb.counts?.floors ?? 0}, nested=${wb.counts?.nested ?? 0}, candidates=${wb.counts?.candidates ?? 0})`,
+        ),
+        wb.target
+          ? h(
+              'p',
+              null,
+              `${t('workbenchTarget')}：` +
+                `thread=${wb.target.threadId} post=${wb.target.postId} ` +
+                `kind=${wb.target.kind === 'nested' ? t('workbenchTargetNested') : t('workbenchTargetFloor')}`,
+            )
+          : null,
+        wb.capability
+          ? h(
+              'p',
+              null,
+              `${t('workbenchCapability')}：` +
+                `declared=${wb.capability.declared} effective=${wb.capability.effective}` +
+                `（${wb.capability.reason}）`,
+            )
+          : null,
+        h('p', null, `${t('workbenchOutcome')}：${t(outcomeLabel[wb.outcome] || 'workbenchOutcomeUnknown')}`),
+      )
+
+      // The four facts are shown individually whenever a read-back ran. A single "confirmed"
+      // would hide which one disagreed — the information needed to tell a wrong reply from a
+      // wrong check.
+      const readback = wb.readBack
+        ? h(
+            'div',
+            { className: 'dsd-hint' },
+            h('strong', null, t('workbenchReadback')),
+            h(
+              'ul',
+              null,
+              [
+                ['workbenchReadbackFound', wb.readBack.postFound],
+                ['workbenchReadbackAuthor', wb.readBack.authorMatched],
+                ['workbenchReadbackText', wb.readBack.textMatched],
+                ['workbenchReadbackParent', wb.readBack.parentMatched],
+              ].map(([label, ok]) => h('li', { key: String(label) }, `${ok === true ? '✅ ' : '❌ '}${t(label)}`)),
+            ),
+          )
+        : null
+
+      const candidates = Array.isArray(view.candidates) ? view.candidates : []
+      const newest = candidates.length === 0 ? undefined : candidates[candidates.length - 1]
+
+      const candidateBlock =
+        newest === undefined
+          ? h('p', { className: 'dsd-hint' }, t('workbenchNoCandidates'))
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h('strong', null, t('workbenchCandidates')),
+              h(
+                'p',
+                { className: 'dsd-hint' },
+                `${newest.replyId} · v${newest.candidateVersion} · ${newest.strategy} · ` +
+                  `${newest.approved ? t('workbenchApproved') : t('workbenchNotApproved')}`,
+              ),
+              h('p', { className: 'dsd-hint' }, t('workbenchEditLabel')),
+              h('textarea', {
+                className: 'dsd-field',
+                rows: 4,
+                value: draft === null ? newest.text : draft,
+                disabled: busy || newest.approved === false ? busy : busy,
+                onChange: (event) => setDraft(event.target.value),
+              }),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: 'dsd-btn',
+                  disabled: busy,
+                  onClick: () =>
+                    store.saveWorkbenchEdit({
+                      sessionId: view.sessionId,
+                      candidateId: newest.replyId,
+                      text: draft === null ? newest.text : draft,
+                    }),
+                },
+                busy ? t('workbenchSaving') : t('workbenchSaveEdit'),
+              ),
+              edit && edit.state === 'done' && edit.result && edit.result.ok === true
+                ? h('p', { className: 'dsd-hint' }, t('workbenchEditSaved'))
+                : null,
+              edit && edit.state === 'done' && edit.result && edit.result.ok === false
+                ? h('p', { className: 'dsd-hint dsd-hint-error' }, edit.result.message || '')
+                : null,
+              edit && edit.state === 'failed'
+                ? h('p', { className: 'dsd-hint dsd-hint-error' }, edit.reason || '')
+                : null,
+            )
+
+      return h(
+        'div',
+        { className: 'dsd-sect' },
+        title,
+        h('p', { className: 'dsd-hint' }, t('workbenchHint')),
+        facts,
+        blockers,
+        gaps,
+        readback,
+        candidateBlock,
+        // Stated on the page, not only in the source: the absence of a resend button is a
+        // product decision the owner should be able to see the reason for.
+        h('p', { className: 'dsd-hint' }, t('workbenchNoResend')),
+      )
+    }
+
+    /**
      * The one-off publish verification panel (v0.2.21 §三/§四).
      *
      * ## What makes this different from a "test connection" button
@@ -3500,6 +3887,7 @@ window.__ModuleLoader__.load({
         // a per-platform property, and a separate tab would let an owner read "platform is
         // supported" on one screen and never see that nothing was ever actually published.
         if (state.tab === 'verify') return h(VerifySection, shared)
+        if (state.tab === 'workbench') return h(WorkbenchSection, shared)
         if (state.tab === 'security') return h(SecuritySection, shared)
         if (state.tab === 'status') return h(StatusSection, shared)
         return h(AccountSection, shared)
@@ -3917,6 +4305,13 @@ window.__ModuleLoader__.load({
      * is the only way to catch the failure mode where a broken read looks like a clean slate.
      */
     exports.VerifySection = VerifySection
+    /**
+     * The publish workbench, exposed for the DOM tests.
+     *
+     * The five outcome sentences and the absence of a resend control are the things those
+     * tests exist to catch, and neither can be checked without rendering.
+     */
+    exports.WorkbenchSection = WorkbenchSection
     /**
      * The page model, exposed for tests only.
      *
