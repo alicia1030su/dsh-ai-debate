@@ -346,7 +346,14 @@ if (existsSync(releaseFile)) {
   const release = readFileSync(releaseFile, 'utf8')
 
   // Creating a release must require a tag, never a branch push.
-  const createStep = release.split('- name:').find((block) => block.includes('gh release create'))
+  // Comment lines are stripped first: prose that *describes* `gh release create`
+  // (this file's own explanation of the pipeline bug does) must not be mistaken
+  // for the step that runs it, or the check ends up auditing a comment.
+  const releaseCode = release
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
+  const createStep = releaseCode.split('- name:').find((block) => block.includes('gh release create'))
   if (createStep !== undefined) {
     if (!/startsWith\(github\.ref, 'refs\/tags\/'\)/.test(createStep)) {
       fail('Release 步骤没有限定只对标签触发——分支推送就能发布正式版本')
@@ -369,17 +376,113 @@ if (existsSync(releaseFile)) {
 }
 
 // --- 8. Every workflow must fail loudly ------------------------------------
+//
+// This section used to be a comment that claimed more than the code did: it said
+// "`set -e` inside every multi-line shell step", but the only assertions were
+// `|| true` and `continue-on-error: true`. Nobody ever checked for `set -e`.
+//
+// The gap that hid behind that claim is the one that matters most here: `set -e`
+// does not apply to pipelines. bash returns the exit status of the *last* command
+// in a pipeline, so `node --test ... | tee log` exits with tee's status — always 0.
+// A fully red test suite kept the step green and the release kept going. The only
+// detector was the delivery-status report at the very end, which runs *after*
+// `gh release create` has already published the version.
+
+/**
+ * Blank out quoted segments so a `|` that lives inside an argument is not mistaken
+ * for a pipeline. `grep -qE 'package/(src|test)/'` contains no pipeline at all, but
+ * a naive text search sees one — and a guard that cries wolf gets switched off,
+ * which is exactly how the real pipeline bug survived this long.
+ */
+function unquoted(line) {
+  return line.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""')
+}
+
+/**
+ * Split a workflow into steps and, for each step, the shell lines it actually runs.
+ * Comments and blank lines are dropped, so prose that merely *mentions* `| tee`
+ * cannot satisfy or trip an assertion — the text a reader sees and the text bash
+ * runs are different things, and only the second one can fail.
+ */
+function shellSteps(text) {
+  const steps = []
+  let current = null
+  let runIndent = null
+  for (const raw of text.split(/\r?\n/)) {
+    const stepMatch = /^(\s*)- name:\s*(.+)$/.exec(raw)
+    if (stepMatch !== null) {
+      current = { name: stepMatch[2].trim(), lines: [], multiline: false }
+      steps.push(current)
+      runIndent = null
+      continue
+    }
+    if (current === null) continue
+    if (runIndent === null) {
+      const blockRun = /^(\s*)run:\s*\|-?\s*$/.exec(raw)
+      if (blockRun !== null) {
+        runIndent = blockRun[1].length
+        current.multiline = true
+        continue
+      }
+      const inlineRun = /^(\s*)run:\s*(\S.*)$/.exec(raw)
+      if (inlineRun !== null) {
+        current.lines.push(inlineRun[2].trim())
+        runIndent = -1
+        continue
+      }
+      continue
+    }
+    if (runIndent < 0) continue
+    if (raw.trim() === '') continue
+    const indent = raw.length - raw.trimStart().length
+    if (indent <= runIndent) {
+      runIndent = -1
+      continue
+    }
+    const line = raw.trim()
+    if (line.startsWith('#')) continue
+    current.lines.push(line)
+  }
+  return steps.filter((step) => step.lines.length > 0)
+}
 
 for (const name of ['ci.yml', 'release.yml']) {
   const file = join(root, '.github', 'workflows', name)
   if (!existsSync(file)) continue
   const text = readFileSync(file, 'utf8')
-  // `set -e` inside every multi-line shell step, and no `|| true` swallowing a failure.
+
+  // A failure that is explicitly discarded never turns a check red.
   if (/\|\|\s*true/.test(text)) {
     fail(`${name} 里有 \`|| true\`，会把失败吞掉`)
   }
   if (/continue-on-error:\s*true/.test(text)) {
     fail(`${name} 里有 continue-on-error: true，失败不会让检查变红`)
+  }
+  if (/(^|\s)set\s+\+e(\s|$)/m.test(text)) {
+    fail(`${name} 里关掉了 errexit（\`set +e\`），后面的失败不会被发现`)
+  }
+
+  const steps = shellSteps(text)
+  let multiCount = 0
+  for (const step of steps) {
+    if (step.multiline) {
+      multiCount += 1
+      // `set -e` must be the shell's own state, not a substring of something else.
+      if (!/(^|\s|;)set\s+-[a-z]*e[a-z]*(\s|$)/.test(step.lines.join('\n'))) {
+        fail(`${name} 的步骤「${step.name}」是多行 run 却没有 \`set -e\`，中间某条命令失败后它会继续跑`)
+      }
+    }
+  }
+  note(`${name}：${steps.length} 个执行 shell 的步骤，其中 ${multiCount} 个多行步骤都开了 errexit`)
+
+  // --- 9. A pipeline must not hide the status of the command on its left ---
+  for (const step of steps) {
+    const piped = step.lines.filter((line) => /[^|]\|[^|]/.test(unquoted(line)))
+    if (piped.length === 0) continue
+    const hasPipefail = /pipefail/.test(step.lines.join('\n'))
+    if (!hasPipefail) {
+      fail(`${name} 的步骤「${step.name}」里有管道但没有 \`pipefail\`，左侧命令失败会被右侧吞掉：${piped[0]}`)
+    }
   }
 }
 

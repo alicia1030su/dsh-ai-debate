@@ -198,6 +198,12 @@ let state = null
 let report = null
 
 function saveState() {
+  // 状态文件同时是「这一次交付已经证明了什么」的记录，所以测试计数与产物必须一起落盘。
+  // 第一版没有同步这两项：`--resume` 跳过验证阶段后 `report.tests` 还是空骨架，
+  // 最后那份交付状态报告即使发布成功也会被自洽检查判成「测试数为 0」—— 一次成功的
+  // 真机发布，就这样被自己的报告判成失败。
+  if (report !== null && report.tests !== null) state.tests = report.tests
+  if (report !== null && report.artifacts.length > 0) state.artifacts = report.artifacts
   writeJsonAtomic(statePath, state)
   writeJsonAtomic(join(stateDir, statusFileName(state.version)), report)
 }
@@ -291,33 +297,8 @@ function verify(version) {
     report.notes.push('跳过了测试（--skip-tests）：本次运行不能作为发布依据')
     report.unverified.push('全部自动化测试（--skip-tests）')
   } else {
-    const tests = run(process.execPath, ['--experimental-transform-types', '--test', 'test/**/*.test.ts'])
-    const summary = parseTestSummary(`${tests.stdout}\n${tests.stderr}`)
-    if (tests.code !== 0) {
-      report.checks.tests = false
-      report.tests = summary
-      fail('verify', `测试失败（${summary.failed ?? '?'} 项）\n${tailLines(tests.stdout, 40)}`)
-    }
-    if (!summary.consistent || summary.total === 0) {
-      fail('verify', `测试汇总不自洽：${JSON.stringify(summary)}。零测试跑完也算通过，所以这里直接判失败。`)
-    }
-    report.checks.tests = true
-    report.tests = {
-      files: readdirSync(join(root, 'test')).filter((name) => name.endsWith('.test.ts')).length,
-      total: summary.total,
-      passed: summary.passed,
-      failed: summary.failed,
-      skipped: summary.skipped,
-    }
-    log(`测试 ${summary.total} 项通过（跳过 ${summary.skipped} 项）`)
+    runTests()
   }
-
-  const leaks = run(process.execPath, ['scripts/audit-leaks.mjs'])
-  if (leaks.code !== 0) {
-    report.checks.leakScan = false
-    fail('verify', `凭据扫描命中：\n${leaks.stdout}${leaks.stderr}`)
-  }
-  report.checks.leakScan = true
 
   // 打包前先删旧产物：留着上一次的 tgz 会让「这次真的生成了吗」变成一个无法回答的问题。
   const tarball = `dsh-ai-debate-${version}.tgz`
@@ -331,6 +312,17 @@ function verify(version) {
   if (pack.code !== 0) fail('verify', `打包失败：\n${pack.stdout}${pack.stderr}`)
   const zip = run(process.execPath, ['scripts/source-zip.mjs', '--out', '.'])
   if (zip.code !== 0) fail('verify', `生成源码包失败：\n${zip.stdout}${zip.stderr}`)
+
+  // 凭据扫描必须在打包之后：`audit-leaks.mjs` 检查的是**磁盘上的 tgz 与工作树**。
+  // 升版本号之后新 tgz 还没生成，它会直接 ENOENT。第一版把这一步放在打包前面，
+  // 因为当时工作区里恰好留着上一版的 tgz，所以没暴露 —— 换个版本号就立刻失败。
+  // 这也是「顺序」本身的 bug：扫一个还不存在的产物，本来就不该算通过。
+  const leaks = run(process.execPath, ['scripts/audit-leaks.mjs'])
+  if (leaks.code !== 0) {
+    report.checks.leakScan = false
+    fail('verify', `凭据扫描命中：\n${leaks.stdout}${leaks.stderr}`)
+  }
+  report.checks.leakScan = true
 
   for (const name of [tarball, sourceZip]) {
     const path = join(root, name)
@@ -360,6 +352,35 @@ function verify(version) {
   log(
     `产物：${tarball} ${report.artifacts[0].sha256.slice(0, 12)}… / ${sourceZip} ${report.artifacts[1].sha256.slice(0, 12)}…`,
   )
+}
+
+/**
+ * 跑全部自动化测试，并把真实计数记进报告。
+ *
+ * 单独抽出来是为了 `--resume`：状态文件里没有测试计数时（老版本写的状态文件、
+ * 或者上一轮根本没跑到验证），续跑必须**真的跑一遍**再填。猜一个数字、或者把
+ * 「没重跑」写成「没跑过」，都会让最后那份交付报告变成假证据。
+ */
+function runTests() {
+  const tests = run(process.execPath, ['--experimental-transform-types', '--test', 'test/**/*.test.ts'])
+  const summary = parseTestSummary(`${tests.stdout}\n${tests.stderr}`)
+  if (tests.code !== 0) {
+    report.checks.tests = false
+    report.tests = summary
+    fail('verify', `测试失败（${summary.failed ?? '?'} 项）\n${tailLines(tests.stdout, 40)}`)
+  }
+  if (!summary.consistent || summary.total === 0) {
+    fail('verify', `测试汇总不自洽：${JSON.stringify(summary)}。零测试跑完也算通过，所以这里直接判失败。`)
+  }
+  report.checks.tests = true
+  report.tests = {
+    files: readdirSync(join(root, 'test')).filter((name) => name.endsWith('.test.ts')).length,
+    total: summary.total,
+    passed: summary.passed,
+    failed: summary.failed,
+    skipped: summary.skipped,
+  }
+  log(`测试 ${summary.total} 项通过（跳过 ${summary.skipped} 项）`)
 }
 
 /**
@@ -403,19 +424,33 @@ function tailLines(text, count) {
  * `.github/workflows/*.yml`」或「新建 `src/security/xxx.ts`」会被判成不敏感，
  * 自动合并上去 —— 而这恰好是最该拦的一类改动。所以未跟踪文件单独列出来，
  * 当成整文件新增。
+ *
+ * 另一处更隐蔽：这个函数以前在 `git diff` 失败时 `return []`，也就是
+ * 「拿不到改动清单」= 「没有改动」= 「不敏感」= 自动合并。安全判定的默认值
+ * 必须是「不知道就停」，不是「不知道就放行」。
  */
 function collectChanges(base) {
   const names = run('git', ['diff', '--name-only', base])
-  if (names.code !== 0) return []
+  if (names.code !== 0) {
+    fail('verify', `列不出相对 ${base} 的改动，敏感判定无从做起：${names.stderr.trim()}`)
+  }
   const tracked = names.stdout.trim().split(/\r?\n/).filter(Boolean)
 
   const others = run('git', ['ls-files', '--others', '--exclude-standard'])
-  const untracked = others.code === 0 ? others.stdout.trim().split(/\r?\n/).filter(Boolean) : []
+  if (others.code !== 0) {
+    fail('verify', `列不出未跟踪文件，新建的敏感文件会被漏判：${others.stderr.trim()}`)
+  }
+  const untracked = others.stdout.trim().split(/\r?\n/).filter(Boolean)
 
   const normalize = (path) => path.split('\\').join('/')
 
   const changes = tracked.map((path) => {
     const diff = run('git', ['diff', base, '--', path])
+    // 单文件 diff 失败时，addedLines 会是空数组，行级的敏感规则（例如某一行
+    // 新增了 `permissions: write-all`）就再也匹配不到 —— 只剩路径规则兜着。
+    if (diff.code !== 0) {
+      fail('verify', `读不出 ${normalize(path)} 的差异，没法判断它改了什么：${diff.stderr.trim()}`)
+    }
     const lines = diff.stdout.split(/\r?\n/)
     return {
       path: normalize(path),
@@ -798,8 +833,12 @@ function createTag(version, tagDecision, defaultBranch) {
   const push = run('git', ['push', 'origin', tag])
   if (push.code !== 0) fail('tag', `推送标签失败：${push.stdout}${push.stderr}`)
 
-  const objectSha = run('git', ['rev-list', '-n', '1', tag]).stdout.trim()
-  log(`已推送标签 ${tag}（指向 ${objectSha.slice(0, 12)}）`)
+  const objectSha = run('git', ['rev-list', '-n', '1', tag])
+  if (objectSha.code !== 0 || objectSha.stdout.trim() === '') {
+    // 标签已经推上去了，但读不回它指向的提交。此时如实报错比打印「指向 （空）」有用。
+    fail('tag', `标签 ${tag} 已推送，但读不到它指向的提交：${objectSha.stderr.trim()}`)
+  }
+  log(`已推送标签 ${tag}（指向 ${objectSha.stdout.trim().slice(0, 12)}）`)
   return { tag, created: true }
 }
 
@@ -817,18 +856,25 @@ async function waitForRelease(version) {
     }
 
     // 工作流可能已经失败：先看有没有对应的失败运行，有就直接报出来，不干等 45 分钟。
+    //
+    // 必须按标签过滤：`gh run list --workflow Release` 返回的是**所有版本**的发布运行，
+    // 历史上任何一次失败的发布都会在这里被当成「这一次失败了」。第一次真机演练就
+    // 撞上：标签刚推上去、本次运行还在跑，它却报出 41160299089 —— 那是 v0.2.16 早先
+    // 一次失败的运行。发布历史越长，这个误判越必然出现。
     const runs = run('gh', [
       'run',
       'list',
       '--workflow',
       'Release',
       '--limit',
-      '5',
+      '10',
       '--json',
       'databaseId,status,conclusion,headBranch,displayTitle',
     ])
     if (runs.code === 0) {
-      const failed = parseJsonArray(runs.stdout).find((item) => item.conclusion === 'failure')
+      const failed = parseJsonArray(runs.stdout).find(
+        (item) => item.headBranch === tag && (item.conclusion === 'failure' || item.conclusion === 'cancelled'),
+      )
       if (failed !== undefined) {
         fail('release', `Release 工作流失败（Run ${failed.databaseId}）`, [
           `到 Actions 查看 Run ${failed.databaseId} 的日志`,
@@ -902,6 +948,22 @@ async function main() {
       state = saved
       report.stage = saved.stage
       report.github = { ...report.github, ...saved.github }
+      // 上一轮已经跑过的测试与已经算过的产物要带过来。`verify` 在续跑时被跳过，
+      // 不补回来的话这份交付报告会在最后一步被判成「测试数为 0」—— 那是把
+      // 「这一轮没重跑」说成了「没跑过」。
+      if (saved.tests !== null && saved.tests !== undefined) report.tests = saved.tests
+      if (Array.isArray(saved.artifacts) && saved.artifacts.length > 0) report.artifacts = saved.artifacts
+      if (saved.tests !== null && saved.tests !== undefined) {
+        report.checks.tests = true
+        report.notes.push(`测试计数沿用上一轮（${saved.tests.total} 项），本轮 --resume 未重跑`)
+      } else if (!SKIP_TESTS) {
+        // 状态文件里没有计数 —— 上一轮还没走到验证，或者状态文件来自旧版本。
+        // 这时候唯一诚实的做法是真跑一遍，而不是留空或者编一个数。
+        log('状态文件里没有测试计数，补跑全部测试')
+        runTests()
+        state.tests = report.tests
+        saveState()
+      }
       log(`从 ${STAGE_LABELS[saved.stage] ?? saved.stage} 继续`)
     } else {
       log('没有可用的状态文件，从头开始')
@@ -1028,8 +1090,21 @@ async function main() {
     }
 
     // 合并后重新取 main 的真实提交，用它来判断标签指向哪里。
-    run('git', ['fetch', 'origin'])
-    const mainSha = run('git', ['rev-parse', `origin/${defaultBranch}`]).stdout.trim()
+    //
+    // 这两步以前都不看退出码，而它们恰好决定「标签打在哪个提交上」：
+    // fetch 失败时 `origin/<default>` 还是上一轮抓到的旧引用，rev-parse 失败时
+    // mainSha 是空串。前者会把标签指向合并前的提交，后者会让 decideTag 以
+    // 「expectedCommit 为空」为由拒绝 —— 两种结果都比一句明确的报错难查得多。
+    const fetchMain = run('git', ['fetch', 'origin'])
+    if (fetchMain.code !== 0) {
+      fail('tag', `git fetch 失败，接下来读到的是过期的 origin 引用：${fetchMain.stderr.trim()}`)
+    }
+    const mainShaResult = run('git', ['rev-parse', `origin/${defaultBranch}`])
+    if (mainShaResult.code !== 0) {
+      fail('tag', `读不到 origin/${defaultBranch} 的提交：${mainShaResult.stderr.trim()}`)
+    }
+    const mainSha = mainShaResult.stdout.trim()
+    if (mainSha === '') fail('tag', `origin/${defaultBranch} 的提交是空字符串，无法判断标签该指向哪里`)
     report.github.commitSha = mainSha
 
     const remoteTag = run('git', ['ls-remote', '--tags', 'origin', tagForVersion(version)])
@@ -1040,7 +1115,10 @@ async function main() {
       // annotated tag 在 ls-remote 里给的是 tag 对象的 SHA，要用 rev-list 才能拿到提交。
       tagCommit = run('git', ['rev-list', '-n', '1', tagForVersion(version)]).stdout.trim() || null
       if (tagCommit === null) {
-        run('git', ['fetch', 'origin', '--tags'])
+        const fetchTags = run('git', ['fetch', 'origin', '--tags'])
+        if (fetchTags.code !== 0) {
+          fail('tag', `标签 ${tagForVersion(version)} 在远端存在，但抓取标签失败，无法确认它指向哪个提交：${fetchTags.stderr.trim()}`)
+        }
         tagCommit = run('git', ['rev-list', '-n', '1', `origin/tags/${tagForVersion(version)}`]).stdout.trim() || null
       }
     }
