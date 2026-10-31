@@ -63,7 +63,13 @@ function findPnpm() {
       '（本脚本刻意不去猜开发机上的路径。）',
   )
 }
-const ZIP = join(ROOT, '..', 'dsh-ai-debate-source-0.2.16.zip')
+// The archive to rebuild from. Defaults to the one this checkout just produced, but an explicit
+// path wins — that is how the *published* asset gets verified: download it from the release page
+// and point this script at the download, instead of trusting a local rebuild to be the same file.
+const ZIP = process.argv[2] ?? join(ROOT, '..', 'dsh-ai-debate-source-0.2.16.zip')
+// The package the fresh build is measured against. Defaults to this machine's own build; pass the
+// published asset to prove the *released* tgz is reproducible from the *released* source archive.
+const REFERENCE_TGZ = process.argv[3]
 
 const steps = []
 function step(name, fn) {
@@ -187,16 +193,16 @@ try {
     return `${statSync(packed).size} 字节，sha256 ${sha256(packed).slice(0, 16)}…`
   })
 
-  step('与开发机构建的产物对比', () => {
+  step('与参照产物对比', () => {
     const fresh = join(appDir, 'dsh-ai-debate-0.2.16.tgz')
-    const dev = join(ROOT, 'dsh-ai-debate-0.2.16.tgz')
+    const dev = REFERENCE_TGZ ?? join(ROOT, 'dsh-ai-debate-0.2.16.tgz')
     const freshHash = sha256(fresh)
     if (!existsSync(dev)) {
-      throw new Error(`开发机还没打 0.2.16 的包，无法对比（先跑 node scripts/pack.mjs）`)
+      throw new Error(`参照产物不存在：${dev}（本机没有就先跑 node scripts/pack.mjs）`)
     }
     const devHash = sha256(dev)
     if (freshHash !== devHash) {
-      throw new Error(`两个 TGZ 不一致：全新 ${freshHash.slice(0, 16)}… vs 开发机 ${devHash.slice(0, 16)}…`)
+      throw new Error(`两个 TGZ 不一致：全新 ${freshHash.slice(0, 16)}… vs 参照 ${devHash.slice(0, 16)}…`)
     }
     return `字节完全一致：${freshHash.slice(0, 32)}…`
   })
