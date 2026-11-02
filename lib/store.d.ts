@@ -17,6 +17,7 @@
  * database would add an install dependency for no benefit at this size.
  */
 import type { TargetSnapshot } from './types.js';
+import type { CapabilityName } from './platforms/contracts.js';
 import type { ApprovalRecord } from './security/approvals.js';
 /**
  * A store failure the caller is expected to act on.
@@ -274,6 +275,18 @@ export interface StoreData {
      * thing — nothing has been approved.
      */
     readonly approvals?: readonly ApprovalRecord[];
+    /**
+     * One-off publish verification records, oldest first (v0.2.21 §三).
+     *
+     * This is the durable half of the verification flow. It is written **before** the network
+     * call (`outcome: 'pending'`) and again after, so a crash mid-publish leaves "attempted,
+     * outcome unknown" rather than silence. The second write upserts by `key`, which is what makes
+     * "one authorization, one publish" true across process restarts instead of only in memory.
+     *
+     * Optional for the same reason `security` and `approvals` are: a store written by an earlier
+     * version has no such list, and "no records" means "nothing has been verified yet".
+     */
+    readonly verification?: readonly VerificationRecordRow[];
 }
 /**
  * The persisted form of a security event.
@@ -293,6 +306,40 @@ export interface SecurityEventRecord {
     readonly postId?: string;
     readonly decision?: string;
     readonly excerpt?: string;
+}
+/**
+ * The persisted form of one publish-verification attempt.
+ *
+ * Structurally identical to `VerificationRecord` in `verification.ts`, declared separately so
+ * persistence keeps knowing nothing about that module's types — the same arrangement
+ * `SecurityEventRecord` uses.
+ */
+export interface VerificationRecordRow {
+    readonly key: string;
+    readonly platform: string;
+    readonly capability: CapabilityName;
+    readonly authorizedAccountId: string;
+    readonly authorizedThreadId: string;
+    readonly authorizedBy: string;
+    readonly approvedText: string;
+    readonly startedAt: string;
+    /**
+     * The adapter build this attempt ran against (v0.2.21 §三.9).
+     *
+     * Absent on records written before the field existed, and absent is treated as "unknown build",
+     * which never promotes a capability.
+     */
+    readonly adapterVersion?: string;
+    readonly outcome: 'pending' | 'succeeded' | 'failed' | 'uncertain';
+    readonly publishedPostId?: string;
+    readonly readBack?: {
+        readonly postFound: boolean;
+        readonly authorMatched: boolean;
+        readonly textMatched: boolean;
+        readonly parentMatched: boolean;
+        readonly notes: readonly string[];
+    };
+    readonly failure?: string;
 }
 /** Empty store. */
 export declare function emptyStore(): StoreData;
@@ -601,6 +648,61 @@ export declare class DebateStore {
     appendSecurityEvent(event: SecurityEventRecord, limit: number): Promise<void>;
     /** Sessions for one thread, newest first. */
     sessionsForThread(threadId: string): readonly StoredSession[];
+    /** Every verification record, oldest first. */
+    getVerificationRecords(): readonly VerificationRecordRow[];
+    /**
+     * Re-read the verification records from disk before answering.
+     *
+     * ## Why a plain getter is not enough (v0.2.21 P0-1)
+     *
+     * `getVerificationRecords()` answers from *this instance's* copy, which only changes when this
+     * instance writes. Two plugin instances over one directory (the arrangement v0.2.7 made
+     * routine) therefore disagree: the instance that did not claim the authorization still sees
+     * none, and a settings page opened there would report "nothing has been verified yet" about a
+     * record that demonstrably exists.
+     *
+     * The read-only paths that show this to a human are async already, so they can pay one file
+     * read. The publish gate stays synchronous on purpose — a gate that awaits a disk read in the
+     * middle of a decision is a gate with a new failure mode — and is refreshed by the same call
+     * whenever a publish begins.
+     */
+    refreshVerificationRecords(): Promise<readonly VerificationRecordRow[]>;
+    /**
+     * Record one verification attempt, upserting by `key`.
+     *
+     * Upsert rather than append is the whole point: the runner writes a `pending` row before the
+     * network call and the outcome after, and those two writes describe **one** attempt. Appending
+     * both would make "was this authorization used?" answerable two different ways depending on
+     * which row a reader happened to look at.
+     */
+    putVerificationRecord(record: VerificationRecordRow): Promise<void>;
+    /**
+     * Atomically claim one verification authorization, or report that it is spent.
+     *
+     * ## Why this cannot be "read the records, then write pending" (v0.2.21 P0-1)
+     *
+     * The runner used to do exactly that: read `getVerificationRecords()`, hand the resulting key
+     * set to `checkVerification()`, and only then `putVerificationRecord({ outcome: 'pending' })`.
+     * Both steps are correct on their own and useless together: two requests can both read an
+     * empty list, both conclude the authorisation is unused, and both publish. The gap is small,
+     * which is worse than a large one — it survives every manual test and shows up under exactly
+     * the load nobody reproduces.
+     *
+     * `transact()` is the existing primitive for this shape (v0.2.8 built it for approvals for the
+     * same reason). The check and the write happen inside one lock hold, against the document as
+     * it is on disk, so "is this authorization spent?" and "record that it is now" are one
+     * indivisible decision.
+     *
+     * Returns `{ claimed: false, existing }` — not an error — when the key is already present.
+     * A refusal is the normal outcome here, and the caller must be able to tell it apart from a
+     * disk failure. A write failure throws: the caller must **not** publish in that case.
+     */
+    claimVerificationRecord(record: VerificationRecordRow): Promise<{
+        claimed: true;
+    } | {
+        claimed: false;
+        existing: VerificationRecordRow;
+    }>;
     /** The dedupe record for a trigger, if any. */
     findDedupe(key: string): DedupeRecord | undefined;
     /**
@@ -680,7 +782,7 @@ export declare function validateStore(value: unknown): {
  * interface: adding a field to `StoreData` without deciding what happens to it in
  * `prune()` now fails loudly instead of losing data quietly.
  */
-export declare const PRESERVED_FIELDS: readonly ["version", "sessions", "dedupe", "usage", "security", "approvals"];
+export declare const PRESERVED_FIELDS: readonly ["version", "sessions", "dedupe", "usage", "security", "approvals", "verification"];
 /**
  * How many sessions are still actionable, and whether that exceeds the cap.
  *

@@ -66,6 +66,22 @@ export interface VerificationAuthorization {
   /** Which capability this run is meant to prove. */
   readonly capability: CapabilityName
   /**
+   * For `comment.reply`: the floor the reply must be attached under.
+   *
+   * Required for a reply and meaningless for a new comment, because the read-back has to check
+   * the **parent**, and "wherever it ended up" is not something the owner authorized. Left
+   * optional at the type level so a `comment.publish` authorization does not have to invent a
+   * value; `checkVerification` refuses a reply authorization that leaves it empty.
+   */
+  readonly authorizedFloorId?: string
+  /**
+   * For `comment.reply`: the exact comment being answered (楼中楼).
+   *
+   * Same reasoning as `authorizedFloorId`: without it the read-back can only confirm "a reply
+   * exists somewhere under the floor", which is the weaker claim this flow must not accept.
+   */
+  readonly replyToPostId?: string
+  /**
    * The exact reply text, pre-approved by the owner.
    *
    * Required rather than generated: the point of verification is to observe what
@@ -85,6 +101,15 @@ export type VerificationRefusal =
   | 'already_used'
   /** A required authorization field is empty. */
   | 'incomplete_authorization'
+  /**
+   * The account the live session belongs to could not be established (v0.2.21 P0-2).
+   *
+   * Distinct from `account_mismatch`: that one knows who is logged in and it is the wrong
+   * person; this one does not know. Both refuse, but the remedy differs — one asks the owner to
+   * log in as the right account, the other asks them to check the session at all — and a single
+   * message for both would send them looking in the wrong place.
+   */
+  | 'account_unknown'
   /** The live session is not the authorized account. */
   | 'account_mismatch'
   /** The target is not the authorized thread. */
@@ -118,6 +143,15 @@ export interface VerificationRecord {
   readonly authorizedBy: string
   readonly approvedText: string
   readonly startedAt: string
+  /**
+   * The adapter build this attempt ran against.
+   *
+   * Stamped at attempt time, not looked up later: replacing the publish method must not inherit
+   * the previous adapter's evidence, and the only moment that knows which build actually ran is
+   * this one. Without it, `capability-evidence.ts` has nothing to compare and would either
+   * over-promote (old success, new code) or refuse to promote at all.
+   */
+  readonly adapterVersion?: string
   readonly outcome: 'pending' | 'succeeded' | 'failed' | 'uncertain'
   /** The post id the platform returned, when it returned one. */
   readonly publishedPostId?: string
@@ -143,11 +177,15 @@ export interface VerificationReadBack {
 
 /** The key for one authorization, so a second run is detectable. */
 export function authorizationKey(auth: VerificationAuthorization): string {
+  // The parent is part of the key for a reply: authorizing "reply to floor 3" must not be
+  // silently reusable for "reply to floor 4" in the same thread.
   return [
     auth.platform,
     auth.capability,
     auth.authorizedAccountId,
     auth.authorizedThreadId,
+    auth.capability === 'comment.reply' ? (auth.authorizedFloorId ?? '') : '',
+    auth.capability === 'comment.reply' ? (auth.replyToPostId ?? '') : '',
   ].join('\u0000')
 }
 
@@ -197,6 +235,12 @@ export function checkVerification(input: {
   if (authorization.authorizedThreadId.trim() === '') missing.push('授权帖子')
   if (authorization.authorizedBy.trim() === '') missing.push('授权人')
   if (authorization.approvedText.trim() === '') missing.push('已批准的正文')
+  // A reply needs a specific parent. Without one the read-back can only confirm "a reply
+  // exists", which is exactly the weaker claim this flow must not accept.
+  if (authorization.capability === 'comment.reply') {
+    if ((authorization.authorizedFloorId ?? '').trim() === '') missing.push('要回复的楼层 id')
+    if ((authorization.replyToPostId ?? '').trim() === '') missing.push('要回复的那条评论 id')
+  }
   if (missing.length > 0) {
     return {
       ok: false,
@@ -217,7 +261,27 @@ export function checkVerification(input: {
 
   // The live identity must be the authorized one. Publishing from a different
   // logged-in account would post as someone who never consented.
-  if (liveAccountId !== undefined && liveAccountId !== authorization.authorizedAccountId) {
+  //
+  // ## `undefined` is a refusal, not a skip (v0.2.21 P0-2)
+  //
+  // The previous form was `if (liveAccountId !== undefined && liveAccountId !== authorized)`.
+  // That reads as defensive but means "we could not find out who is logged in, so we will send
+  // it anyway" — and the record it then writes claims the authorised account made the post,
+  // which is exactly the claim this whole flow exists to be able to make truthfully.
+  //
+  // A read failure and a logged-out session both land here. Refusing is the only answer that
+  // keeps the record honest; the message tells the owner which of the two it looks like.
+  if (liveAccountId === undefined || liveAccountId.trim() === '') {
+    return {
+      ok: false,
+      refusal: 'account_unknown',
+      message:
+        '无法确认当前真实登录的是哪个账号，因此不会发表。' +
+        '验收要证明的是「这个账号能发」，读不到登录态就证明不了——' +
+        '请先在设置页确认登录状态，再回来验收',
+    }
+  }
+  if (liveAccountId !== authorization.authorizedAccountId) {
     return {
       ok: false,
       refusal: 'account_mismatch',

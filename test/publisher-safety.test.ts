@@ -571,19 +571,19 @@ test('the limited-auto policy enforces its caps and cooldown', () => {
     threadId: 't',
     sessionPublishes: 0,
     threadPublishes: 0,
-    humanApproved: false,
-    // v0.2.5: the policy reads the security verdict, and treats a *missing* one as
-    // `review` — deliberately, so a caller that forgets to pass it cannot get an
-    // automatic slot by omission. This test is about the caps and cooldown, so it
-    // states the verdict it is assuming.
+    // v0.2.21 §二：受限模式不再有「自动额度」。这个测试验的是额度与冷却，所以它给的是
+    // 一条**已批准**的发表 —— 未批准的情形在下面单独断言，走的是 `approval_required`。
+    humanApproved: true,
     securityDecision: 'allow' as const,
-    // v0.2.14 §6.4: an automatic slot additionally requires a *settled* debate analysis.
-    // Without this the policy refuses with `semantic_unsettled` — intended behaviour, but this
-    // test is about the caps and cooldown, so it states the assumption explicitly.
     semanticSettled: true,
     now: 1_000_000,
   }
   assert.equal(checkPublishPolicy(policy, base).allowed, true)
+
+  // 先钉住新策略本身：同一个受限模式，去掉批准就必须拒绝，理由必须是缺批准。
+  const unapproved = checkPublishPolicy(policy, { ...base, humanApproved: false })
+  assert.equal(unapproved.allowed, false, '受限模式不能在没有人工批准时发表')
+  assert.equal((unapproved as { code: string }).code, 'approval_required')
 
   const capped = checkPublishPolicy(policy, { ...base, sessionPublishes: 2 })
   assert.equal(capped.allowed, false)
@@ -597,20 +597,22 @@ test('the limited-auto policy enforces its caps and cooldown', () => {
   assert.equal(threadCapped.allowed, false)
   assert.equal((threadCapped as { code: string }).code, 'thread_limit')
 
-  // A human approval still respects the thread cap but skips the auto budget.
-  //
-  // `humanApproved: true` is the whole point of the case and was missing: with the
-  // base value (`false`) and 99 session publishes this is a plain session-limit
-  // refusal, which the earlier assertion already covers. The gap only became visible
-  // once the first assertion in this test stopped failing first.
+  // v0.2.21 起批准不再是「跳过分模式限制」的钥匙：受限模式的额度与冷却对已批准的发表同样有效。
+  // 旧断言是 `humanOverBudget.allowed === true`（批准可以绕过会话额度），那和「模式只能增加
+  // 限制、不能减少限制」直接冲突，因此改成下面这样。
   const humanOverBudget = checkPublishPolicy(policy, {
     ...base,
     sessionPublishes: 99,
     humanApproved: true,
   })
-  assert.equal(humanOverBudget.allowed, true)
+  assert.equal(
+    humanOverBudget.allowed,
+    false,
+    '受限模式的会话额度对已批准的发表同样生效：批准不能把限制变成无限',
+  )
+  assert.equal((humanOverBudget as { code: string }).code, 'session_limit')
 
-  // …but it does not lift the thread cap: an approval is not a licence to exceed it.
+  // …它也不解除帖子级上限：批准不是超额许可。
   const approvedThreadCapped = checkPublishPolicy(policy, {
     ...base,
     threadPublishes: 5,

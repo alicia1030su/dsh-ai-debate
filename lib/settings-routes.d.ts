@@ -25,6 +25,7 @@
  * `viewOfSettings` and `describeSecrets`, and no other path sends one.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import type { VerificationAuthorization } from './verification.js';
 import { type ResolvedConfig } from './config.js';
 import type { CredentialPhase } from './credential-mirror.js';
 import { maskedTail, type CredentialSeam, type SecretOverlay, type SecretRefName } from './secrets.js';
@@ -162,6 +163,29 @@ export interface SettingsRouteDeps {
     platformDiagnostics?(options?: {
         readonly refresh?: boolean;
     }): Promise<readonly PlatformDiagnosticBlock[]>;
+    /**
+     * The one-off publish verification view, for the owner-only panel (v0.2.21 §三/§四).
+     *
+     * Reads the live account, the declared capabilities and every record. Optional for the same
+     * reason `platformDiagnostics` is: route tests written before this existed keep compiling, and
+     * a build without the publishing stack shows "this build cannot verify" rather than a green
+     * state it did not measure.
+     */
+    verification?(input: {
+        readonly platform: string;
+    }): Promise<VerificationView>;
+    /**
+     * Run exactly one verification attempt.
+     *
+     * Separate from `verification()` so the read-only view can be served without the write
+     * dependency existing at all: a deployment that never wants to publish once can leave this
+     * undefined, and the POST is then refused instead of quietly becoming a no-op.
+     *
+     * The input is the owner's form, verbatim. Nothing here fills a default — §三.2 requires the
+     * account, the thread, the target and the text to come from the owner, and a default is
+     * precisely the thing that would make them come from the code.
+     */
+    runVerification?(input: VerificationActionInput): Promise<VerificationRunView>;
     /**
      * Candidates that are waiting for a human approval, newest first.
      *
@@ -382,6 +406,53 @@ export interface SecurityView {
     readonly alreadyPublished: number;
 }
 /** The settings service face used here (structural; see `host.ts` for the why). */
+/**
+ * The fields the owner fills in for a one-off publish verification (v0.2.21 §三).
+ *
+ * Restated here instead of importing `VerificationAuthorization`: this module must stay loadable
+ * without the publishing stack, and a page-shaped interface is cheaper to keep honest than a
+ * type that quietly grows a default. Every field is required except the two parent ids, which
+ * only a nested reply needs.
+ */
+export interface VerificationActionInput {
+    readonly platform: string;
+    readonly capability: 'comment.publish' | 'comment.reply';
+    readonly authorizedAccountId: string;
+    readonly authorizedThreadId: string;
+    readonly authorizedFloorId?: string;
+    readonly replyToPostId?: string;
+    readonly authorizedBy: string;
+    readonly approvedText: string;
+}
+/** The POST result for one verification attempt. */
+export interface VerificationRunView {
+    readonly ok: boolean;
+    readonly message: string;
+    /** Which refusal stopped it, when it did not publish. */
+    readonly refusal?: string;
+    readonly publishedPostId?: string;
+    readonly readBack?: {
+        readonly postFound: boolean;
+        readonly authorMatched: boolean;
+        readonly textMatched: boolean;
+        readonly parentMatched: boolean;
+        readonly notes: readonly string[];
+    };
+    /** True only when all four read-back facts held and the capability may be treated as proven. */
+    readonly upgraded: boolean;
+}
+/**
+ * Turn the owner's form into the authorization the runner takes.
+ *
+ * Two rules, both from §三:
+ *
+ * - **The capability decides the family.** `comment.reply` requires a floor and a target post;
+ *   `comment.publish` must not inherit them, because a leftover id from a previous attempt would
+ *   silently move the next publish somewhere the owner did not pick.
+ * - **Nothing is defaulted.** A blank field stays blank, so `checkVerification` refuses it and the
+ *   owner sees which field is missing instead of a publish to an empty account id.
+ */
+export declare function authorizationFromInput(input: VerificationActionInput): VerificationAuthorization;
 export interface SettingsService {
     writable: boolean;
     update(namespace: string, patch: Record<string, unknown>): Promise<unknown>;
@@ -389,6 +460,80 @@ export interface SettingsService {
         op: 'unset';
         path: readonly string[];
     }[]): Promise<unknown>;
+}
+/**
+ * What the verification panel reads, and what the run action returns (v0.2.21 §三/§四).
+ *
+ * ## Why the view carries `expectedCapability` instead of the page computing it
+ *
+ * §三.4 requires the record's family, target and account to follow from the input. The page could
+ * derive that itself, but then there would be two derivations and the persisted record would
+ * follow whichever ran last. It is computed once, on the server, and echoed back so the owner
+ * sees exactly what will be checked before pressing the button — and the run action refuses a
+ * request whose `expectedCapability` disagrees with its own derivation.
+ */
+export interface VerificationView {
+    readonly ok: boolean;
+    /**
+     * The account the live session **actually** reports right now (v0.2.21 P0-2).
+     *
+     * Absent when the session could not be read. It is deliberately not filled from configuration:
+     * the panel used to show the configured id under this name, which told the owner "this is who
+     * is logged in" when nobody had checked. A verification cannot proceed on an unknown account,
+     * so the absence has to survive into the view.
+     */
+    readonly liveAccountId?: string;
+    /** The configured posting identity. Separate field, because it is a *different fact*. */
+    readonly configuredAccountId?: string;
+    readonly liveAccountName?: string;
+    readonly adapterVersion?: string;
+    readonly capabilities: readonly {
+        readonly capability: string;
+        readonly declared: string;
+        readonly effective: string;
+        readonly reason: string;
+    }[];
+    readonly records: readonly {
+        readonly key: string;
+        readonly platform: string;
+        readonly capability: string;
+        readonly authorizedAccountId: string;
+        readonly authorizedThreadId: string;
+        readonly startedAt: string;
+        readonly outcome: string;
+        readonly publishedPostId?: string;
+        readonly readBack?: {
+            readonly postFound: boolean;
+            readonly authorMatched: boolean;
+            readonly textMatched: boolean;
+            readonly parentMatched: boolean;
+            readonly notes: readonly string[];
+        };
+        readonly failure?: string;
+    }[];
+    /** One line per reason this deployment cannot verify right now. Empty means "can try". */
+    readonly blockers: readonly string[];
+    /**
+     * The machine-readable half (§四).
+     *
+     * Same numbers the prose uses, in a shape a script can read: which capabilities are claimed,
+     * which were actually proven, and which are still only declared. `null` never appears here —
+     * an unknown state is `'unverified'`, because a script that sees `null` will treat it as "fine".
+     */
+    readonly report: {
+        readonly platform: string;
+        readonly generatedAt: string;
+        readonly capabilities: readonly {
+            readonly name: string;
+            readonly declared: string;
+            readonly effective: string;
+            readonly evidence: readonly {
+                readonly at: string;
+                readonly accountId: string;
+                readonly adapterVersion: string;
+            }[];
+        }[];
+    };
 }
 /** Result of probing the configured model endpoint. */
 export interface ModelProbe {
@@ -519,6 +664,7 @@ export declare const ROUTE_SECRETS = "/api/dsh-ai-debate/secrets";
 export declare const ROUTE_STATUS = "/api/dsh-ai-debate/status";
 export declare const ROUTE_ACTION = "/api/dsh-ai-debate/action";
 export declare const ROUTE_APPROVE = "/api/dsh-ai-debate/approve";
+export declare const ROUTE_VERIFICATION = "/api/dsh-ai-debate/verification";
 /** A masked tail, exposed for the diagnostics panel's credential rows. */
 export { maskedTail };
 /** The config the route family serves, resolved from a raw row config. */

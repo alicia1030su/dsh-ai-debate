@@ -119,9 +119,29 @@ export type PolicyDecision = {
     readonly reason: string;
 };
 /**
+ * ## 互动模式只做减法（v0.2.21 §二）
+ *
+ * v0.2.20 及以前，`single_shot` 与 `limited_auto` 都能在**没有人工批准**的情况下把一条
+ * `allow` 候选发出去 —— `single_shot` 把一次授权当成授权本身，`limited_auto` 则消耗自动额度。
+ * 那和 `AGENTS.md`「人工发帖确认不能关」是矛盾的：文档说不能关，代码里有一个模式可以关。
+ *
+ * 这一版把关系定死：**模式只决定「除了人工批准之外还要不要额外的限制」，不再决定「要不要
+ * 人工批准」。** 于是：
+ *
+ * | 模式 | 人工批准 | 额外限制 |
+ * | --- | --- | --- |
+ * | `manual` | 必须 | 无 |
+ * | `single_shot` | 必须 | 无（一次性授权只影响候选生成，不替代批准） |
+ * | `limited_auto` | 必须 | 本会话条数上限 + 冷却时间（**实验能力**） |
+ *
+ * `limited_auto` 因此不再有「绕过」的含义，只剩下「更严格」的含义。它被标成实验能力：
+ * 保留它是因为限制本身有价值，而不是因为它能少点一次确认。
+ */
+export declare const STRICT_APPROVAL_NOTE = "\u4EFB\u4F55\u6A21\u5F0F\u4E0B\u7684\u771F\u5B9E\u53D1\u8868\u90FD\u5FC5\u987B\u6709\u8BE5\u5019\u9009\u7684\u4EBA\u5DE5\u6279\u51C6\u8BB0\u5F55\uFF1B\u6A21\u5F0F\u53EA\u80FD\u589E\u52A0\u9650\u5236\uFF0C\u4E0D\u80FD\u51CF\u5C11";
+/**
  * Decide whether a publish may proceed.
  *
- * ## The policy matrix (v0.2.5)
+ * ## The policy matrix (v0.2.21)
  *
  * | verdict | mode | approval | outcome |
  * | --- | --- | --- | --- |
@@ -129,12 +149,17 @@ export type PolicyDecision = {
  * | `review` | any | none | refuse — no automatic slot for a flagged candidate |
  * | `review` | any | valid | continue to the rest of the checks |
  * | `allow` | `manual` | required | refuse without it |
- * | `allow` | `single_shot` | any | a one-shot grant is the authorisation |
- * | `allow` | `limited_auto` | optional | still needs budget, cooldown and account |
+ * | `allow` | `single_shot` | **required** | refuse without it |
+ * | `allow` | `limited_auto` | **required** | refuse without it; with it, still needs budget and cooldown |
  *
- * The `review` row is the one this version adds. It is checked here *and* in the
+ * The `review` row is the one v0.2.5 added. It is checked here *and* in the
  * publisher: here so every caller gets the same answer, there so a caller that
  * bypassed this function still cannot send.
+ *
+ * The `single_shot` / `limited_auto` rows are what v0.2.21 changed: they used to say
+ * "approval optional", and that is how a flagged-but-safe candidate could be posted
+ * without anyone looking at it. Now every row requires approval, and the modes only
+ * add restrictions on top.
  *
  * `securityDecision` being `undefined` is read as `review`, not as `allow`: a caller
  * that forgot to pass the verdict has not proven the candidate is clean, and

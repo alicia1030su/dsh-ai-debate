@@ -94,9 +94,26 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     contextPreset: z<"small" | "medium" | "large", "small" | "medium" | "large", "volatile-defined">;
     /** Explicit token budget; overrides the preset when > 0. */
     contextTokens: z<number, number, "volatile-defined">;
-    /** How much the plugin may do without a human click. */
+    /**
+     * How much the plugin may do without a human click.
+     *
+     * ## v0.2.21 §二：三个模式都不再决定「要不要人工批准」
+     *
+     * 真实发表一律需要**该候选**的人工批准记录（见 `safety.ts` 的 `checkPublishPolicy`）。
+     * 这个字段只决定「除了批准之外还要不要额外的限制」：
+     *
+     * - `manual` —— 只有批准这一道
+     * - `single_shot` —— 同样只有批准这一道（一次性授权影响候选生成，不替代批准）
+     * - `limited_auto` —— **实验能力**：额外受会话条数与冷却限制。它比别的模式更严格，
+     *   不是更宽松；把它理解成「少点一次确认」是 v0.2.20 及以前的语义，已经结束
+     */
     interactionMode: z<"manual" | "single_shot" | "limited_auto", "manual" | "single_shot" | "limited_auto", "volatile-defined">;
-    /** Automatic publishes allowed per session. */
+    /**
+     * How many approved publishes one session may make, and how often.
+     *
+     * v0.2.21 起这两个数字限的是**频率**，不是放行条件：它们只在 `limited_auto` 下检查，
+     * 而对已批准的发表同样生效。把额度当成「免批准次数」是旧语义。
+     */
     maxAutoPerSession: z<number, number, "volatile-defined">;
     /** Cooldown between automatic publishes, in seconds. */
     cooldownSeconds: z<number, number, "volatile-defined">;
@@ -204,9 +221,26 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     contextPreset: z<"small" | "medium" | "large", "small" | "medium" | "large", "volatile-defined">;
     /** Explicit token budget; overrides the preset when > 0. */
     contextTokens: z<number, number, "volatile-defined">;
-    /** How much the plugin may do without a human click. */
+    /**
+     * How much the plugin may do without a human click.
+     *
+     * ## v0.2.21 §二：三个模式都不再决定「要不要人工批准」
+     *
+     * 真实发表一律需要**该候选**的人工批准记录（见 `safety.ts` 的 `checkPublishPolicy`）。
+     * 这个字段只决定「除了批准之外还要不要额外的限制」：
+     *
+     * - `manual` —— 只有批准这一道
+     * - `single_shot` —— 同样只有批准这一道（一次性授权影响候选生成，不替代批准）
+     * - `limited_auto` —— **实验能力**：额外受会话条数与冷却限制。它比别的模式更严格，
+     *   不是更宽松；把它理解成「少点一次确认」是 v0.2.20 及以前的语义，已经结束
+     */
     interactionMode: z<"manual" | "single_shot" | "limited_auto", "manual" | "single_shot" | "limited_auto", "volatile-defined">;
-    /** Automatic publishes allowed per session. */
+    /**
+     * How many approved publishes one session may make, and how often.
+     *
+     * v0.2.21 起这两个数字限的是**频率**，不是放行条件：它们只在 `limited_auto` 下检查，
+     * 而对已批准的发表同样生效。把额度当成「免批准次数」是旧语义。
+     */
     maxAutoPerSession: z<number, number, "volatile-defined">;
     /** Cooldown between automatic publishes, in seconds. */
     cooldownSeconds: z<number, number, "volatile-defined">;

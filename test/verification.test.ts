@@ -56,6 +56,7 @@ test('只有 unverified 的能力允许走一次性验收', () => {
   const allowed = checkVerification({
     authorization: authorization(),
     capabilityState: 'unverified',
+    liveAccountId: 'account-1',
     usedKeys: used,
   })
   assert.equal(allowed.ok, true, 'unverified 才是一次性验收的对象')
@@ -70,6 +71,7 @@ test('不能把非发表能力塞进这个流程', () => {
   const decision = checkVerification({
     authorization: authorization({ capability: 'thread.read' }),
     capabilityState: 'unverified',
+    liveAccountId: 'account-1',
     usedKeys: new Set(),
   })
   assert.equal(decision.ok, false)
@@ -87,6 +89,7 @@ test('授权字段缺一不可，插件不替主人填写', () => {
     const decision = checkVerification({
       authorization: authorization({ [field]: '' }),
       capabilityState: 'unverified',
+      liveAccountId: 'account-1',
       usedKeys: new Set(),
     })
     assert.equal(decision.ok, false, `${label} 为空时必须拒绝`)
@@ -101,6 +104,7 @@ test('同一份授权只能发一条，重复使用会被拒绝', () => {
   const decision = checkVerification({
     authorization: auth,
     capabilityState: 'unverified',
+    liveAccountId: 'account-1',
     usedKeys: used,
   })
   assert.equal(decision.ok, false)
@@ -111,6 +115,7 @@ test('同一份授权只能发一条，重复使用会被拒绝', () => {
   const other = checkVerification({
     authorization: authorization({ authorizedThreadId: 'thread-2' }),
     capabilityState: 'unverified',
+    liveAccountId: 'account-1',
     usedKeys: used,
   })
   assert.equal(other.ok, true)
@@ -127,16 +132,28 @@ test('登录账号必须是授权账号，不能拿别人的登录态发帖', ()
   assert.equal(decision.refusal, 'account_mismatch')
 })
 
-test('无法确认登录账号时允许继续，但不会假装身份已核对', () => {
-  // `liveAccountId` absent means the session did not expose an id. The flow may
-  // proceed (the account still authorized it), but it must not claim the check
-  // passed.
-  const decision = checkVerification({
-    authorization: authorization(),
-    capabilityState: 'unverified',
-    usedKeys: new Set(),
-  })
-  assert.equal(decision.ok, true)
+test('无法确认登录账号时必须拒绝，不能用配置账号代替真实账号', () => {
+  // ## Why this test says the opposite of what it used to (v0.2.21 P0-2)
+  //
+  // Until P0-2 this asserted `ok === true` with a comment saying the flow "may proceed" when
+  // the session exposed no id. That was the bug, not the contract: proceeding meant sending a
+  // reply and then writing a record claiming the authorised account made it, on the strength of
+  // an identity nobody had read. A verification whose whole purpose is to attribute a real post
+  // to a real account cannot skip the part where it establishes who is logged in.
+  //
+  // Both "absent" and "empty" are covered because the two arrive by different routes (a probe
+  // that could not answer, and a probe that answered with nothing) and both must refuse.
+  for (const liveAccountId of [undefined, ''] as const) {
+    const decision = checkVerification({
+      authorization: authorization(),
+      capabilityState: 'unverified',
+      ...(liveAccountId === undefined ? {} : { liveAccountId }),
+      usedKeys: new Set(),
+    })
+    assert.equal(decision.ok, false, '读不到登录账号却放行，等于用配置账号冒充真实身份')
+    assert.equal(decision.refusal, 'account_unknown')
+    assert.match(decision.message, /不会发表|登录/)
+  }
 })
 
 function record(overrides: Partial<VerificationRecord> = {}): VerificationRecord {

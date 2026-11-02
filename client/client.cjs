@@ -63,6 +63,9 @@ window.__ModuleLoader__.load({
     // pointed at this route, which is what makes "the owner clicked approve" a different
     // event from "the model wrote confirm: true".
     const ROUTE_APPROVE = `${API}/approve`
+    // v0.2.21: the verification panel's read side. Its write side is `action=verify-publish`
+    // on the existing action route — a second write route would be a second place to guard.
+    const ROUTE_VERIFICATION = `${API}/verification`
 
     /** Credential reference names (mirrors src/secrets.ts). */
     const REF_COOKIE = 'DSH_AI_DEBATE_TIEBA_COOKIE'
@@ -130,6 +133,7 @@ window.__ModuleLoader__.load({
       tabPublish: '发表与安全',
       tabApprove: '发表授权',
       tabPlatforms: '平台',
+      tabVerify: '验收',
       platformLiveTitle: '实时连接状态',
       platformLiveIntro:
         '下面是插件刚刚探测到的真实状态，不是清单推测。无法检查的项目会显示「未知」，不会被当成通过。',
@@ -283,6 +287,41 @@ window.__ModuleLoader__.load({
       recordsNotLoading: '点击刷新读取',
 
       approveTitle: '发表授权',
+      // v0.2.21 §三/§四: the one-off publish verification panel.
+      verifyTitle: '发表能力验收',
+      verifyHint:
+        '这里做的是「真的发一条，再读回来」——只有真发过、并且回读确认了作者、正文和位置，能力才算验证过。一次授权只发一条，不会重试；发出去了但没能读回来，会如实标成「未确认」，不会算通过。',
+      verifyNoPublish:
+        '当前构建没有接上真实发表验收，所以这个区块读不到状态。工具和其它页面不受影响。',
+      verifyBlocked: '现在还不能验收',
+      verifyAccountLabel: '发帖账号',
+      verifyAdapterLabel: '适配器版本',
+      verifyDeclared: '声明状态',
+      verifyEffective: '当前判定',
+      verifyEvidence: '证据',
+      verifyNoEvidence: '还没有任何一次成功的验收记录。',
+      verifyRecords: '验收记录',
+      verifyNoRecords: '还没有验收过。',
+      verifyOutcomePending: '已发起，结果未知',
+      verifyOutcomeSucceeded: '已发表',
+      verifyOutcomeFailed: '平台拒绝',
+      verifyOutcomeUncertain: '结果未确认',
+      verifyFormTitle: '发起一次验收（需要你逐项填写）',
+      verifyFieldAccount: '发帖账号 id',
+      verifyFieldThread: '帖子 id',
+      verifyFieldFloor: '要回复的楼层 id',
+      verifyFieldReplyTo: '要回复的那条评论 id',
+      verifyFieldBy: '授权人',
+      verifyFieldText: '要发表的正文（逐字）',
+      verifySubmit: '发表并回读',
+      verifyWorking: '正在发表…',
+      verifyNeedFields: '上面几项都要你手填：插件不会替你决定发到哪、发什么。',
+      verifyDoneUpgraded: '发表成功，回读四要素齐全，这条能力现在算验证过了。',
+      verifyDoneNotUpgraded: '发表成功，但回读证据不完整，所以能力仍是「未验证」。下面是缺哪一项。',
+      verifyReadbackFound: '回复在回读中出现',
+      verifyReadbackAuthor: '作者是授权的那个账号',
+      verifyReadbackText: '正文与批准的完全一致',
+      verifyReadbackParent: '位置（楼层/父评论）正确',
       approveHint:
         '一次批准只授权一条候选回复、一次发表。批准后会绑定当时的正文、目标、发表账号和候选版本；其中任何一项变了，这条批准就失效，需要重新批准。批准记录由这个页面创建，Agent 无法自己创建。',
       approveNoCandidate: '当前没有等待批准的候选回复。先让 Agent 生成一条候选，再回来批准。',
@@ -397,6 +436,7 @@ window.__ModuleLoader__.load({
       tabPublish: 'Publishing',
       tabApprove: 'Authorisation',
       tabPlatforms: 'Platforms',
+      tabVerify: 'Verification',
       platformLiveTitle: 'Live connection state',
       platformLiveIntro:
         'Probed just now by the plugin, not inferred from the manifest. Anything that could not be checked shows as unknown, never as passing.',
@@ -517,6 +557,42 @@ window.__ModuleLoader__.load({
       recordsNotLoading: 'Refresh to read',
 
       approveTitle: 'Publishing authorisation',
+      // v0.2.21 §三/§四: the one-off publish verification panel.
+      verifyTitle: 'Publish capability verification',
+      verifyHint:
+        'This actually publishes one reply and reads it back. A capability only counts as verified when the reply was really sent AND the read-back confirmed its author, body and position. One authorisation publishes once and is never retried; a publish whose read-back failed is reported as "not confirmed", never as a pass.',
+      verifyNoPublish:
+        'This build has no real-publish verification wired up, so this section cannot read its state. Tools and the other pages are unaffected.',
+      verifyBlocked: 'Cannot verify yet',
+      verifyAccountLabel: 'Publishing account',
+      verifyAdapterLabel: 'Adapter version',
+      verifyDeclared: 'Declared',
+      verifyEffective: 'Effective',
+      verifyEvidence: 'Evidence',
+      verifyNoEvidence: 'No successful verification has been recorded yet.',
+      verifyRecords: 'Verification records',
+      verifyNoRecords: 'Nothing has been verified yet.',
+      verifyOutcomePending: 'Started, outcome unknown',
+      verifyOutcomeSucceeded: 'Published',
+      verifyOutcomeFailed: 'Rejected by the platform',
+      verifyOutcomeUncertain: 'Outcome not confirmed',
+      verifyFormTitle: 'Run one verification (you fill in every field)',
+      verifyFieldAccount: 'Publishing account id',
+      verifyFieldThread: 'Thread id',
+      verifyFieldFloor: 'Floor id to reply under',
+      verifyFieldReplyTo: 'Comment id being answered',
+      verifyFieldBy: 'Authorised by',
+      verifyFieldText: 'Exact text to publish',
+      verifySubmit: 'Publish and read back',
+      verifyWorking: 'Publishing…',
+      verifyNeedFields: 'Every field above is yours to fill: the plugin will not decide where or what to post.',
+      verifyDoneUpgraded: 'Published, and all four read-back facts held — this capability now counts as verified.',
+      verifyDoneNotUpgraded:
+        'Published, but the read-back was incomplete, so the capability stays unverified. Which fact is missing is listed below.',
+      verifyReadbackFound: 'The reply appears in the read-back',
+      verifyReadbackAuthor: 'Its author is the authorised account',
+      verifyReadbackText: 'Its body matches the approved text exactly',
+      verifyReadbackParent: 'Its position (floor / parent comment) is right',
       approveHint:
         'One approval authorises one candidate reply for one publish. It is bound to the body, target, publishing account and candidate version as they were at that moment; if any of them changes the approval stops applying and you have to approve again. Records are created by this page — the agent cannot create one.',
       approveNoCandidate: 'No candidate is waiting for approval. Have the agent generate one, then come back.',
@@ -629,6 +705,9 @@ window.__ModuleLoader__.load({
       // read the body they authorised.
       { id: 'approve', label: 'tabApprove' },
       { id: 'platforms', label: 'tabPlatforms' },
+      // v0.2.21: verification is its own tab, after "platforms". It publishes for real, so it
+      // must not be a button sitting quietly inside the platform list.
+      { id: 'verify', label: 'tabVerify' },
       { id: 'security', label: 'tabSecurity' },
       { id: 'status', label: 'tabStatus' },
     ]
@@ -857,6 +936,17 @@ window.__ModuleLoader__.load({
          * generated anything and go looking in the wrong place.
          */
         this.approveState = { state: 'idle' }
+        /**
+         * Verification panel state (v0.2.21 §三/§四).
+         *
+         * `verification` holds the last served view; `verificationState` is the read's own
+         * three-way answer; `verificationRun` is the last attempt. Kept apart on purpose: "the
+         * attempt failed" and "we could not find out" are different sentences, and collapsing
+         * them is how a panel ends up claiming a capability is missing when it merely is unknown.
+         */
+        this.verification = null
+        this.verificationState = { state: 'idle' }
+        this.verificationRun = null
         this.listeners = new Set()
         this.store = createSnapshotStore(this.projection())
       }
@@ -896,10 +986,13 @@ window.__ModuleLoader__.load({
           failed: this.failed,
           notice: this.notice,
           probes: this.probes,
-        platformBlocks: this.platformBlocks,
+          platformBlocks: this.platformBlocks,
           status: this.status,
           previews: this.previews,
           approveState: this.approveState,
+          verification: this.verification,
+          verificationState: this.verificationState,
+          verificationRun: this.verificationRun,
         }
       }
 
@@ -1002,6 +1095,63 @@ window.__ModuleLoader__.load({
       setNotice(text) {
         this.notice = text
         this.publish()
+      }
+
+      /**
+       * Read the verification state for one platform (v0.2.21 §三/§四).
+       *
+       * ## Why this keeps its own three-way state
+       *
+       * `idle` / `loading` / `ready` / `failed` cannot collapse into "no records". A failed read
+       * that renders as an empty list tells the owner "nothing has been verified yet", which is a
+       * different — and reassuring — claim from "we could not find out".
+       */
+      async loadVerification(platform) {
+        this.verificationState = { state: 'loading' }
+        this.publish()
+        try {
+          const answer = await callJson(
+            `${ROUTE_VERIFICATION}?platform=${encodeURIComponent(platform || '')}`,
+          )
+          this.verification = answer || null
+          this.verificationState = { state: 'ready' }
+        } catch (error) {
+          this.verification = null
+          this.verificationState = {
+            state: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+          }
+        }
+        this.publish()
+      }
+
+      /**
+       * Start exactly one verification.
+       *
+       * The body is the owner's form, verbatim: nothing here defaults a field, because a default
+       * would be the plugin deciding where to post. The button is disabled while this runs, and
+       * there is deliberately no retry — one authorisation publishes once.
+       */
+      async runVerification(input) {
+        this.verificationRun = { state: 'running' }
+        this.publish()
+        try {
+          const result = await callJson(ROUTE_ACTION, {
+            method: 'POST',
+            body: JSON.stringify({ action: 'verify-publish', ...input }),
+          })
+          this.verificationRun = { state: 'done', result }
+        } catch (error) {
+          this.verificationRun = {
+            state: 'failed',
+            reason: error instanceof Error ? error.message : String(error),
+          }
+        }
+        this.publish()
+        // Re-read afterwards: the record list and the effective state both changed, and showing
+        // the pre-run view next to a fresh result is how a panel contradicts itself.
+        await this.loadVerification(input.platform)
+        return this.verificationRun
       }
 
       /** Replace the served view, keeping staged edits that still differ. */
@@ -2592,6 +2742,260 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The one-off publish verification panel (v0.2.21 §三/§四).
+     *
+     * ## What makes this different from a "test connection" button
+     *
+     * It publishes **one real reply** and reads it back. So the panel cannot invent any of the
+     * five things it needs: which account, which thread, which floor, which comment, and exactly
+     * what text. Every field starts empty and stays the owner's — a default here would be the
+     * plugin deciding where to post.
+     *
+     * ## The three sentences it must never confuse
+     *
+     * - "we have not looked" (`idle`)
+     * - "we could not find out" (`failed`)
+     * - "there is nothing recorded" (`ready` with an empty list)
+     *
+     * They look the same as an empty list and mean three different things, so they are rendered
+     * three different ways. The same care applies to the result: `ok` says the request went out;
+     * only `upgraded` says the capability is verified. Rendering one as the other is the exact
+     * dishonesty this version exists to remove.
+     */
+    function VerifySection(props) {
+      const { t, state, store } = props
+      const read = state.verificationState || { state: 'idle' }
+      const view = state.verification
+      const run = state.verificationRun
+      const [form, setForm] = useState(null)
+      const draft = form || {
+        platform: '',
+        capability: 'comment.publish',
+        authorizedAccountId: '',
+        authorizedThreadId: '',
+        authorizedFloorId: '',
+        replyToPostId: '',
+        authorizedBy: '',
+        approvedText: '',
+      }
+      const set = (name, value) => setForm({ ...draft, [name]: value })
+      const busy = run && run.state === 'running'
+
+      const title = h(
+        'div',
+        { className: 'dsd-sect-head' },
+        h('span', { className: 'dsd-sect-title', style: { margin: 0 } }, t('verifyTitle')),
+      )
+
+      // A build without the capability answers `ok:false` with a blocker saying so. That is not
+      // a failure of the page, and it must not render as "everything is fine".
+      if (read.state === 'failed') {
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          title,
+          h('p', { className: 'dsd-hint dsd-hint-error' }, read.reason || t('verifyNoPublish')),
+        )
+      }
+      if (!view || typeof view !== 'object') {
+        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('verifyHint')))
+      }
+
+      const blockers = Array.isArray(view.blockers) ? view.blockers : []
+      const capabilities = Array.isArray(view.capabilities) ? view.capabilities : []
+      const records = Array.isArray(view.records) ? view.records : []
+      const report = view.report || null
+
+      const stateLabel = (value) => {
+        const table = {
+          supported: 'capSupported',
+          unverified: 'capUnverified',
+          permission_required: 'capPermission',
+          degraded: 'capDegraded',
+          unavailable: 'capUnavailable',
+        }
+        return t(table[value] || 'capUnavailable')
+      }
+      const outcomeLabel = (value) => {
+        const table = {
+          pending: 'verifyOutcomePending',
+          succeeded: 'verifyOutcomeSucceeded',
+          failed: 'verifyOutcomeFailed',
+          uncertain: 'verifyOutcomeUncertain',
+        }
+        return t(table[value] || 'verifyOutcomeUncertain')
+      }
+      const factLine = (label, value) =>
+        h(
+          'li',
+          { key: label, className: 'dsd-hint' },
+          (value === true ? '✅ ' : '❌ ') + t(label),
+        )
+
+      // The blockers are the reason the button should not be pressed, so they are shown *above*
+      // the form rather than only after a refusal.
+      const blockerBlock =
+        blockers.length === 0
+          ? null
+          : h(
+              'div',
+              { className: 'dsd-hint' },
+              h('strong', null, t('verifyBlocked')),
+              h('ul', null, blockers.map((line) => h('li', { key: line }, line))),
+            )
+
+      const accountLine = h(
+        'p',
+        { className: 'dsd-hint' },
+        t('verifyAccountLabel') + '：' + (view.liveAccountId || '（未配置）') +
+          '　' + t('verifyAdapterLabel') + '：' + (view.adapterVersion || '（不可用）'),
+      )
+
+      const capabilityRows = h(
+        'ul',
+        { className: 'dsd-approve-list' },
+        capabilities.map((row) =>
+          h(
+            'li',
+            { key: row.capability, className: 'dsd-approve-row' },
+            h('code', null, row.capability) +
+              ' — ' + t('verifyDeclared') + '：' + stateLabel(row.declared) +
+              '　' + t('verifyEffective') + '：' + stateLabel(row.effective),
+          ),
+        ),
+      )
+
+      // Evidence comes from the machine-readable report, so the page and a script read the same
+      // numbers. An empty list means "no successful verification yet", stated as such.
+      const evidenceBlock = (() => {
+        if (report === null || !Array.isArray(report.capabilities)) return null
+        const rows = report.capabilities.flatMap((cap) =>
+          (Array.isArray(cap.evidence) ? cap.evidence : []).map((ev) =>
+            h(
+              'li',
+              { key: cap.name + ev.at, className: 'dsd-hint' },
+              t('verifyEvidence') + '：' + cap.name + ' @ ' + ev.at +
+                '（' + t('verifyAccountLabel') + ' ' + ev.accountId +
+                '，' + t('verifyAdapterLabel') + ' ' + ev.adapterVersion + '）',
+            ),
+          ),
+        )
+        if (rows.length > 0) return h('ul', { className: 'dsd-approve-list' }, rows)
+        return h('p', { className: 'dsd-hint' }, t('verifyNoEvidence'))
+      })()
+
+      const recordBlock = (() => {
+        if (records.length === 0) return h('p', { className: 'dsd-hint' }, t('verifyNoRecords'))
+        return h(
+          'ul',
+          { className: 'dsd-approve-list' },
+          records.map((row) =>
+            h(
+              'li',
+              { key: row.key, className: 'dsd-approve-row' },
+              row.startedAt + '　' + row.capability + '　' + outcomeLabel(row.outcome),
+            ),
+          ),
+        )
+      })()
+
+      const resultBlock = (() => {
+        if (!run) return null
+        if (run.state === 'failed') {
+          return h('p', { className: 'dsd-hint dsd-hint-error' }, run.reason || t('unavailable'))
+        }
+        if (run.state !== 'done' || !run.result) return null
+        const result = run.result
+        const head = result.upgraded ? t('verifyDoneUpgraded') : t('verifyDoneNotUpgraded')
+        const facts = result.readBack
+          ? h(
+              'ul',
+              null,
+              factLine('verifyReadbackFound', result.readBack.postFound),
+              factLine('verifyReadbackAuthor', result.readBack.authorMatched),
+              factLine('verifyReadbackText', result.readBack.textMatched),
+              factLine('verifyReadbackParent', result.readBack.parentMatched),
+            )
+          : null
+        return h(
+          'div',
+          { className: 'dsd-hint' },
+          h('p', { className: result.upgraded ? '' : 'dsd-hint-error' }, (result.message || '') + '　' + head),
+          facts,
+        )
+      })()
+
+      const field = (name, label) =>
+        h(
+          'label',
+          { key: name, className: 'dsd-field' },
+          h('span', null, t(label)),
+          h('input', {
+            type: 'text',
+            value: draft[name],
+            disabled: busy,
+            onChange: (event) => set(name, event.target.value),
+          }),
+        )
+
+      const formBlock = h(
+        'div',
+        { className: 'dsd-sect' },
+        h('p', { className: 'dsd-hint' }, t('verifyFormTitle')),
+        h('p', { className: 'dsd-hint' }, t('verifyNeedFields')),
+        field('authorizedAccountId', 'verifyFieldAccount'),
+        field('authorizedThreadId', 'verifyFieldThread'),
+        // A new comment has no parent. Showing the two parent fields for one would invite an id
+        // to be pasted in and silently ignored — or worse, carried into a later reply.
+        draft.capability === 'comment.reply' ? field('authorizedFloorId', 'verifyFieldFloor') : null,
+        draft.capability === 'comment.reply' ? field('replyToPostId', 'verifyFieldReplyTo') : null,
+        field('authorizedBy', 'verifyFieldBy'),
+        field('approvedText', 'verifyFieldText'),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsd-btn',
+            disabled: busy,
+            onClick: () =>
+              store.runVerification({
+                platform: view.report && view.report.platform ? view.report.platform : draft.platform,
+                capability: draft.capability,
+                authorizedAccountId: draft.authorizedAccountId,
+                authorizedThreadId: draft.authorizedThreadId,
+                ...(draft.capability === 'comment.reply'
+                  ? {
+                      authorizedFloorId: draft.authorizedFloorId,
+                      replyToPostId: draft.replyToPostId,
+                    }
+                  : {}),
+                authorizedBy: draft.authorizedBy,
+                approvedText: draft.approvedText,
+              }),
+          },
+          busy ? t('verifyWorking') : t('verifySubmit'),
+        ),
+        // No retry button, by design: one authorisation publishes once. Re-verifying needs a new
+        // authorisation from the owner, not a second press of the same one.
+      )
+
+      return h(
+        'div',
+        { className: 'dsd-sect' },
+        title,
+        h('p', { className: 'dsd-hint' }, t('verifyHint')),
+        accountLine,
+        blockerBlock,
+        capabilityRows,
+        evidenceBlock,
+        h('p', { className: 'dsd-hint' }, t('verifyRecords')),
+        recordBlock,
+        resultBlock,
+        formBlock,
+      )
+    }
+
+    /**
      * The security panel.
      *
      * Every value comes from the Host's *effective* state, not from the schema
@@ -3092,6 +3496,10 @@ window.__ModuleLoader__.load({
         if (state.tab === 'publish') return h(PublishSection, shared)
         if (state.tab === 'approve') return h(ApproveSection, shared)
         if (state.tab === 'platforms') return h(PlatformsSection, shared)
+        // v0.2.21: verification hangs off the platforms tab rather than getting its own. It is
+        // a per-platform property, and a separate tab would let an owner read "platform is
+        // supported" on one screen and never see that nothing was ever actually published.
+        if (state.tab === 'verify') return h(VerifySection, shared)
         if (state.tab === 'security') return h(SecuritySection, shared)
         if (state.tab === 'status') return h(StatusSection, shared)
         return h(AccountSection, shared)
@@ -3501,6 +3909,14 @@ window.__ModuleLoader__.load({
      * on it doubles as a check that the wording stays honest.
      */
     exports.ApproveSection = ApproveSection
+    /**
+     * The verification panel, exposed for tests.
+     *
+     * The three sentences it must keep apart — "not looked", "could not look", "nothing there" —
+     * are rendered from state, so a test can drive each one and check the wording differs. That
+     * is the only way to catch the failure mode where a broken read looks like a clean slate.
+     */
+    exports.VerifySection = VerifySection
     /**
      * The page model, exposed for tests only.
      *

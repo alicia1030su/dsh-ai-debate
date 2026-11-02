@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
 import type { TargetSnapshot } from './types.js'
+import type { CapabilityName } from './platforms/contracts.js'
 import type { ApprovalRecord } from './security/approvals.js'
 import { pruneApprovals } from './security/approvals.js'
 
@@ -302,6 +303,18 @@ export interface StoreData {
    * thing — nothing has been approved.
    */
   readonly approvals?: readonly ApprovalRecord[]
+  /**
+   * One-off publish verification records, oldest first (v0.2.21 §三).
+   *
+   * This is the durable half of the verification flow. It is written **before** the network
+   * call (`outcome: 'pending'`) and again after, so a crash mid-publish leaves "attempted,
+   * outcome unknown" rather than silence. The second write upserts by `key`, which is what makes
+   * "one authorization, one publish" true across process restarts instead of only in memory.
+   *
+   * Optional for the same reason `security` and `approvals` are: a store written by an earlier
+   * version has no such list, and "no records" means "nothing has been verified yet".
+   */
+  readonly verification?: readonly VerificationRecordRow[]
 }
 
 /**
@@ -324,9 +337,44 @@ export interface SecurityEventRecord {
   readonly excerpt?: string
 }
 
+/**
+ * The persisted form of one publish-verification attempt.
+ *
+ * Structurally identical to `VerificationRecord` in `verification.ts`, declared separately so
+ * persistence keeps knowing nothing about that module's types — the same arrangement
+ * `SecurityEventRecord` uses.
+ */
+export interface VerificationRecordRow {
+  readonly key: string
+  readonly platform: string
+  readonly capability: CapabilityName
+  readonly authorizedAccountId: string
+  readonly authorizedThreadId: string
+  readonly authorizedBy: string
+  readonly approvedText: string
+  readonly startedAt: string
+  /**
+   * The adapter build this attempt ran against (v0.2.21 §三.9).
+   *
+   * Absent on records written before the field existed, and absent is treated as "unknown build",
+   * which never promotes a capability.
+   */
+  readonly adapterVersion?: string
+  readonly outcome: 'pending' | 'succeeded' | 'failed' | 'uncertain'
+  readonly publishedPostId?: string
+  readonly readBack?: {
+    readonly postFound: boolean
+    readonly authorMatched: boolean
+    readonly textMatched: boolean
+    readonly parentMatched: boolean
+    readonly notes: readonly string[]
+  }
+  readonly failure?: string
+}
+
 /** Empty store. */
 export function emptyStore(): StoreData {
-  return { version: 1, sessions: [], dedupe: [], usage: [], security: [], approvals: [] }
+  return { version: 1, sessions: [], dedupe: [], usage: [], security: [], approvals: [], verification: [] }
 }
 
 /** Options for the store. */
@@ -815,7 +863,14 @@ export class DebateStore {
       this.data = await this.readCurrentDocument()
       this.lastWriteError = undefined
       this.stale = undefined
-      this.loadedOnce = true
+      // `loadedOnce` is deliberately **not** set here (v0.2.21 P0-1).
+      //
+      // `readCurrentDocument` returns an empty document when the file simply does not exist
+      // yet, and that is indistinguishable from having read one. Setting the flag on that path
+      // made the very next `transact` treat the still-absent file as "it disappeared while the
+      // plugin was running" and refuse to write — so a brand-new store could not record its
+      // first verification claim at all. The flag means "a document has been created or read",
+      // and only `load()` and `persist()` can establish that.
     } catch (error) {
       // Keep the cached document — but remember *why* it is now of unknown age.
       this.stale = {
@@ -1301,6 +1356,95 @@ export class DebateStore {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
+  /** Every verification record, oldest first. */
+  getVerificationRecords(): readonly VerificationRecordRow[] {
+    return this.data.verification ?? []
+  }
+
+  /**
+   * Re-read the verification records from disk before answering.
+   *
+   * ## Why a plain getter is not enough (v0.2.21 P0-1)
+   *
+   * `getVerificationRecords()` answers from *this instance's* copy, which only changes when this
+   * instance writes. Two plugin instances over one directory (the arrangement v0.2.7 made
+   * routine) therefore disagree: the instance that did not claim the authorization still sees
+   * none, and a settings page opened there would report "nothing has been verified yet" about a
+   * record that demonstrably exists.
+   *
+   * The read-only paths that show this to a human are async already, so they can pay one file
+   * read. The publish gate stays synchronous on purpose — a gate that awaits a disk read in the
+   * middle of a decision is a gate with a new failure mode — and is refreshed by the same call
+   * whenever a publish begins.
+   */
+  async refreshVerificationRecords(): Promise<readonly VerificationRecordRow[]> {
+    try {
+      await this.refreshFromDisk()
+    } catch {
+      // A read failure must not turn into "no records": that is the reassuring answer for a
+      // question we could not answer. The caller gets this instance's copy and the failure is
+      // visible through the usual store error path on the next write.
+    }
+    return this.data.verification ?? []
+  }
+
+  /**
+   * Record one verification attempt, upserting by `key`.
+   *
+   * Upsert rather than append is the whole point: the runner writes a `pending` row before the
+   * network call and the outcome after, and those two writes describe **one** attempt. Appending
+   * both would make "was this authorization used?" answerable two different ways depending on
+   * which row a reader happened to look at.
+   */
+  async putVerificationRecord(record: VerificationRecordRow): Promise<void> {
+    await this.mutate((data) => {
+      const existing = data.verification ?? []
+      const index = existing.findIndex((row) => row.key === record.key)
+      const next = index === -1 ? [...existing, record] : existing.map((row, i) => (i === index ? record : row))
+      return { ...data, verification: next }
+    })
+  }
+
+  /**
+   * Atomically claim one verification authorization, or report that it is spent.
+   *
+   * ## Why this cannot be "read the records, then write pending" (v0.2.21 P0-1)
+   *
+   * The runner used to do exactly that: read `getVerificationRecords()`, hand the resulting key
+   * set to `checkVerification()`, and only then `putVerificationRecord({ outcome: 'pending' })`.
+   * Both steps are correct on their own and useless together: two requests can both read an
+   * empty list, both conclude the authorisation is unused, and both publish. The gap is small,
+   * which is worse than a large one — it survives every manual test and shows up under exactly
+   * the load nobody reproduces.
+   *
+   * `transact()` is the existing primitive for this shape (v0.2.8 built it for approvals for the
+   * same reason). The check and the write happen inside one lock hold, against the document as
+   * it is on disk, so "is this authorization spent?" and "record that it is now" are one
+   * indivisible decision.
+   *
+   * Returns `{ claimed: false, existing }` — not an error — when the key is already present.
+   * A refusal is the normal outcome here, and the caller must be able to tell it apart from a
+   * disk failure. A write failure throws: the caller must **not** publish in that case.
+   */
+  async claimVerificationRecord(
+    record: VerificationRecordRow,
+  ): Promise<{ claimed: true } | { claimed: false; existing: VerificationRecordRow }> {
+    const outcome = await this.transact<
+      { claimed: true } | { claimed: false; existing: VerificationRecordRow }
+    >((data) => {
+      const existing = data.verification ?? []
+      const found = existing.find((row) => row.key === record.key)
+      if (found !== undefined) {
+        // Abort, not commit: writing the pending row over a spent authorisation would
+        // resurrect it, and the next reader would think the authorization is fresh again.
+        return { abort: { claimed: false as const, existing: found } }
+      }
+      return { commit: { ...data, verification: [...existing, record] }, value: { claimed: true as const } }
+    })
+    if ('aborted' in outcome) return outcome.value
+    return outcome.value
+  }
+
   /** The dedupe record for a trigger, if any. */
   findDedupe(key: string): DedupeRecord | undefined {
     return this.data.dedupe.find((record) => record.key === key)
@@ -1471,6 +1615,13 @@ export function validateStore(value: unknown): { ok: true; data: StoreData } | {
       // repaired to an empty list rather than refused. Validated below when present.
       security: Array.isArray(record.security) ? (record.security as SecurityEventRecord[]) : [],
       approvals,
+      // v0.2.21: same class of bug the two fields above were. Omitting this rebuilds the
+      // document without it, so every verification record would vanish on the first read after
+      // a restart — and a vanished record means the same authorization could be spent a second
+      // time, which is the double-post this whole flow exists to prevent.
+      verification: Array.isArray(record.verification)
+        ? (record.verification as VerificationRecordRow[])
+        : [],
     },
   }
 }
@@ -1650,6 +1801,10 @@ function prune(data: StoreData, options: StoreOptions): StoreData {
     usage,
     security: data.security ?? [],
     approvals: pruneApprovals(data.approvals ?? [], () => now),
+    // Verification records are the audit trail of "somebody actually published once to prove
+    // it works". Pruning them would let the same authorization be spent again after a while,
+    // which is exactly the double-post the once-per-authorization rule exists to prevent.
+    verification: data.verification ?? [],
   }
 }
 
@@ -1661,7 +1816,15 @@ function prune(data: StoreData, options: StoreOptions): StoreData {
  * interface: adding a field to `StoreData` without deciding what happens to it in
  * `prune()` now fails loudly instead of losing data quietly.
  */
-export const PRESERVED_FIELDS = ['version', 'sessions', 'dedupe', 'usage', 'security', 'approvals'] as const
+export const PRESERVED_FIELDS = [
+  'version',
+  'sessions',
+  'dedupe',
+  'usage',
+  'security',
+  'approvals',
+  'verification',
+] as const
 
 /**
  * How many sessions are still actionable, and whether that exceeds the cap.
