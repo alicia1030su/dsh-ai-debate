@@ -1019,7 +1019,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**1487 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.2 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**1488 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.2 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1110,7 +1110,7 @@ node scripts/pack.mjs
 | `test/v0215-weibo-identity.test.ts` | 19 | TODO: 补充覆盖说明 |
 | `test/v0216-archive-guard.test.ts` | 5 | TODO: 补充覆盖说明 |
 | `test/v0216-artifact-determinism.test.ts` | 5 | TODO: 补充覆盖说明 |
-| `test/v0216-credential-scan.test.ts` | 3 | TODO: 补充覆盖说明 |
+| `test/v0216-credential-scan.test.ts` | 4 | TODO: 补充覆盖说明 |
 | `test/v0217-delivery-status.test.ts` | 31 | TODO: 补充覆盖说明 |
 | `test/v0217-dsh-compat.test.ts` | 34 | TODO: 补充覆盖说明 |
 | `test/v0217-exception-paths.test.ts` | 18 | TODO: 补充覆盖说明 |
@@ -1138,7 +1138,7 @@ node scripts/pack.mjs
 | `test/v0222-workbench-flow.test.ts` | 9 | 工作台的完整时序：真 Store + 假平台下走完 新建→选目标→生成→批准→发表→回读，含刷新与第二实例一致性 |
 | `test/v0222-workbench.test.ts` | 21 | 工作台状态由持久事实推导：步骤顺序、五种结果不合并、批准绑定字节、缺失证据不补全 |
 | `test/workbench-approval-scope.test.ts` | 11 | 批准范围两行制：内容已批准 ≠ 目标身份已核验；无快照/无稳定 ID 时提前阻断，并与 `publishCandidate` 的实际拒绝逐条对齐 |
-| **合计** | **1487** | |
+| **合计** | **1488** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 
