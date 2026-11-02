@@ -428,3 +428,102 @@ test('批准按钮不会出现在非批准步骤', async () => {
     publishStep.unmount()
   }
 })
+
+// ---------------------------------------------------------------------------
+// v0.2.22 phase13: 内容批准 ≠ 目标身份核验
+// ---------------------------------------------------------------------------
+
+/**
+ * A workbench state that carries the approval scope block.
+ *
+ * `approval.content.applies` is what the old page rendered as a bare「已批准」.
+ * `approval.target` is the half it never mentioned.
+ */
+function scopedView(
+  target: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return view({
+    notices: [
+      '内容已批准（正文、版本、目标位置三方绑定）。目标作者身份不在批准范围内：' +
+        '发表时会重新读取平台并核对作者，对不上就会被拒绝。',
+    ],
+    approval: {
+      content: {
+        applies: true,
+        detail: '内容已批准：正文、候选版本、目标位置与批准记录一致',
+      },
+      target,
+    },
+    ...overrides,
+  })
+}
+
+test('发表步骤必须同时显示「内容已批准」和「目标身份未核验」两行', async () => {
+  const { text, unmount } = await render(
+    { state: 'ready' },
+    scopedView({
+      state: 'not_rechecked',
+      blocking: false,
+      detail: '分析时记录的目标作者 ID 是 opp-1（昵称「对手B」）。本页没有重新读取平台，作者是否仍是同一人由发表路径现场核验。',
+      authorId: 'opp-1',
+      authorName: '对手B',
+    }),
+  )
+  try {
+    assert.match(text, /workbenchApprovalScope/, '必须有一个明确的「批准范围」块')
+    assert.match(text, /workbenchApprovalContent/, '必须单独列出内容这一项')
+    assert.match(text, /workbenchApprovalTarget/, '必须单独列出目标身份这一项')
+    assert.match(text, /workbenchIdentityNotRechecked/, '身份状态必须是"本页未核验"，不能是"已核验"')
+    assert.match(text, /现场核验|重新读取平台/, '必须说明核验发生在发表时')
+    assert.doesNotMatch(text, /目标身份：已核验/, '页面没有读平台，不能声称核验过')
+  } finally {
+    unmount()
+  }
+})
+
+test('只有显示昵称、没有稳定 ID 时，页面不给发表按钮并说明原因', async () => {
+  const { text, buttons, unmount } = await render(
+    { state: 'ready' },
+    scopedView({
+      state: 'unverifiable',
+      blocking: true,
+      detail: '要回复的这条发言只记录了显示昵称「贴吧用户_JPEPCR5」，平台没有给出稳定的用户 ID。发表路径会以「作者无法核验」拒绝。',
+      authorName: '贴吧用户_JPEPCR5',
+    }),
+  )
+  try {
+    assert.match(text, /workbenchIdentityUnverifiable/)
+    assert.match(text, /贴吧用户_JPEPCR5/)
+    assert.doesNotMatch(
+      buttons.join(' '),
+      /workbenchPublishOnce/,
+      '明知会被拒绝还摆发表按钮，就是让主人点一个必定失败的东西',
+    )
+  } finally {
+    unmount()
+  }
+})
+
+test('页面把「发表时还会发生什么」单独列出，而不是混进阻断项', async () => {
+  const { text, unmount } = await render(
+    { state: 'ready' },
+    scopedView({ state: 'not_rechecked', blocking: false, detail: '…', authorId: 'opp-1' }),
+  )
+  try {
+    assert.match(text, /workbenchNotice/, '要有独立的说明块')
+    assert.match(text, /目标作者身份不在批准范围内/, '说明必须点出批准不覆盖身份')
+  } finally {
+    unmount()
+  }
+})
+
+test('缺少 approval 字段的旧视图仍然能渲染，不因此白屏', async () => {
+  const { text, unmount } = await render({ state: 'ready' }, view({ step: 'publish' }))
+  try {
+    assert.match(text, /workbenchPublishOnce/)
+    assert.doesNotMatch(text, /workbenchApprovalScope/, '没有这个字段时不该凭空造一个批准范围块')
+  } finally {
+    unmount()
+  }
+})

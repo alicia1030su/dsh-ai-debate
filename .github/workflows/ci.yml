@@ -61,7 +61,7 @@ jobs:
         run: |
           set -e
           # Globbed so a new test file cannot be silently skipped by a stale list.
-          node --experimental-transform-types --test "test/**/*.test.ts"
+          node --experimental-transform-types --test --test-concurrency=8 "test/**/*.test.ts"
 
       - name: 打包自检
         run: node scripts/pack.mjs

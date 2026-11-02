@@ -61,6 +61,39 @@ export interface WorkbenchStepView {
     /** Why this step is blocked, when it is. */
     readonly blockedBy?: string;
 }
+/**
+ * How far the *target's author* has been checked.
+ *
+ * Kept separate from the approval on purpose. An approval record binds bytes — text,
+ * version, target post id, publishing account — and says nothing about who is sitting
+ * on the target post right now. The publish path re-reads the platform and checks the
+ * author there (`resolveTarget` + `snapshotStillValid`); until that read happens, all
+ * this page can honestly claim is "not re-checked".
+ *
+ * The two states that are `blocking` are not predictions, they are the same facts the
+ * publish gate reads before it touches the network: no snapshot, or no stable author
+ * id. `publishCandidate` refuses both with a dedicated error code, so offering a
+ * publish button here would be offering a button that cannot work.
+ *
+ * The four states:
+ *
+ * - `not_approved` — nothing to check yet: no candidate, or no approval binding it.
+ * - `not_rechecked` — a stable author id is recorded; the platform has not been
+ *   re-read since, and this page cannot claim otherwise.
+ * - `unverifiable` — only a display name is recorded; publishing will be refused.
+ * - `no_snapshot` — the candidate has no target snapshot; publishing will be refused.
+ */
+export type TargetIdentityState = 'not_approved' | 'not_rechecked' | 'unverifiable' | 'no_snapshot';
+/** What the page may say about the target's author. */
+export interface TargetIdentityView {
+    readonly state: TargetIdentityState;
+    /** True when `publishCandidate` is certain to refuse on identity grounds. */
+    readonly blocking: boolean;
+    /** One sentence a reader can act on. Never a claim of verification. */
+    readonly detail: string;
+    readonly authorId?: string;
+    readonly authorName?: string;
+}
 /** A fact the collection could not establish. Rendered as a caveat, never as content. */
 export interface MissingEvidence {
     readonly what: string;
@@ -72,6 +105,32 @@ export interface WorkbenchState {
     readonly steps: readonly WorkbenchStepView[];
     /** Ordered reasons the *next* irreversible action cannot happen yet. */
     readonly blockers: readonly string[];
+    /**
+     * Facts the reader must know but that do not block anything.
+     *
+     * Separate from `blockers` because "you cannot proceed" and "proceeding will also
+     * re-check something" are different messages, and merging them teaches the reader
+     * to skim both. `blockers` is what stops the button; this is what the button will
+     * still do after it is pressed.
+     */
+    readonly notices: readonly string[];
+    /**
+     * The two things an approval does and does not cover, stated side by side.
+     *
+     * This exists because v0.2.22's页面 showed a bare `已批准` next to a publish button,
+     * which reads as "everything is authorized". The approval covers bytes; the author
+     * of the target is re-checked by the publish path, and the page must not borrow that
+     * check's authority for itself.
+     */
+    readonly approval: {
+        /** What the approval record authorizes: the text, version and target post. */
+        readonly content: {
+            readonly applies: boolean;
+            readonly detail: string;
+        };
+        /** What it does not: who is on the other end. */
+        readonly target: TargetIdentityView;
+    };
     /** Facts the reader must know are missing before trusting the picture. */
     readonly missingEvidence: readonly MissingEvidence[];
     readonly outcome: PublishOutcomeView;
@@ -151,11 +210,40 @@ export interface WorkbenchInput {
  */
 export declare function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState;
 /**
+ * Say what is known about the *author* of the target — and, just as important, what is not.
+ *
+ * ## Why this is not a second identity check
+ *
+ * `approvalStillApplies` compares bytes; `publishCandidate` compares authors, but only
+ * after re-reading the platform. Re-reading here would be a network call inside a
+ * read-only page render, and duplicating the comparison would create a second place
+ * that decides whether publishing may happen.
+ *
+ * So this function does neither. It reads the two facts the publish gate reads *before*
+ * it touches the network — is there a snapshot, does it carry a stable author id — and
+ * reports them. Everything else is reported as `not_rechecked`, which is the literal
+ * truth: this page has not re-read the platform, and no boolean stored here could make
+ * it have done so.
+ */
+export declare function describeTargetIdentity(candidate: Pick<StoredCandidate, 'targetSnapshot'> | undefined, contentApproved: boolean): TargetIdentityView;
+/**
  * Whether an approval still authorizes the candidate **as it is now**.
  *
- * This is the rule that makes editing safe: the owner approves bytes, not an intention. Any of
- * the three things that decide where and what gets posted — the text, the target, or the
- * candidate version — moving invalidates it.
+ * ## Scope, stated once
+ *
+ * This function answers exactly one question: **do the bytes still match what the owner
+ * approved?** It compares the candidate id, version, text hash and target post id. It
+ * deliberately does **not** compare the author of the target, and adding that here would
+ * be the wrong fix:
+ *
+ * - the approval record does not carry an author, so there is nothing to compare against
+ *   without inventing a field;
+ * - `snapshotStillValid` already does that comparison, against a *fresh platform read*,
+ *   inside `publishCandidate`. A second comparison would be a second decider, and the two
+ *   could disagree — which is how a UI ends up saying "approved" while the gate refuses.
+ *
+ * What the workbench needs instead is the honest statement that approval covers content
+ * only; see {@link describeTargetIdentity} and `WorkbenchState.approval`.
  *
  * `undefined` approval means "nothing to compare", which is a refusal, not a pass.
  */

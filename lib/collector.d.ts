@@ -97,7 +97,14 @@ export interface CollectedThread {
     readonly missingCount?: number;
     /** Why the floor walk stopped, so callers can distinguish causes. */
     readonly stopReason?: StopReason;
-    /** True when more pages were known to remain. */
+    /**
+     * True when more pages were **known** to remain when the walk stopped.
+     *
+     * Known means positive evidence: the platform declared more pages or floors
+     * than were read, or the last page it served said `hasMore: true`. A failure on
+     * page 1 satisfies none of those, so it stays false there — the failure is
+     * reported through `stopReason` instead. See {@link FloorWalk.truncated}.
+     */
     readonly truncated?: boolean;
     /** True when any floor's nested replies were read incompletely. */
     readonly nestedIncomplete?: boolean;
@@ -169,7 +176,20 @@ export interface FloorWalk {
     readonly error?: string;
     /** Why the walk ended; `page_cap` means the read is incomplete by definition. */
     readonly stopReason: StopReason;
-    /** True when more pages were known to remain when the walk stopped. */
+    /**
+     * True when more pages were known to remain when the walk stopped.
+     *
+     * "Known" means the walk holds positive evidence, not a guess: the platform
+     * declared more pages than were read, declared more floors than were seen, or
+     * the last page it served said `hasMore: true`. A failure on page 1 satisfies
+     * none of those — nothing was promised, so `truncated` stays false there, and
+     * `stopReason` carries the only claim the walk can make.
+     *
+     * v0.2.22: this used to be set only by `page_cap`. A 403 on page 2 of a
+     * five-page thread therefore reported `truncated: false` next to a
+     * `deleted_or_unavailable` stop, which reads as "the thread ended" rather than
+     * "five pages existed and two were read".
+     */
     readonly truncated: boolean;
     /**
      * Human-readable notes about coverage, including signal contradictions.

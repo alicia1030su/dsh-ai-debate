@@ -73,10 +73,36 @@ interface Mounted {
   readonly container: HTMLElement
   readonly document: Document
   readonly window: Window & typeof globalThis
-  /** Resolve when the settings fetch has settled and React has flushed. */
+  /**
+   * Wait until `predicate` holds, polling on macrotasks.
+   *
+   * ## Why this replaced a fixed sleep (v0.2.22)
+   *
+   * These tests used to call `settle(80)` — "sleep 80 ms, then read the DOM". That
+   * works on an idle machine and fails under load: `node --test` runs up to
+   * (cores) files in parallel, each mounting real React trees, and an 80 ms budget
+   * that is generous alone is not enough when 16 files compete for the loop. The
+   * observed symptom was exactly `textContent === ""` — React had not committed
+   * yet — and it appeared on the *baseline* commit too, in different files on
+   * different runs.
+   *
+   * Raising the number would have hidden it and slowed every run; the number was
+   * never the right thing to wait on. What each test actually needs is a
+   * *condition*: the page has rendered, the loading line is gone, the request has
+   * been issued. Those are all observable, so we wait for them and stop as soon as
+   * they hold.
+   *
+   * The timeout is a failure deadline, not a budget: it only matters when the
+   * condition never becomes true, and then the error says which one.
+   */
+  waitFor(predicate: () => boolean, description: string, timeoutMs?: number): Promise<void>
+  /** Wait for `predicate` and return the timeout error message when it never holds. */
   settle(ms?: number): Promise<void>
   unmount(): void
 }
+
+/** How long a test will wait for a condition before failing. Generous, but it is a deadline. */
+const WAIT_DEADLINE_MS = 5000
 
 /**
  * Install a jsdom document as the global DOM for the duration of one test.
@@ -304,8 +330,32 @@ function mount(
     container,
     document: globalThis.document,
     window: globalThis.window as Window & typeof globalThis,
-    async settle(ms = 60) {
-      await new Promise((resolve) => setTimeout(resolve, ms))
+    async waitFor(predicate: () => boolean, description: string, timeoutMs = WAIT_DEADLINE_MS) {
+      const deadline = Date.now() + timeoutMs
+      // Poll on macrotasks so React's scheduled work (which runs off the same
+      // loop) gets a turn between checks. `await null` would only drain
+      // microtasks and never let a commit happen.
+      for (;;) {
+        if (predicate()) return
+        if (Date.now() > deadline) {
+          const seen = (container.textContent ?? '').slice(0, 200)
+          throw new Error(`等待「${description}」超时（${timeoutMs}ms）。当前 DOM: ${JSON.stringify(seen)}`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+    },
+    /**
+     * Wait until the page has rendered something substantial.
+     *
+     * Kept as a helper because "did it render" is the precondition of most tests
+     * here, and spelling the condition out at every call site made the tests read
+     * like they were asserting on a length magic number.
+     */
+    async settle() {
+      await this.waitFor(
+        () => (container.textContent ?? '').length > 50,
+        '页面渲染出内容（超过 50 个字符）',
+      )
     },
     unmount() {
       root.unmount()
@@ -323,7 +373,7 @@ test('the page shows its content after the store publishes', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     const text = view.container.textContent ?? ''
     assert.ok(text.length > 50, `the page rendered almost nothing: ${JSON.stringify(text)}`)
@@ -341,12 +391,12 @@ test('the store notifying with no arguments does not blank the page', async () =
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
     const before = (view.container.textContent ?? '').length
     assert.ok(before > 50)
 
     // A second settle window lets any stray notification land.
-    await view.settle(120)
+    await view.settle()
     const after = (view.container.textContent ?? '').length
     assert.ok(after > 50, `the page went blank after a later notification (${before} -> ${after})`)
     view.unmount()
@@ -363,15 +413,31 @@ test('the loading state is visible before the fetch resolves', async () => {
   try {
     const { Section } = loadSection({ delayMs: 900 })
     const view = mount(Section)
-    // Read while the fetch is still in flight. React 18 renders concurrently, so
-    // the subtree needs a couple of macrotasks to commit before it is readable.
-    await view.settle(60)
+    // Wait for the *loading line itself*, not for a guessed number of
+    // milliseconds. That is the thing being asserted, and it is observable: the
+    // component renders it on its first commit, before the fetch resolves.
+    await view.waitFor(
+      () => {
+        const text = view.container.textContent ?? ''
+        return text.includes('正在读取配置') || text.includes('loading')
+      },
+      '加载态出现在 DOM 里',
+    )
     const early = view.container.textContent ?? ''
     assert.ok(
       early.includes('正在读取配置') || early.includes('loading'),
       `the loading state is not visible: ${JSON.stringify(early.slice(0, 120))}`,
     )
-    await view.settle(1100)
+    // Then wait for the opposite condition: the 900 ms fetch has landed and the
+    // loading line is gone. Waiting on the absence of the line is both correct and
+    // strictly shorter than sleeping 1100 ms.
+    await view.waitFor(
+      () => {
+        const text = view.container.textContent ?? ''
+        return text.length > 200 && !text.includes('正在读取配置')
+      },
+      '加载结束、配置页渲染完成',
+    )
     const settled = view.container.textContent ?? ''
     assert.ok(settled.length > 200, `the page never left its loading state (${settled.length} chars)`)
     assert.equal(settled.includes('正在读取配置'), false, 'the loading line is still showing after the fetch settled')
@@ -387,7 +453,7 @@ test('all five areas reach the real DOM', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
     const text = view.container.textContent ?? ''
     // One representative label per area, as a user would see them. The page
     // stacks field groups rather than printing five literal headings, so each
@@ -414,7 +480,7 @@ test('inputs are real, editable form controls', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     const inputs = view.container.querySelectorAll('input, textarea, select')
     assert.ok(inputs.length >= 5, `expected form controls, found ${inputs.length}`)
@@ -436,7 +502,7 @@ test('the credential value never appears in the DOM', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
     const html = view.container.innerHTML
     assert.ok(html.includes('i1U5') || html.includes('已配置'), 'the credential status is missing')
     // No key-shaped string and no cookie-shaped string may reach the document.
@@ -454,7 +520,7 @@ test('a failing backend shows the failure instead of an empty page', async () =>
   try {
     const { Section } = loadSection({ failWith: 'network down' })
     const view = mount(Section)
-    await view.settle(120)
+    await view.settle()
     const text = view.container.textContent ?? ''
     assert.ok(text.length > 20, 'the failure state rendered nothing')
     assert.ok(
@@ -473,7 +539,7 @@ test('saving sends the staged fields to the plugin route', async () => {
   try {
     const { Section, calls } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     // Pick a text field whose served value we know, so the edit is a real change.
     const inputs = [...view.container.querySelectorAll('input')] as HTMLInputElement[]
@@ -486,7 +552,17 @@ test('saving sends the staged fields to the plugin route', async () => {
     const setter = Object.getOwnPropertyDescriptor(InputCtor.prototype, 'value')?.set
     setter?.call(editable, '2233445566')
     editable.dispatchEvent(new view.window.Event('input', { bubbles: true }))
-    await view.settle(30)
+    // Wait for React to commit the staged value rather than assuming a 30 ms
+    // render. The observable signal is the save button becoming enabled — which is
+    // exactly the precondition the next assertion checks, so if it never happens
+    // the failure now names the fixture instead of timing out anonymously.
+    await view.waitFor(
+      () =>
+        Array.from(view.container.querySelectorAll('button')).some(
+          (button) => (button.textContent ?? '').trim() === '保存' && !(button as HTMLButtonElement).disabled,
+        ),
+      '输入后「保存」按钮变为可用',
+    )
 
     // Match the exact label: the credential rows also have a "保存凭据" button,
     // and an `includes` match picked that one and never issued the settings save.
@@ -496,7 +572,13 @@ test('saving sends the staged fields to the plugin route', async () => {
     assert.ok(save !== undefined, `no save button in the DOM (found ${[...view.container.querySelectorAll('button')].map((b) => (b.textContent ?? '').trim()).join('|')})`)
     assert.equal((save as HTMLButtonElement).disabled, false, 'the save button is disabled, so nothing was staged')
     save.dispatchEvent(new view.window.MouseEvent('click', { bubbles: true }))
-    await view.settle(80)
+    // Wait for the POST itself. Sleeping on "the page probably finished saving" was
+    // the weakest wait in this file: nothing rendered after the save, so `settle()`
+    // returned immediately and the test then raced the fetch.
+    await view.waitFor(
+      () => calls.some((call) => call.method === 'POST' && call.url.endsWith('/api/dsh-ai-debate/settings')),
+      '保存请求发到 /settings',
+    )
 
     const post = calls.find((call) => call.method === 'POST' && call.url.endsWith('/api/dsh-ai-debate/settings'))
     assert.ok(post !== undefined, `the save did not reach the plugin route: ${JSON.stringify(calls)}`)
@@ -513,12 +595,12 @@ test('unmounting releases the store subscription', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
     view.unmount()
     // A second mount must work from a clean slate; a leaked subscription would
     // make React warn about updating an unmounted root.
     const again = mount(Section)
-    await again.settle(80)
+    await again.settle()
     assert.ok((again.container.textContent ?? '').length > 50, 'a fresh mount rendered nothing')
     again.unmount()
   } finally {
@@ -541,7 +623,7 @@ test('the temperature slider can express its own default (0.4)', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     const range = view.container.querySelector('#dsd-temp') as HTMLInputElement | null
     assert.ok(range !== null, 'the temperature control is missing')
@@ -571,7 +653,7 @@ test('the other sliders keep an integer step', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
     for (const id of ['dsd-auto', 'dsd-cooldown', 'dsd-per-thread']) {
       const range = view.container.querySelector(`#${id}`) as HTMLInputElement | null
       assert.ok(range !== null, `${id} is missing`)
@@ -589,7 +671,7 @@ test('each credential input names the credential it wants', async () => {
   try {
     const { Section } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     const inputs = [...view.container.querySelectorAll('input[type="password"]')] as HTMLInputElement[]
     assert.equal(inputs.length, 2, 'both credential rows should be present')
@@ -611,21 +693,35 @@ test('a failed credential save keeps what the user pasted', async () => {
     // The route rejects the write; the field must survive so the paste is not lost.
     const { Section } = loadSection({ secretFailsWith: '本部署没有凭据服务' })
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     const input = view.container.querySelector('input[type="password"]') as HTMLInputElement
     const InputCtor = (view.window as unknown as { HTMLInputElement: typeof HTMLInputElement }).HTMLInputElement
     const setter = Object.getOwnPropertyDescriptor(InputCtor.prototype, 'value')?.set
     setter?.call(input, 'ST=fixture-pasted-value-06')
     input.dispatchEvent(new view.window.Event('input', { bubbles: true }))
-    await view.settle(30)
+    // Wait until React has committed the typed value into its own state. Reading
+    // the input's DOM value would pass even before the commit, so the observable
+    // signal is the credential-save button becoming enabled.
+    await view.waitFor(
+      () =>
+        Array.from(view.container.querySelectorAll('button')).some(
+          (button) => (button.textContent ?? '').trim() === '保存凭据' && !(button as HTMLButtonElement).disabled,
+        ),
+      '输入凭据后「保存凭据」按钮变为可用',
+    )
 
     const save = [...view.container.querySelectorAll('button')].find(
       (button) => (button.textContent ?? '').trim() === '保存凭据',
     )
     assert.ok(save !== undefined, 'no save button for the credential')
     save.dispatchEvent(new view.window.MouseEvent('click', { bubbles: true }))
-    await view.settle(80)
+    // Wait for the reported outcome rather than a guessed delay: on a rejected
+    // write the row must show 「保存失败」, and that is the assertion right below.
+    await view.waitFor(
+      () => (view.container.textContent ?? '').includes('保存失败'),
+      '失败的保存被报告成「保存失败」',
+    )
 
     // The defect: the input was cleared before the promise settled, so a
     // rejected save silently ate the cookie.
@@ -646,7 +742,7 @@ test('the config-only action and the real stop are two different things', async 
   try {
     const { Section, calls } = loadSection()
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     const buttons = [...view.container.querySelectorAll('button')]
     const autoOff = buttons.find((b) => (b.textContent ?? '').includes('关闭自动发表模式'))
@@ -656,8 +752,18 @@ test('the config-only action and the real stop are two different things', async 
 
     // The old single button staged two fields and claimed to have paused
     // everything. Editing config must NOT issue a request.
+    //
+    // This is a *negative* assertion, so there is no positive condition to wait
+    // for. What we can observe is that the click has been committed: the button
+    // stages `interactionMode = manual` and `maxAutoPerSession = 0`, both of which
+    // are rendered as form controls with stable ids. Wait for the select to show
+    // the staged value, then assert the absence of the request — that ordering is
+    // the strongest statement available, and it no longer depends on load.
     autoOff!.dispatchEvent(new view.window.MouseEvent('click', { bubbles: true }))
-    await view.settle(60)
+    await view.waitFor(
+      () => (view.container.querySelector('#dsd-mode') as HTMLSelectElement | null)?.value === 'manual',
+      '「关闭自动发表模式」把 #dsd-mode 改成 manual',
+    )
     assert.equal(
       calls.filter((call) => call.method === 'POST' && call.url.endsWith('/action')).length,
       0,
@@ -666,7 +772,10 @@ test('the config-only action and the real stop are two different things', async 
 
     // The real one must.
     pauseNow!.dispatchEvent(new view.window.MouseEvent('click', { bubbles: true }))
-    await view.settle(80)
+    await view.waitFor(
+      () => calls.some((call) => call.method === 'POST' && call.url.endsWith('/action')),
+      '「立即暂停」调用 /action',
+    )
     const posted = calls.find((call) => call.method === 'POST' && call.url.endsWith('/action'))
     assert.ok(posted !== undefined, 'the real stop did not call the backend')
     assert.ok(String(posted.body ?? '').includes('pause-now'), `wrong action sent: ${posted.body}`)
@@ -685,7 +794,7 @@ test('a plaintext public base URL warns without being rewritten', async () => {
     })
     const { Section } = loadSection({ response })
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
 
     const text = view.container.textContent ?? ''
     assert.ok(text.includes('明文 HTTP'), 'a public http endpoint did not warn')
@@ -711,7 +820,7 @@ test('a loopback plaintext base URL is a note, not a warning', async () => {
     })
     const { Section } = loadSection({ response })
     const view = mount(Section)
-    await view.settle(80)
+    await view.settle()
     const text = view.container.textContent ?? ''
     assert.equal(text.includes('明文 HTTP'), false, 'a local endpoint must not be treated as a leak')
     assert.ok(text.includes('本机或内网明文地址'), 'the local case should still be explained')

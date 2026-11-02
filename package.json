@@ -1,6 +1,6 @@
 {
   "name": "dsh-ai-debate",
-  "version": "0.2.21",
+  "version": "0.2.22",
   "description": "AI代吵架 — read a Tieba thread, reconstruct the argument, inherit the owner's position, and draft a persona-styled reply with human review before publishing.",
   "license": "AGPL-3.0-only",
   "type": "module",
@@ -54,7 +54,7 @@
     "clean": "node scripts/clean.mjs",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "node --experimental-transform-types --test \"test/**/*.test.ts\"",
+    "test": "node --experimental-transform-types --test --test-concurrency=8 \"test/**/*.test.ts\"",
     "verify": "node scripts/verify.mjs",
     "pack": "node scripts/pack.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",

@@ -77,10 +77,19 @@ function candidate(overrides: Partial<StoredCandidate> = {}): StoredCandidate {
     strategy: 'tieba_veteran',
     targetPostId: 'p-2',
     targetSnapshot: {
+      // v0.2.22 phase13：快照按真实类型补全（`TargetSnapshot` 的字段名是
+      // targetPostId / targetKind，不是 postId / kind），并带上目标作者 ID。
+      // 真实候选一定有快照——`runtime.ts` 把 `resolveTarget` 的结果整个挂在候选上，
+      // 而 `publishCandidate` 对"没有快照"和"没有稳定作者 ID"两种候选都会拒绝。
+      // 这里若继续用残缺快照，工作台就会把一条注定被拒的候选显示成"可发表"。
+      platform: 'tieba',
       threadId: 't1',
       floorPostId: 'p-1',
-      postId: 'p-2',
-      kind: 'nested',
+      floorNumber: 1,
+      targetPostId: 'p-2',
+      targetKind: 'nested',
+      targetAuthorId: 'opp-1',
+      targetAuthorName: '对手B',
       contentHash: 'h',
       capturedAt: NOW,
     } as never,

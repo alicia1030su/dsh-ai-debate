@@ -546,7 +546,13 @@ test('缺陷二-5b：第 3 页超时时 complete=false，前两页数据保留',
   assert.equal(collected.complete, false, '超时不得宣称完整')
   assert.equal(collected.stopReason, 'request_error', `应记录请求失败原因，实际 ${collected.stopReason}`)
   assert.equal(collected.floors.length, PAGE_SIZE * 2, '前两页的 60 楼必须保留')
-  assert.equal(collected.truncated, false, '这不是分页上限造成的截断')
+  // v0.2.22 改：这里原来断言 false，理由是"这不是分页上限造成的截断"。那条理由
+  // 把 truncated 定义成了 page_cap 的同义词，于是"平台声明 4 页、只读到 2 页、第 3
+  // 页超时"这种**明确知道还有页没读**的情况被报成 truncated=false，读起来像"读完
+  // 了"。现在 truncated 的含义是字段文档里写的那个：停下时已知还有未读页面。
+  // 声明 4 页只读 2 页，正是它。complete 仍为 false，与它并不冲突——两者回答的
+  // 是两个问题（读全了吗／还有没读的吗），这一对组合才是诚实的。
+  assert.equal(collected.truncated, true, '声明 4 页只读到 2 页，必须承认还有页没读')
 })
 
 test('缺陷二-5c：限流与传输错误必须是不同的 stopReason', async () => {
