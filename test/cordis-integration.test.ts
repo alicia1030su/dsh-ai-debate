@@ -115,7 +115,7 @@ test('真实 Cordis 容器上，apply 会注册九个工具', async () => {
   }
 })
 
-test('真实 Cordis 容器上，webServer 里会出现六条设置路由', async () => {
+test('真实 Cordis 容器上，webServer 里会出现七条设置路由', async () => {
   // This is the assertion that would have caught the observed 404: the tools came
   // up, the page did not.
   const { fiber, server } = await mount()
@@ -134,6 +134,8 @@ test('真实 Cordis 容器上，webServer 里会出现六条设置路由', async
       // approve: the owner needs to *see* the verification state, and a route that quietly
       // stops registering would leave the panel claiming it cannot read anything.
       '/api/dsh-ai-debate/verification',
+      // v0.2.22: the publish workbench's read model.
+      '/api/dsh-ai-debate/workbench',
     ])
     // Each route must be a real handler, not just a path.
     for (const route of server.routes) {
@@ -147,7 +149,7 @@ test('真实 Cordis 容器上，webServer 里会出现六条设置路由', async
 
 test('停掉插件后路由被摘掉，不留悬空 handler', async () => {
   const { fiber, server } = await mount()
-  assert.equal(server.routes.length, 6)
+  assert.equal(server.routes.length, 7)
   await fiber.dispose()
   assert.equal(server.routes.length, 0, 'dispose 之后路由必须被移除')
 })
@@ -173,7 +175,7 @@ test('webServer 晚于插件出现时，路由仍然注册', async () => {
   app.provide('webServer', server)
   await new Promise((resolve) => setTimeout(resolve, 50))
 
-  assert.equal(server.routes.length, 6, 'webServer 晚到也必须拿到全部六条路由')
+  assert.equal(server.routes.length, 7, 'webServer 晚到也必须拿到全部七条路由')
   await fiber.dispose()
 })
 

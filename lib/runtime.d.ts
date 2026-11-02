@@ -303,6 +303,38 @@ export interface SessionView {
     readonly session: StoredSession;
     readonly candidates: readonly StoredCandidate[];
 }
+/**
+ * Replace one candidate's text after the owner edited it (v0.2.22 §三).
+ *
+ * ## Why an edit is not just `text: newText`
+ *
+ * An approval authorizes **bytes**, and the publish path proves the bytes are the approved ones
+ * by comparing `textHash` and `candidateVersion`. If an edit only rewrote `text`, one of two
+ * things happens: the gate compares the approval against the old hash, which now describes prose
+ * nobody is sending (refusing forever with "text mismatch" about text that matches), or — if a
+ * caller forgot to re-hash — the approval keeps matching the **old** hash and authorizes prose
+ * the owner never read. The second is the dangerous one, and it is invisible in a review.
+ *
+ * So the edit rewrites the hash **and** bumps the version, and clears `approved`. The approval
+ * record itself is left alone: it is an audit trail of what was authorized at the time, and the
+ * freshness check decides whether it still applies. Deleting it would destroy the evidence that
+ * the owner had approved the earlier text.
+ *
+ * The security assessment is cleared for the same reason: it graded the old prose, and keeping
+ * it would let edited text ride on a verdict passed for something else.
+ */
+export declare function editCandidate(runtime: Runtime, input: {
+    readonly sessionId: string;
+    readonly candidateId: string;
+    readonly text: string;
+}): Promise<{
+    ok: true;
+    candidateVersion: number;
+    textHash: string;
+} | {
+    ok: false;
+    message: string;
+}>;
 /** Read one session. */
 export declare function getSession(runtime: Runtime, sessionId: string): Promise<SessionView>;
 /**

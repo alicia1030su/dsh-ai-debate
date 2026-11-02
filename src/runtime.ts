@@ -1325,6 +1325,83 @@ export interface SessionView {
   readonly candidates: readonly StoredCandidate[]
 }
 
+/**
+ * Replace one candidate's text after the owner edited it (v0.2.22 §三).
+ *
+ * ## Why an edit is not just `text: newText`
+ *
+ * An approval authorizes **bytes**, and the publish path proves the bytes are the approved ones
+ * by comparing `textHash` and `candidateVersion`. If an edit only rewrote `text`, one of two
+ * things happens: the gate compares the approval against the old hash, which now describes prose
+ * nobody is sending (refusing forever with "text mismatch" about text that matches), or — if a
+ * caller forgot to re-hash — the approval keeps matching the **old** hash and authorizes prose
+ * the owner never read. The second is the dangerous one, and it is invisible in a review.
+ *
+ * So the edit rewrites the hash **and** bumps the version, and clears `approved`. The approval
+ * record itself is left alone: it is an audit trail of what was authorized at the time, and the
+ * freshness check decides whether it still applies. Deleting it would destroy the evidence that
+ * the owner had approved the earlier text.
+ *
+ * The security assessment is cleared for the same reason: it graded the old prose, and keeping
+ * it would let edited text ride on a verdict passed for something else.
+ */
+export async function editCandidate(
+  runtime: Runtime,
+  input: { readonly sessionId: string; readonly candidateId: string; readonly text: string },
+): Promise<{ ok: true; candidateVersion: number; textHash: string } | { ok: false; message: string }> {
+  const trimmed = input.text.trim()
+  if (trimmed === '') {
+    return {
+      ok: false,
+      message: '正文不能是空的。清空正文等于撤回这条候选，不会变成「发一条空回复」。',
+    }
+  }
+  await runtime.store.ready()
+  const session = runtime.store.getSession(input.sessionId)
+  if (session === undefined) return { ok: false, message: `找不到会话 ${input.sessionId}` }
+
+  const candidate = session.candidates.find((entry) => entry.replyId === input.candidateId)
+  if (candidate === undefined) {
+    return { ok: false, message: `这条会话里没有候选 ${input.candidateId}` }
+  }
+
+  // A sent reply is immutable. Editing it would leave a candidate whose text no longer matches
+  // what is on the platform, and the page would then show a draft beside a published reply —
+  // a difference nobody can explain later.
+  if (candidate.publishedPostId !== undefined) {
+    return { ok: false, message: '这条候选已经发表过，正文不能再改。要换说法请新建一条候选。' }
+  }
+
+  const textHash = contentHash(trimmed)
+  const candidateVersion = nextCandidateVersion(session)
+
+  await runtime.store.mutate((data) => ({
+    ...data,
+    sessions: data.sessions.map((entry) =>
+      entry.id === session.id
+        ? {
+            ...entry,
+            candidates: entry.candidates.map((row) =>
+              row.replyId === input.candidateId
+                ? {
+                    ...row,
+                    text: trimmed,
+                    textHash,
+                    candidateVersion,
+                    approved: false,
+                    security: undefined,
+                  }
+                : row,
+            ),
+            updatedAt: new Date().toISOString(),
+          }
+        : entry,
+    ),
+  }))
+
+  return { ok: true, candidateVersion, textHash }
+}
+
 /** Read one session. */
 export async function getSession(runtime: Runtime, sessionId: string): Promise<SessionView> {
   await runtime.store.ready()

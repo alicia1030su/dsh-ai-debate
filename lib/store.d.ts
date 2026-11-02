@@ -648,6 +648,21 @@ export declare class DebateStore {
     appendSecurityEvent(event: SecurityEventRecord, limit: number): Promise<void>;
     /** Sessions for one thread, newest first. */
     sessionsForThread(threadId: string): readonly StoredSession[];
+    /**
+     * The most recently updated session, for "resume where I left off".
+     *
+     * ## Why this is a store method and not a scan in the view layer
+     *
+     * A page that reloads has no session id to ask about — the id was in the closed tab. The only
+     * honest answer to "what was I doing?" is the durable record, so the lookup belongs next to
+     * the records. Filtering `snapshot().sessions` from the route would have been the same query
+     * with the sorting rule duplicated, and the two would drift.
+     *
+     * Newest by `updatedAt`, because that is the session the owner was most recently looking at.
+     * Terminal sessions are included: an owner reloading after a publish should land on the
+     * result, not on a blank page.
+     */
+    latestSession(): StoredSession | undefined;
     /** Every verification record, oldest first. */
     getVerificationRecords(): readonly VerificationRecordRow[];
     /**

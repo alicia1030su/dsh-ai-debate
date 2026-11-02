@@ -25,11 +25,16 @@ import type { ThreadRef } from './types.js'
 import { buildVerificationService } from './verification-service.js'
 import { verificationViewOf } from './verification-view.js'
 import { adapterVersionOfAdapter, effectiveCapability, type CapabilityEvidenceRecord } from './capability-evidence.js'
+import { approvalStillApplies, deriveWorkbenchState } from './workbench.js'
 import {
   buildLlm,
   policyFromConfig,
   cancelInFlight,
+  editCandidate,
   inFlightPublishCount,
+  runAnalysis,
+  runGeneration,
+  runPublish,
   stopSession,
   type Runtime,
 } from './runtime.js'
@@ -72,20 +77,98 @@ function configuredAccountOf(
 }
 
 /**
- * The account the live session currently reports, or `undefined` when it cannot be read.
+ * The capability state the publish gate would compute, for display.
  *
- * Deliberately *not* falling back to the configured id: §三.4 requires this to be the account the
- * session actually belongs to, and substituting the intended one would make the check compare a
- * value with itself — always equal, never useful.
+ * Reads the same declaration and the same evidence the gate reads, through the same function.
+ * It is deliberately a separate call rather than a cached field: the gate recomputes on every
+ * publish, and a page showing a value computed at a different moment could differ from the
+ * answer the publish gets.
+ */
+function capabilityFor(runtime: Runtime, platform: string): { declared: string; effective: string; reason: string } {
+  const matrix = runtime.platforms?.capabilitiesOf(platform)
+  const declared = matrix === undefined ? 'unavailable' : stateOf(matrix, 'comment.publish').state
+  if (declared === 'unavailable' || declared === 'permission_required' || declared === 'supported') {
+    return {
+      declared,
+      effective: declared,
+      reason: matrix === undefined ? `${platform} 没有声明任何能力` : stateOf(matrix, 'comment.publish').reason,
+    }
+  }
+  const accountId = configuredAccountOf(runtime.config(), platform) ?? ''
+  let adapterVersion = ''
+  try {
+    const adapter = runtime.platforms?.adapterFor(platform)
+    adapterVersion = adapter === undefined ? '' : adapterVersionOfAdapter(adapter)
+  } catch {
+    adapterVersion = ''
+  }
+  if (adapterVersion === '') {
+    return { declared, effective: declared, reason: `${platform} 的适配器当前不可用，无法确定代码版本` }
+  }
+  const records: readonly CapabilityEvidenceRecord[] = runtime.store
+    .getVerificationRecords()
+    .filter((record) => record.outcome === 'succeeded')
+    .map((record) => ({
+      platform: record.platform,
+      capability: record.capability,
+      accountId: record.authorizedAccountId,
+      adapterVersion: record.adapterVersion ?? '',
+      verifiedAt: record.startedAt,
+      method: 'live' as const,
+      readBackComplete:
+        record.readBack !== undefined &&
+        record.readBack.postFound &&
+        record.readBack.authorMatched &&
+        record.readBack.textMatched &&
+        record.readBack.parentMatched,
+    }))
+  const decision = effectiveCapability(
+    declared,
+    { platform, capability: 'comment.publish', accountId, adapterVersion },
+    records,
+  )
+  return { declared, effective: decision.effective, reason: decision.reason }
+}
+
+/**
+ * The account the live session currently reports **for one platform**, or `undefined`.
+ *
+ * ## Why this must go through the platform's own adapter (v0.2.22 §七)
+ *
+ * v0.2.21 wrote this as `checkLogin(runtimeView)`, which asks `runtime.adapter` — the *default*
+ * platform's adapter. With more than one platform registered, that meant every platform's
+ * "live account" was in fact Tieba's answer. The consequences are the kind that look like
+ * working software: a Weibo verification would be refused as `account_mismatch` against a Tieba
+ * id, and — worse in the other direction — a capability gate would bind evidence to an account
+ * the platform in question never reported.
+ *
+ * Asking the platform's own adapter is the only version that can be extended to a second
+ * platform without inventing an identity, which is exactly what §七 asks for. No probe result is
+ * ever reused across platforms: an unregistered adapter answers `undefined`, and `undefined` is
+ * a refusal in `checkVerification`.
+ *
+ * ## What "unknown" covers
+ *
+ * Not registered, probe threw, not authenticated, and authenticated-without-an-id are four
+ * different routes to the same answer. They are deliberately not distinguished here — the
+ * caller (`checkVerification`) already refuses on `undefined`, and a per-route message would be
+ * a second place deciding whether publishing may happen.
  */
 async function liveAccountOf(runtime: Runtime, platform: string): Promise<string | undefined> {
+  let adapter
   try {
-    const probe = await checkLogin(runtime)
+    adapter = runtime.platforms?.adapterFor(platform)
+  } catch {
+    return undefined
+  }
+  if (adapter === undefined) return undefined
+  try {
+    const probe = await adapter.checkAuthentication()
+    if (probe.authenticated !== true) return undefined
     if (typeof probe.userId === 'string' && probe.userId.trim() !== '') return probe.userId.trim()
   } catch {
     // A probe that throws means "unknown", which refuses the run — the safe direction.
   }
-  void platform
   return undefined
 }
 
@@ -1414,6 +1497,215 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
      * The refusal path lives inside the runner, not here: this only forwards the owner's form.
      * Adding a check here would be a second place that decides whether publishing may happen, and
      * the two could disagree — which is how "the panel said yes and the sender said no" happens.
+     */
+    /**
+     * The publish workbench's read model (v0.2.22 §一).
+     *
+     * ## Refresh-is-safe is structural
+     *
+     * This function performs no publish, no approval and no generation. Reloading the page can
+     * therefore only re-derive the same answer from the same durable facts — the state machine
+     * in `workbench.ts` computes the step rather than reading a stored one, so a reload cannot
+     * rewind or replay anything.
+     *
+     * ## The publish outcome comes from the ledger, not the session
+     *
+     * `DedupeRecord.publishState` is the durable truth about whether a reply went out; the
+     * session is a working cache with a TTL. Reading the session would make "already published"
+     * quietly expire back to "not attempted" — which is the state that gets a reply re-sent.
+     */
+    /**
+     * Collect and analyse a discussion from the workbench (v0.2.22 §二).
+     *
+     * The agent tool and this route call the same function; the difference is who supplied the
+     * link. Collecting is read-only with respect to the platform and cannot publish, so reaching
+     * it from the page does not add a new way to write.
+     */
+    analyzeThread: async (input) => {
+      try {
+        const output = await runAnalysis(runtimeView, {
+          url: input.url,
+          ...(input.postId === undefined ? {} : { postId: input.postId }),
+          ...(input.ownerInstruction === undefined ? {} : { ownerInstruction: input.ownerInstruction }),
+        })
+        return { ok: true, sessionId: output.sessionId }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    /** Generate candidates for an existing session (v0.2.22 §三). */
+    generateCandidates: async (input) => {
+      try {
+        const output = await runGeneration(runtimeView, {
+          sessionId: input.sessionId,
+          ...(input.style === undefined ? {} : { persona: { style: input.style as never } }),
+          ...(input.ownerInstruction === undefined ? {} : { ownerInstruction: input.ownerInstruction }),
+        })
+        // One call produces one candidate, deliberately: comparing two drafts means generating
+        // twice, and each generation bumps the version — which retires any approval of the
+        // previous draft. Reporting a count of 1 is the honest answer, not a placeholder.
+        return {
+          ok: true,
+          candidates: 1,
+          ...(output.needsInput === true
+            ? { message: output.needsInputReason ?? '模型要求补充信息后才能起草' }
+            : {}),
+        }
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) }
+      }
+    },
+    /** Publish one approved candidate through the normal pipeline (v0.2.22 §四). */
+    publishApproved: async (input) => {
+      const report = await runPublish(runtimeView, {
+        sessionId: input.sessionId,
+        candidateId: input.candidateId,
+        approvedText: input.approvedText,
+        humanApproved: true,
+      })
+      return {
+        ok: report.ok,
+        status: report.status,
+        message: report.message,
+        ...(report.postId === undefined ? {} : { postId: report.postId }),
+      }
+    },
+    editCandidate: async (input) => editCandidate(runtimeView, input),
+    workbench: async ({ sessionId }: { readonly sessionId?: string }) => {
+      const session =
+        sessionId === undefined
+          ? runtimeView.store.latestSession()
+          : runtimeView.store.getSession(sessionId)
+
+      if (session === undefined) {
+        // Nothing collected yet. `deriveWorkbenchState` already answers "paste a link" for this
+        // case, so the page gets the same shape it gets for a live session.
+        return { ok: true, sessionId: undefined, ...deriveWorkbenchState({ approvalApplies: false }) } as never
+      }
+
+      const platform = session.platform
+      const candidate = session.candidates[session.candidates.length - 1]
+
+      // The approval the owner created, matched against the candidate as it is now. Both sides
+      // come from the store, so "approved" cannot be true here while the ledger disagrees.
+      //
+      // `consumedAt` is respected through `approvalStillApplies`'s caller contract: a consumed
+      // record still *binds* the same bytes, but the publish path treats it as spent. Keeping the
+      // freshness answer about the bytes (and not about consumption) is deliberate — the page
+      // shows "approved, already used" rather than silently flipping to "not approved", which
+      // would invite the owner to approve the same text again.
+      const approval = runtimeView.store
+        .getApprovals()
+        .filter((record) => record.sessionId === session.id)
+        .sort((a, b) => b.grantedAt.localeCompare(a.grantedAt))[0]
+      const freshness =
+        candidate === undefined
+          ? { applies: false, reason: '还没有候选' }
+          : approvalStillApplies({
+              candidate,
+              ...(approval === undefined
+                ? {}
+                : {
+                    approval: {
+                      candidateId: approval.candidateId,
+                      candidateVersion: approval.candidateVersion,
+                      textHash: approval.textHash,
+                      targetPostId: approval.targetPostId,
+                    },
+                  }),
+            })
+
+      // The ledger row for this session. Absent means no publish has been attempted; `pending`
+      // means one was started and its outcome is unknown. Reading the session alone would make
+      // "already published" expire back to "not attempted" when the session is pruned — which is
+      // the state that gets a reply re-sent.
+      const ledger = runtimeView.store
+        .snapshot()
+        .dedupe.find((record) => record.sessionId === session.id)
+      const lastAttempt =
+        ledger?.publishState === 'confirmed'
+          ? ({ status: 'confirmed' } as const)
+          : ledger?.publishState === 'pending'
+            ? ({ status: 'uncertain' } as const)
+            : ledger?.publishState === 'failed'
+              ? ({
+                  status: 'failed',
+                  ...(session.error === undefined ? {} : { reason: session.error }),
+                } as const)
+              : undefined
+
+      const derived = deriveWorkbenchState({
+        session,
+        approvalApplies: freshness.applies,
+        capability: capabilityFor(runtimeView, platform),
+        ...(lastAttempt === undefined ? {} : { lastAttempt }),
+      })
+
+      // The approval snapshot the page must echo back (v0.2.22 §四).
+      //
+      // The approve route refuses a request whose `expected` is missing or stale, on purpose:
+      // "approve whatever happens to be stored now" is the v0.2.7 hole. Building the snapshot
+      // here — from the same store read that produced the view — is what lets the workbench
+      // approve at all, and when any half of it is missing the page must not offer the button.
+      const publishingAccount = (() => {
+        const bound = aiAccountFor(bindingsOf(effectiveConfig()), platform)?.account
+        return (bound?.accountId ?? bound?.displayName ?? '').trim()
+      })()
+      const assessmentFingerprint = candidate?.security?.fingerprint ?? ''
+      const approveBlocked =
+        candidate === undefined
+          ? '还没有候选'
+          : publishingAccount === ''
+            ? '还没有为这个平台绑定 AI 发帖账号，无法创建批准：发布时无法确认用哪个账号发言。'
+            : assessmentFingerprint === ''
+              ? '这条候选没有安全评估快照，无法创建批准。请重新生成一次候选。'
+              : undefined
+      const approveExpectation =
+        approveBlocked !== undefined || candidate === undefined
+          ? null
+          : {
+              sessionId: session.id,
+              candidateId: candidate.replyId,
+              candidateVersion: candidate.candidateVersion ?? 0,
+              platform,
+              targetPostId: candidate.targetPostId,
+              publishingAccount,
+              textHash: candidate.textHash,
+              assessmentFingerprint,
+            }
+
+      return {
+        ok: true,
+        sessionId: session.id,
+        platform,
+        threadUrl: session.threadUrl,
+        threadTitle: session.threadTitle,
+        workbench: derived,
+        approveExpectation,
+        ...(approveBlocked === undefined ? {} : { approveBlocked }),
+        candidates: session.candidates.map((entry) => ({
+          replyId: entry.replyId,
+          text: entry.text,
+          strategy: entry.strategy,
+          candidateVersion: entry.candidateVersion,
+          textHash: entry.textHash,
+          approved: entry.approved,
+          targetPostId: entry.targetPostId,
+          createdAt: entry.createdAt,
+          violations: entry.violations,
+          ...(entry.security === undefined
+            ? {}
+            : { assessmentFingerprint: entry.security.fingerprint }),
+        })),
+        blockers: [...derived.blockers, ...(freshness.applies ? [] : [freshness.reason])],
+      }
+    },
+    /**
+     * Run one verification attempt (§三).
+     *
+     * The refusal path lives inside the runner, not here: this only forwards the owner's form.
+     * Adding a check here would be a second place that decides whether publishing may happen,
+     * and the two could disagree.
      */
     runVerification: async (input) => {
       const service = buildVerificationService({
