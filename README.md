@@ -1019,7 +1019,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**1488 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.2 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**1494 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.2 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1138,7 +1138,9 @@ node scripts/pack.mjs
 | `test/v0222-workbench-flow.test.ts` | 9 | 工作台的完整时序：真 Store + 假平台下走完 新建→选目标→生成→批准→发表→回读，含刷新与第二实例一致性 |
 | `test/v0222-workbench.test.ts` | 21 | 工作台状态由持久事实推导：步骤顺序、五种结果不合并、批准绑定字节、缺失证据不补全 |
 | `test/workbench-approval-scope.test.ts` | 11 | 批准范围两行制：内容已批准 ≠ 目标身份已核验；无快照/无稳定 ID 时提前阻断，并与 `publishCandidate` 的实际拒绝逐条对齐 |
-| **合计** | **1488** | |
+| `test/install-deps-resolution.test.ts` | 3 | 依赖复制同时支持 pnpm isolated 与 hoisted 两种布局；两种形状各测一次，并验证回退到旧逻辑时 hoisted 那条会红 |
+| `test/test-concurrency-budget.test.ts` | 3 | 测试并发上限有依据且本地与 CI 一致：默认并发（=核数）在文件数超过 110 后会偶发整体停滞，而 fail 为 0 |
+| **合计** | **1494** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

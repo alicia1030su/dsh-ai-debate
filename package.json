@@ -54,7 +54,7 @@
     "clean": "node scripts/clean.mjs",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
-    "test": "node --experimental-transform-types --test \"test/**/*.test.ts\"",
+    "test": "node --experimental-transform-types --test --test-concurrency=8 \"test/**/*.test.ts\"",
     "verify": "node scripts/verify.mjs",
     "pack": "node scripts/pack.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",

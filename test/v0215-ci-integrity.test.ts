@@ -69,11 +69,14 @@ function runScript(script) {
 
 test('CI 完整性：测试步骤用通配，不会因为清单过时而跳过新文件', () => {
   const ci = ciText()
-  assert.match(
-    ci,
-    /node --experimental-transform-types --test "test\/\*\*\/\*\.test\.ts"/,
-    '测试步骤必须是通配，不能写死文件列表',
-  )
+  // v0.2.22 阶段十三：命令里多了 `--test-concurrency=8`。断言改成「找到跑测试的那一行，
+  // 再要求它是通配」——原来写死的紧邻形式把「中间插一个参数」误判成了「不用通配」。
+  // 这条测试要防的是**清单**，不是**格式**。
+  const testLines = ci.split(/\r?\n/).filter((line) => !line.trim().startsWith('#') && /--test\s/.test(line))
+  assert.ok(testLines.length > 0, 'CI 里找不到跑测试的命令行')
+  for (const line of testLines) {
+    assert.match(line, /test\/\*\*\/\*\.test\.ts/, `测试步骤必须是通配，不能写死文件列表：${line.trim()}`)
+  }
 })
 
 test('CI 完整性：runner 真的执行了磁盘上的全部测试文件', () => {

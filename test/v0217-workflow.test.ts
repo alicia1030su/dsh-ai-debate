@@ -140,11 +140,17 @@ test('CI 跑编译、类型检查、全部测试', () => {
     !executedLines.some((line) => /tsc -p tsconfig\.test\.json/.test(line)),
     '不要退回裸 tsc，它检查不到 test/ 目录',
   )
-  assert.match(
-    ci,
-    /node --experimental-transform-types --test "test\/\*\*\/\*\.test\.ts"/,
-    '测试必须用通配而不是固定文件列表，否则新文件会被静默跳过',
-  )
+  // v0.2.22 阶段十三：命令里多了 `--test-concurrency=8`，所以改成先定位跑测试的行、
+  // 再要求那一行是通配。断言的对象是「不能用清单」，不是「参数必须紧邻」。
+  const testLines = executedLines.filter((line) => /--test\s/.test(line))
+  assert.ok(testLines.length > 0, 'CI 里找不到跑测试的命令行')
+  for (const line of testLines) {
+    assert.match(
+      line,
+      /test\/\*\*\/\*\.test\.ts/,
+      `测试必须用通配而不是固定文件列表，否则新文件会被静默跳过：${line.trim()}`,
+    )
+  }
 })
 
 test('CI 做独立的凭据扫描与归档扫描', () => {

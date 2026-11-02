@@ -80,7 +80,7 @@ jobs:
           # Globbed so a new test file cannot be silently skipped by a stale list.
           # Tee'd to a file because the delivery status report reads the real counts from it;
           # re-deriving them from a summary string in YAML would be a second source of truth.
-          node --experimental-transform-types --test "test/**/*.test.ts" 2>&1 | tee /tmp/test-output.log
+          node --experimental-transform-types --test --test-concurrency=8 "test/**/*.test.ts" 2>&1 | tee /tmp/test-output.log
 
       - name: 确认 lib/ 与源码一致
         run: |
