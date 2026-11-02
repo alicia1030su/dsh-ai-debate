@@ -74,16 +74,16 @@ export interface WorkbenchStepView {
  * publish gate reads before it touches the network: no snapshot, or no stable author
  * id. `publishCandidate` refuses both with a dedicated error code, so offering a
  * publish button here would be offering a button that cannot work.
+ *
+ * The four states:
+ *
+ * - `not_approved` — nothing to check yet: no candidate, or no approval binding it.
+ * - `not_rechecked` — a stable author id is recorded; the platform has not been
+ *   re-read since, and this page cannot claim otherwise.
+ * - `unverifiable` — only a display name is recorded; publishing will be refused.
+ * - `no_snapshot` — the candidate has no target snapshot; publishing will be refused.
  */
-export type TargetIdentityState = 
-/** Nothing to check: no candidate, or no approval that binds it. */
-'not_approved'
-/** A stable author id is recorded. The platform has not been re-read since. */
- | 'not_rechecked'
-/** The target is identified only by a display name; publishing will be refused. */
- | 'unverifiable'
-/** The candidate carries no target snapshot; publishing will be refused. */
- | 'no_snapshot';
+export type TargetIdentityState = 'not_approved' | 'not_rechecked' | 'unverifiable' | 'no_snapshot';
 /** What the page may say about the target's author. */
 export interface TargetIdentityView {
     readonly state: TargetIdentityState;
