@@ -137,6 +137,38 @@ function cleanEnv(): NodeJS.ProcessEnv {
   return env
 }
 
+/**
+ * Remove a temp directory, tolerating Windows' delayed handle release.
+ *
+ * `rmSync(..., { force: true })` does not mean "best effort" — it means "ignore
+ * ENOENT". On Windows a child process that has just exited can still hold a
+ * handle to its own cwd for a short while, so the delete raises `EBUSY` /
+ * `EPERM`, and because this runs in `finally`, that error *replaces* the test
+ * result. The symptom is a test that fails with `EBUSY: resource busy or locked`
+ * after a 60-second timeout, when what actually happened was "the script ran and
+ * we could not delete its scratch directory".
+ *
+ * That is the same class of dishonesty this file exists to catch: a cleanup
+ * problem reported as a test outcome. So the cleanup is retried briefly and then
+ * given up on — a leftover temp directory is noise, not evidence.
+ */
+function removeTempDir(dir: string): void {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      const code = (error as { code?: string }).code
+      if (code !== 'EBUSY' && code !== 'EPERM' && code !== 'ENOTEMPTY') throw error
+      // Busy-wait in short sleeps: the handle is released by the exiting child,
+      // so this settles in milliseconds when it settles at all.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25)
+    }
+  }
+  // Deliberately not thrown: the test's verdict must not depend on whether the OS
+  // had finished releasing a handle in its scratch directory.
+}
+
 /** 在临时目录里跑一段 bash 脚本，返回退出码与标准输出。 */
 function runBash(script: string): { status: number, stdout: string } {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-bash-'))
@@ -153,7 +185,7 @@ function runBash(script: string): { status: number, stdout: string } {
     })
     return { status: result.status ?? -1, stdout: String(result.stdout ?? '') }
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 }
 
@@ -266,7 +298,7 @@ test('真的 node --test 失败时，带 pipefail 的管道返回非零', () => 
     assert.ok(existsSync(join(dir, 'out.log')), 'tee 没有把输出写进日志文件')
     assert.match(readFileSync(join(dir, 'out.log'), 'utf8'), /fail 1|failing|not ok/i, '日志里没有失败记录')
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    removeTempDir(dir)
   }
 })
 
