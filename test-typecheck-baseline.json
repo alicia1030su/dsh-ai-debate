@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "baseline": 316,
-  "updatedAt": "2026-10-31T03:54:01.429Z",
+  "baseline": 314,
+  "updatedAt": "2026-11-02T06:31:09.128Z",
   "note": "测试代码里已知的类型错误数。只许下降：这个数字变大说明新代码引入了新的类型错误，闸门会变红。改小之后请用 node scripts/test-typecheck.mjs --update 收紧基线。",
   "worstFiles": [
     {

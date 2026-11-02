@@ -148,22 +148,22 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.21
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.22
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.21) 下载
-`dsh-ai-debate-0.2.21.tgz`，或在仓库根目录自行构建：
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.22) 下载
+`dsh-ai-debate-0.2.22.tgz`，或在仓库根目录自行构建：
 
 ```bash
 node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.21.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.22.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.21.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.22.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 应当得到与本机发布产物**字节一致**的 `.tgz`——校验和写在发布说明里，可以自行核对。
 
@@ -1019,7 +1019,7 @@ node scripts/pack.mjs
 
 ### 测试覆盖
 
-**1225 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.1 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
+**1487 项自动化测试全部通过**（`node scripts/verify.mjs`，Node 24.22.2 实测）。按文件分布**由脚本自动统计**（`node scripts/test-count.mjs`），不是手写的：
 
 | 测试文件 | 数量 | 覆盖内容 |
 | --- | --- | --- |
@@ -1110,14 +1110,35 @@ node scripts/pack.mjs
 | `test/v0215-weibo-identity.test.ts` | 19 | TODO: 补充覆盖说明 |
 | `test/v0216-archive-guard.test.ts` | 5 | TODO: 补充覆盖说明 |
 | `test/v0216-artifact-determinism.test.ts` | 5 | TODO: 补充覆盖说明 |
-| `test/v0216-credential-scan.test.ts` | 4 | TODO: 补充覆盖说明 |
+| `test/v0216-credential-scan.test.ts` | 3 | TODO: 补充覆盖说明 |
 | `test/v0217-delivery-status.test.ts` | 31 | TODO: 补充覆盖说明 |
 | `test/v0217-dsh-compat.test.ts` | 34 | TODO: 补充覆盖说明 |
 | `test/v0217-exception-paths.test.ts` | 18 | TODO: 补充覆盖说明 |
 | `test/v0217-ship-core.test.ts` | 37 | TODO: 补充覆盖说明 |
 | `test/v0217-version-core.test.ts` | 15 | TODO: 补充覆盖说明 |
 | `test/v0217-workflow.test.ts` | 23 | TODO: 补充覆盖说明 |
-| **合计** | **1225** | |
+| `test/author-identifier-semantics.test.ts` | 12 | `hasStableAuthor` 改名 `hasAuthorIdentifier` 后的委托别名一致性、`isAccountHandle` 注释与行为的对齐、以及"作者字段拆分推后"这一决定的反向断言 |
+| `test/identity-guard-semantics.test.ts` | 10 | `hasStableAuthor` / `snapshotStillValid` / `approvalStillApplies` 三个函数的真实语义：名字承诺什么、实现做了什么、边界在哪 |
+| `test/pagination-capability-scope.test.ts` | 8 | `comment.paginate` 的实际调用关系：能力闸门不在读取路径上、发表只用 `comment.publish`/`comment.reply`；以及 403 时运行时是否如实报告截断 |
+| `test/pagination-forbidden-page.test.ts` | 7 | 第 2 页 403 不得被当成"读完了"或"空列表"：完整、停止原因、截断、重试次数四件事分别断言 |
+| `test/pagination-truncation-state.test.ts` | 10 | `truncated` 状态机：已知还有未读页才置位；第 1 页就失败时不得谎称截断；正常两页与最后一页不得被误标 |
+| `test/participant-handle.test.ts` | 6 | `isAccountHandle` 的实际下游影响：`distinctHandles` 如何随 un/name_show 关系变化，以及它完全不参与发表路径 |
+| `test/publish-author-identity-binding.test.ts` | 10 | 发表前的作者三维绑定：postId 不变但作者换人、作者 ID 消失、仅昵称变化三种情形，全部走真实 `publishCandidate` 并断言零请求 |
+| `test/tieba-author-fields.test.ts` | 9 | 贴吧 `un` / `name_show` / `replyToName` 三字段的真实数据语义：登录名不等于昵称，被回复者的名字不得升级成 ID |
+| `test/v0218-no-swallowed-failure.test.ts` | 8 | 流水线不得把失败吞成绿：测试步骤、构建步骤、发布步骤各自的非零退出都必须让整条流水线失败 |
+| `test/v0219-delivery-status-upload.test.ts` | 9 | 交付状态报告必须真的被上传：报告文件缺失时该步骤必须失败，而不是打一行 warning 继续 |
+| `test/v0221-atomic-and-evidence.test.ts` | 16 | P0-1/2/3：并发领取的原子性、账号与适配器版本的证据绑定、以及证据不能抬升 `unavailable`/`permission_required` |
+| `test/v0221-publish-verification.test.ts` | 27 | 一次性真实发表验收：授权只发一次、回读四项分别核对、未读回不得算通过（假适配器驱动真实 runner） |
+| `test/v0221-sensitive-rules.test.ts` | 23 | 敏感改动识别的行级正反例：只改注释不算、改动安全判定必须算，覆盖整条"发表与授权"链 |
+| `test/v0221-strict-approval.test.ts` | 17 | 任何互动模式都不能绕过"该候选有人工批准"：策略矩阵逐档验证，自动模式也不例外 |
+| `test/v0221-verify-panel.test.ts` | 8 | 验收面板的真实渲染：空闲 / 读失败 / 已记录三种状态必须渲染成三句不同的话 |
+| `test/v0222-fault-classify.test.ts` | 11 | 403 故障分类：安全验证、限流、未登录、确实不存在必须分成不同结论，不能都叫"网络错误" |
+| `test/v0222-workbench-dom.test.ts` | 23 | 工作台的真实 DOM：五种发表结果各渲染一句不同的话、没有重发按钮、批准范围两行同时出现 |
+| `test/v0222-workbench-edit.test.ts` | 8 | 工作台的两个写动作：编辑候选让旧批准与旧评估一起失效，保存后不得留下可用的旧授权 |
+| `test/v0222-workbench-flow.test.ts` | 9 | 工作台的完整时序：真 Store + 假平台下走完 新建→选目标→生成→批准→发表→回读，含刷新与第二实例一致性 |
+| `test/v0222-workbench.test.ts` | 21 | 工作台状态由持久事实推导：步骤顺序、五种结果不合并、批准绑定字节、缺失证据不补全 |
+| `test/workbench-approval-scope.test.ts` | 11 | 批准范围两行制：内容已批准 ≠ 目标身份已核验；无快照/无稳定 ID 时提前阻断，并与 `publishCandidate` 的实际拒绝逐条对齐 |
+| **合计** | **1487** | |
 
 另有两份外部独立回归脚本（随仓库一起提供），直接对编译产物 `lib/*.js` 验证：
 

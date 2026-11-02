@@ -114,7 +114,8 @@ export function makeFloor(input: {
 export function makeNested(input: {
   postId: string
   parentPostId: string
-  authorId: string
+  /** 平台没有暴露作者标识时就是 undefined —— 与 NestedReply 的类型一致。 */
+  authorId?: string
   authorName: string
   content: string
   replyToName?: string
@@ -138,7 +139,15 @@ export class FakeAdapter implements PlatformAdapter {
   readonly displayName = '百度贴吧（测试）'
 
   constructor(
-    private readonly data: {
+    /**
+     * The fake's mutable state.
+     *
+     * Public because several tests need to reach into it — e.g. to change the
+     * author sitting on a nested reply mid-test, which is the whole premise of the
+     * "the post id stayed, the person changed" cases. Making that possible through
+     * a copy would change what is being tested.
+     */
+    public readonly data: {
       thread: Thread
       /** Additional threads this fake can resolve, for cross-thread tests. */
       extraThreads?: readonly Thread[]

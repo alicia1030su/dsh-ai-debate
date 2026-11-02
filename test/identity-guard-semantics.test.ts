@@ -18,7 +18,7 @@ import test from 'node:test'
 
 import { hasStableAuthor, snapshotStillValid, contentHash } from '../lib/target.js'
 import { approvalStillApplies } from '../lib/workbench.js'
-import type { TargetSnapshot } from '../lib/target.js'
+import type { TargetSnapshot } from '../lib/types.js'
 
 /** A snapshot with every field a Tieba floor read can produce. */
 function snapshot(overrides: Partial<TargetSnapshot> = {}): TargetSnapshot {
@@ -139,18 +139,23 @@ test('approvalStillApplies：正文、版本、目标、候选号任一变化都
   assert.equal(approvalStillApplies({ candidate: { ...candidate, approved: false }, approval }).applies, false)
 })
 
-test('approvalStillApplies：它没有作者维度，因此作者换人时仍报"有效"——这是已知的界面缺口', () => {
-  // 这条测试**记录缺陷，不赞美它**。
+test('approvalStillApplies：它没有作者维度，因此作者换人时仍报"有效"——界面缺口已在 v0.2.22 用别的方式补上', () => {
+  // 这条测试**记录语义边界，不赞美它**。
   //
   // `approvalStillApplies` 的入参里根本没有作者字段，所以作者换人时它只能回答
   // "有效"。这不构成发表漏洞：发表路径由 `publishCandidate` 里的
   // `resolveTarget` + `snapshotStillValid` 独立拦截（见
-  // v0221-author-identity-binding.test.ts 的测试1）。它的代价是**界面可能显示
+  // publish-author-identity-binding.test.ts 的测试1）。它的代价是**界面可能显示
   // "已批准"，而点下去会被拒** —— 属诚实性问题，不是安全性问题。
   //
-  // 修复它的最小方式是给 candidate 与 approval 各加一个可选作者字段并在此比对，
-  // 但这会重复 `snapshotStillValid` 已经做的事。是否值得，取决于是否愿意为了
-  // 界面文案的准确而引入第二处作者比对。本阶段只记录，不改实现。
+  // v0.2.22 phase13 修的是后者，而且**没有**走"给 approval 加作者字段"那条路：
+  // 那会形成第二处作者比对，和 `snapshotStillValid` 有可能给出不同答案。
+  // 现在工作台把批准拆成"内容"和"目标身份"两行，身份一栏永远只报
+  // `not_rechecked`（本页没读平台）或两种**必然被拒**的阻断态
+  // （无快照 / 无稳定作者 ID）。见 workbench-approval-scope.test.ts 与
+  // `describeTargetIdentity`。
+  //
+  // 所以下面两条断言仍然必须成立：函数的签名里不该有作者字段。
   const candidate = {
     replyId: 'c1',
     textHash: 'h1',
@@ -160,11 +165,12 @@ test('approvalStillApplies：它没有作者维度，因此作者换人时仍报
   }
   const approval = { candidateId: 'c1', candidateVersion: 2, textHash: 'h1', targetPostId: 'A' }
 
-  // 即便"作者"在外部世界已经换人，这个函数也无从得知。
+  // 即便"作者"在外部世界已经换人，这个函数也无从得知——它本来就不该知道。
   assert.equal(approvalStillApplies({ candidate, approval }).applies, true)
 
-  // 断言其签名不含作者维度，把这个缺口钉成一条会失败的测试，
-  // 将来有人加了字段，这条会提醒他同步更新这里的说明。
+  // 断言其签名不含作者维度。若有人给 approval 加了作者字段，这条会失败，
+  // 提醒他：那会变成第二处作者比对，请先读 workbench.ts 里 `approvalStillApplies`
+  // 的 Scope 一节。
   const keys = Object.keys(approval)
-  assert.ok(!keys.includes('targetAuthorId'), '如果这里开始有作者字段，说明界面缺口被修了，请更新本测试')
+  assert.ok(!keys.includes('targetAuthorId'), '如果这里开始有作者字段，说明又多了一处作者比对，请先确认它不会和 snapshotStillValid 给出不同答案')
 })

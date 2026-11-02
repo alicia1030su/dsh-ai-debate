@@ -4,9 +4,10 @@
  * ## 这个函数为什么值得单独测
  *
  * `isAccountHandle` 是模块私有函数（`analyzer.ts:285`），注释说"只有数字 handle 才算
- * 账号 ID"，实现却是「数字 **或** un !== name_show」。注释和代码对不上，但**直接把它
- * 改成只认数字是错的**——真实 WAP 页面根本不提供数字 UID（第八阶段扫描 190 KB 页面，
- * `data-uid="数字"` 命中 0 次），改完之后所有贴吧身份都会退化成"未知"。
+ * 账号 ID"，实现却是「数字 **或** un !== name_show」。注释和代码对不上。v0.2.22 的
+ * 结论是**修正注释、保留行为**：真实 WAP 页面根本不提供数字 UID（第八阶段扫描
+ * 190 KB 页面，`data-uid="数字"` 命中 0 次），把实现改成"只认数字"会让所有贴吧身份
+ * 退化成"未知"——一个为了更严格而变得更宽松的改法。
  *
  * 所以这里的做法是：不猜语义，而是**测出它此刻真正造成的后果**，把后果钉住。
  *
@@ -24,8 +25,9 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { describeParticipants } from '../lib/analyzer.js'
+import type { Participant } from '../lib/analyzer.js'
 import type { CollectedThread } from '../lib/collector.js'
-import type { Floor, NestedReply, Thread } from '../lib/platforms/contracts.js'
+import type { Floor, NestedReply, Thread } from '../lib/types.js'
 import { makeFloor, makeNested } from './helpers.ts'
 
 const FLOOR_ID = '500'
@@ -56,11 +58,18 @@ function collected(nested: readonly NestedReply[]): CollectedThread {
     thread: thread(),
     floors: floors.map((entry) => ({ floor: entry, nested, nestedComplete: true })),
     complete: true,
+    completeness: {
+      sourceComplete: true,
+      retainedComplete: true,
+      analysisComplete: true,
+      nestedComplete: true,
+      reasons: [],
+    },
     issues: [],
   }
 }
 
-function byName(participants: readonly { displayName: string }[], name: string) {
+function byName(participants: readonly Participant[], name: string) {
   return participants.find((entry) => entry.displayName === name)
 }
 
@@ -172,7 +181,7 @@ test('参与者归并完全不参与发表路径：只影响展示与主人匹�
   // publisher 的作者比对，这条断言应当被重新审视。
   //
   // 发表路径用的是 `TargetSnapshot.targetAuthorId`（见 target.ts 与
-  // v0221-author-identity-binding.test.ts），与 `describeParticipants` 无关。
+  // publish-author-identity-binding.test.ts），与 `describeParticipants` 无关。
   const data = collected([
     makeNested({ postId: 'c1', parentPostId: FLOOR_ID, authorId: 'u1', authorName: '甲', content: '一' }),
   ])

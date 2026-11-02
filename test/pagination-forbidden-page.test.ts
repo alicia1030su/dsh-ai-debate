@@ -21,9 +21,9 @@ import test from 'node:test'
 
 import { walkFloors } from '../lib/collector.js'
 import { PlatformError } from '../lib/types.js'
-import type { Floor, ReplyPage, ThreadRef } from '../lib/platforms/contracts.js'
+import type { Floor, ReplyPage, ThreadRef } from '../lib/types.js'
 
-const REF: ThreadRef = { platform: 'tieba', threadId: '11111241554' }
+const REF: ThreadRef = { platform: 'tieba', threadId: '11111241554', url: 'https://tieba.baidu.com/p/11111241554' }
 
 function makeFloor(index: number): Floor {
   return {
@@ -101,16 +101,14 @@ test('第二页返回 403 时，不得当作正常分页结束', async () => {
   assert.equal(result.floors.length, 2, '第一页已读到的楼层仍然保留，不该丢弃')
   assert.deepEqual(requested, [1, 2], '只应请求前两页，不得继续往下试探')
 
-  // 已知缺陷（P2，本阶段只记录不修）：`truncated` 的文档说"停止时已知还有更多页
-  // 为 true"，但实现里它只在"翻页信号自相矛盾"的分支被置位（collector.ts:362），
-  // 走 error 分支时保持 false。`complete` 因此仍然正确（它另有 `failed` 与
-  // `stopReason` 两个条件），但单看 `truncated` 的调用方会得到相反的答案。
-  // 这条断言把当前行为钉住；等它变成 true 时，说明缺陷被修了，请同步改这里。
-  assert.equal(
-    result.truncated,
-    false,
-    '当前实现下 403 不会置 truncated——若此断言开始失败，说明该字段被修正，请更新注释',
-  )
+  // 原先这条断言钉住的是缺陷：`truncated` 只在"翻页信号自相矛盾"和"页数上限"
+  // 两个分支被置位，走 error 分支时保持 false。它的注释写着"若此断言开始失败，
+  // 说明该字段被修正，请更新注释"——v0.2.22 修了它。
+  //
+  // 现在 `truncated` 回答的是"停下时是否已知还有未读页面"：第 1 页声明共 5 页，
+  // 第 2 页 403，答案是肯定的。`complete` 仍然是 false，因为它回答的是另一个问题
+  // （是否读全）。两个字段同时为 true/false 才是准确描述：没读全，且确实还有页。
+  assert.equal(result.truncated, true, '已知还有后续页面时，403 必须标记为截断')
 })
 
 test('403 不得被翻译成空评论列表', async () => {

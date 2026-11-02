@@ -23,7 +23,7 @@ import { bindingOf, checkApproval, consumeApproval, findApproval } from './secur
 import {
   describeTargetProblem,
   contentHash,
-  hasStableAuthor,
+  hasAuthorIdentifier,
   resolveTarget,
   snapshotStillValid,
   type TargetExpectation,
@@ -705,7 +705,7 @@ async function sendOnce(
   //
   // This is not a read restriction — analysis and drafting work fine with a name —
   // only the irreversible step is withheld.
-  if (!hasStableAuthor(candidate.targetSnapshot)) {
+  if (!hasAuthorIdentifier(candidate.targetSnapshot)) {
     const who = candidate.targetSnapshot.targetAuthorName ?? '未知用户'
     const message =
       `要回复的这条发言只有显示昵称「${who}」，平台没有给出稳定的用户 ID，` +

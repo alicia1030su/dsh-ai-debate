@@ -31,7 +31,6 @@ import { DEFAULT_POLICY } from '../lib/safety.js'
 import { assessmentFingerprint } from '../lib/security/security-policy.js'
 import { contentHash } from '../lib/target.js'
 import type { StoredSession } from '../lib/store.js'
-import type { Floor, NestedReply } from '../lib/platforms/contracts.js'
 import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 const BOUND_ACCOUNT = () => ({ aiAccountUserId: '1001', aiAccountName: 'ai-account' })
@@ -120,7 +119,7 @@ function session(): StoredSession {
     sentTexts: [],
     createdAt: now,
     updatedAt: now,
-  } as StoredSession
+  } as unknown as StoredSession
 }
 
 function adapterFor(): FakeAdapter {
@@ -133,11 +132,21 @@ function adapterFor(): FakeAdapter {
   })
 }
 
-/** Grab the live `n5` row out of a fake adapter so a test can mutate it. */
-function targetOf(adapter: FakeAdapter): NestedReply {
+/**
+ * Grab the live `n5` row out of a fake adapter so a test can mutate it.
+ *
+ * Returns a mutable view: the whole premise of these tests is that the platform
+ * hands back a different author for the same post id, and `NestedReply` declares
+ * its fields readonly because production code must never edit them. The cast is
+ * the test reaching around that guarantee on purpose — it is what the platform did,
+ * not something our code is allowed to do.
+ */
+function targetOf(adapter: FakeAdapter): { authorId?: string; authorName?: string } {
   const fixture = threePartyThread()
   const floorPostId = fixture.floors[0]!.postId
-  return adapter.data.nested[floorPostId]!.find((post) => post.postId === TARGET_ID)!
+  const nested = adapter.data.nested?.[floorPostId]
+  if (nested === undefined) throw new Error('测试夹具缺少楼中楼数据')
+  return nested.find((post) => post.postId === TARGET_ID)! as unknown as { authorId?: string; authorName?: string }
 }
 
 /** Publish the approved candidate and hand back the report plus send count. */

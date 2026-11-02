@@ -266,18 +266,35 @@ export function analyzeDispute(
 }
 
 /**
- * True when a post's handle is a real account identity rather than an echo of
- * the display name.
+ * True when a post's handle carries information the display name does not already.
  *
- * Tieba fills its `un` field with the account name *or* the numeric user id,
- * depending on which surface rendered the post — and sometimes with a name that
- * is identical to the shown name. Measured on a live thread: one person appeared
- * as `羽绫观月 / 羽绫观月` on a floor and as `羽绫观月 / 6631433126` in the
- * reply, while `贴吧包打听` appeared both ways too.
+ * ## What this does — and what the old comment claimed
  *
- * So a handle counts as identity when it is numeric **or** when it differs from
- * the display name. A handle that merely repeats the name carries no extra
- * information, and counting it would report one person as several accounts.
+ * The comment here used to say "only numeric handles are account ids", while the body
+ * accepted anything that merely *differed* from the display name. Both cannot be true,
+ * and the code was the correct half:
+ *
+ * Real WAP data does not provide a numeric uid. Scanning a 190 KB page from a live
+ * thread (`data-uid="<digits>"`) matched **zero** times; `un` is a login name, not a
+ * number. A "numeric only" rule would therefore classify every Tieba identity as
+ * unknown — the most permissive possible outcome, produced by a rule meant to be the
+ * strictest.
+ *
+ * `un` and `name_show` are genuinely different things and often differ in practice: on
+ * the sampled thread, 13 of 30 floors had `un !== name_show`
+ * (`fn=4 永恒的鸟笼 / 时空的流转♂`), and 4 floors had no `un` at all.
+ *
+ * So a handle counts as an account handle when it is **numeric** (some surfaces do
+ * expose `un` as a uid) **or** when it differs from the display name (it is then a
+ * login name, which cannot be renamed, rather than a nickname echo). A handle that just
+ * repeats the name adds nothing and is not counted — counting it would report one
+ * person as several accounts.
+ *
+ * ## What it is used for
+ *
+ * Only `distinctHandles`, which `resolveOwnerKey` consults to refuse a "same nickname,
+ * possibly different people" owner match. It is **not** on the publish path: author
+ * comparison there uses `TargetSnapshot.targetAuthorId`, and never this function.
  *
  * @param handle the `un` value, when present
  * @param displayName the name rendered for the post
@@ -296,12 +313,16 @@ function isAccountHandle(handle: string | undefined, displayName: string | undef
  * 1. **Merge by display name.** A floor gives `un` while the same person's
  *    nested reply may give a shown name, so keying on whichever handle a post
  *    carries split one human into two and made the owner look ambiguous.
- * 2. **Only numeric handles are account ids.** A name-shaped `un` is not an
- *    identity; counting it would report one person as several accounts.
- * 3. **Backfill missing names from the numeric handle.** Nine of a live thread's
- *    nested replies arrived with a user id but no name at all; the name is
- *    recoverable from another post by the same id, and doing so keeps the
- *    argument readable instead of inventing an "unknown user".
+ * 2. **A handle counts when it is numeric or differs from the display name.** A
+ *    name-shaped `un` that merely repeats the nickname carries no identity and is
+ *    not counted (see {@link isAccountHandle}); a `un` that differs is a login
+ *    name and is. The old wording here said "only numeric", which contradicted the
+ *    code and, if implemented literally, would classify every Tieba identity as
+ *    unknown — real WAP pages expose no numeric uid at all.
+ * 3. **Backfill missing names from the handle.** Nine of a live thread's nested
+ *    replies arrived with a handle but no name at all; the name is recoverable from
+ *    another post by the same handle, and doing so keeps the argument readable
+ *    instead of inventing an "unknown user".
  *
  * The merge is conservative in the direction that matters: two people who share
  * a display name become one participant, which
@@ -313,7 +334,13 @@ function indexParticipants(
 ): Map<string, Participant> {
   // Merge into participants, resolving nameless posts through the directory.
   const byKey = new Map<string, Participant>()
-  /** Distinct numeric account ids seen under each display name. */
+  /**
+   * Distinct account handles seen under each display name.
+   *
+   * "Account handle", not "numeric id": on Tieba these are login names (`un`), which
+   * are the stable part. The old comment said "numeric", which is what the code was
+   * once believed to do rather than what it does.
+   */
   const handlesByKey = new Map<string, Set<string>>()
 
   timeline.forEach((entry, index) => {

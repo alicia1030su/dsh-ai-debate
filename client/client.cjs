@@ -324,8 +324,18 @@ window.__ModuleLoader__.load({
       workbenchSaveEdit: '保存修改',
       workbenchSaving: '正在保存…',
       workbenchEditSaved: '已保存。批准与安全评估已作废，需要重新批准才能发表。',
-      workbenchApproved: '已批准',
+      workbenchApproved: '内容已批准',
       workbenchNotApproved: '未批准',
+      // v0.2.22 phase13：批准只管内容，不管"那边现在还是不是这个人"。
+      // 这两句必须同时出现，否则"已批准"会读成"整套授权都齐了"。
+      workbenchApprovalScope: '批准范围',
+      workbenchApprovalContent: '内容',
+      workbenchApprovalTarget: '目标身份',
+      workbenchNotice: '发表前还要发生的事',
+      workbenchIdentityNotApproved: '内容还没批准，暂不讨论目标身份',
+      workbenchIdentityNotRechecked: '未在页面核验——发表时会重新读取平台核对作者',
+      workbenchIdentityUnverifiable: '无法核验',
+      workbenchIdentityNoSnapshot: '没有目标快照',
       workbenchNoResend: '这里没有「重新发送」按钮：一次授权只发一次。要再发请新建一条候选并重新批准。',
       workbenchRefresh: '刷新状态',
       workbenchRefreshing: '正在读取…',
@@ -640,8 +650,19 @@ window.__ModuleLoader__.load({
       workbenchSaveEdit: 'Save changes',
       workbenchSaving: 'Saving…',
       workbenchEditSaved: 'Saved. The approval and the assessment no longer apply — approve again before publishing.',
-      workbenchApproved: 'Approved',
+      workbenchApproved: 'Content approved',
       workbenchNotApproved: 'Not approved',
+      // v0.2.22 phase13: an approval covers the text, not "the person on the other end
+      // is still the same person". Both halves have to be on screen together, or
+      // "approved" reads as "everything is authorised".
+      workbenchApprovalScope: 'What the approval covers',
+      workbenchApprovalContent: 'Content',
+      workbenchApprovalTarget: 'Target identity',
+      workbenchNotice: 'Still happens at publish time',
+      workbenchIdentityNotApproved: 'Content is not approved yet, so identity is moot',
+      workbenchIdentityNotRechecked: 'Not checked on this page — the publish path re-reads the platform',
+      workbenchIdentityUnverifiable: 'Cannot be verified',
+      workbenchIdentityNoSnapshot: 'No target snapshot',
       workbenchNoResend: 'There is no resend button here: one authorisation publishes once. To say it differently, create a new candidate and approve that.',
       workbenchRefresh: 'Refresh',
       workbenchRefreshing: 'Reading…',
@@ -3071,6 +3092,15 @@ window.__ModuleLoader__.load({
         refused: 'workbenchOutcomeRefused',
         unknown: 'workbenchOutcomeUnknown',
       }
+      // What the page is allowed to claim about the author of the target. Three of the
+      // four states are "we have not checked"; only a `blocking` state makes a claim,
+      // and that claim is "publishing will be refused", which the gate already enforces.
+      const identityLabel = {
+        not_approved: t('workbenchIdentityNotApproved'),
+        not_rechecked: t('workbenchIdentityNotRechecked'),
+        unverifiable: t('workbenchIdentityUnverifiable'),
+        no_snapshot: t('workbenchIdentityNoSnapshot'),
+      }
       const stepLine = (wb.steps || [])
         .map((step) => {
           const mark = step.status === 'done' ? '✅' : step.status === 'current' ? '▶' : '·'
@@ -3085,6 +3115,52 @@ window.__ModuleLoader__.load({
               { className: 'dsd-hint dsd-hint-error' },
               h('strong', null, t('workbenchBlocked')),
               h('ul', null, wb.blockers.map((line) => h('li', { key: line }, line))),
+            )
+          : null
+
+      // The approval covers two different things and the page used to show only one of
+      // them. "已批准" next to a publish button reads as "every check has passed"; what
+      // actually passed is the text/version/target binding, while the author of the
+      // target is re-read by the publish path. Showing the two lines together is the
+      // whole point — neither is allowed to appear without the other.
+      const approvalScope = wb.approval
+        ? h(
+            'div',
+            { className: 'dsd-hint' },
+            h('strong', null, t('workbenchApprovalScope')),
+            h(
+              'ul',
+              null,
+              [
+                h(
+                  'li',
+                  { key: 'content' },
+                  `${t('workbenchApprovalContent')}：` +
+                    `${wb.approval.content?.applies === true ? '✅ ' : '❌ '}` +
+                    `${wb.approval.content?.detail ?? ''}`,
+                ),
+                h(
+                  'li',
+                  { key: 'target' },
+                  `${t('workbenchApprovalTarget')}：` +
+                    `${identityLabel[wb.approval.target?.state] ?? t('workbenchIdentityNotRechecked')}` +
+                    `——${wb.approval.target?.detail ?? ''}`,
+                ),
+              ],
+            ),
+          )
+        : null
+
+      // Facts the publish button will still act on when pressed. Rendered separately from
+      // `blockers` on purpose: a blocker means "you cannot proceed", a notice means
+      // "proceeding also does something you did not personally approve".
+      const notices =
+        Array.isArray(wb.notices) && wb.notices.length > 0
+          ? h(
+              'div',
+              { className: 'dsd-hint' },
+              h('strong', null, t('workbenchNotice')),
+              h('ul', null, wb.notices.map((line) => h('li', { key: line }, line))),
             )
           : null
 
@@ -3211,8 +3287,14 @@ window.__ModuleLoader__.load({
       // The publish button is the only irreversible control in this panel. It is offered only
       // when every precondition the server would check is already visible as satisfied here, and
       // it carries the *exact* text on screen — so what gets approved is what gets sent.
+      //
+      // v0.2.22 phase13: `target.blocking` is checked as well. The server already refuses those
+      // candidates (`target_no_snapshot` / `author_unverifiable`), so this is not an extra gate —
+      // it is the same gate, refusing to render a button that cannot work. The step is normally
+      // demoted to `review` for these cases anyway; this keeps the two conditions from drifting
+      // apart if the derivation is ever reordered.
       const publishButton =
-        step === 'publish' && newestForAction !== undefined
+        step === 'publish' && newestForAction !== undefined && wb.approval?.target?.blocking !== true
           ? h(
               'button',
               {
@@ -3317,7 +3399,9 @@ window.__ModuleLoader__.load({
         h('p', { className: 'dsd-hint' }, t('workbenchHint')),
         linkForm,
         facts,
+        approvalScope,
         blockers,
+        notices,
         gaps,
         readback,
         candidateBlock,

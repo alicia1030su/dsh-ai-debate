@@ -31,6 +31,23 @@ function candidate(overrides: Partial<StoredCandidate> = {}): StoredCandidate {
     text: '你这条把两件事混为一谈了：我反对的是做法，不是你这个人。',
     strategy: 'tieba_veteran',
     targetPostId: 'p-2',
+    // v0.2.22 phase13：夹具补上目标快照，因为真实候选一定有它——
+    // `runtime.ts` 把 `resolveTarget` 的结果整个挂在候选上。之前这里没有快照，
+    // 工作台于是把"没有快照的候选"当成可发表，而发表路径会直接以
+    // `target_no_snapshot` 拒绝。默认值取"有稳定作者 ID"的正常情形，
+    // 没有 ID / 没有快照这两种致命情形由 workbench-approval-scope.test.ts 专门测。
+    targetSnapshot: {
+      platform: 'tieba',
+      threadId: 't1',
+      floorPostId: 'p-1',
+      floorNumber: 1,
+      targetPostId: 'p-2',
+      targetKind: 'nested',
+      targetAuthorId: 'opp-1',
+      targetAuthorName: '对手B',
+      contentHash: 'h',
+      capturedAt: NOW,
+    } as never,
     candidateVersion: 1,
     textHash: 'hash-a',
     confidence: 0.8,

@@ -82,7 +82,31 @@ export interface Floor {
     readonly floorNumber?: number;
     /** Stable post id of this floor. */
     readonly postId: string;
+    /**
+     * The author's account handle, when the platform exposes one.
+     *
+     * Deliberately **one** field, not five. On Tieba this is `un`: the login name,
+     * which cannot be renamed by its owner, and which may look like a nickname
+     * (`永恒的鸟笼`) or like a number (`6631433126`) depending on the surface. It is
+     * *not* `name_show` — see `authorName`.
+     *
+     * v0.2.22 evaluated splitting this into `authorHandle` / `authorDisplayName` /
+     * `authorNumericId` / `authorIdentitySource` / `authorIdentityConfidence` and
+     * deferred it: real WAP pages carry no numeric uid (`data-uid="<digits>"` matched
+     * 0 times on a 190 KB live page), so `authorNumericId` would be `undefined`
+     * everywhere and `authorIdentityConfidence` would have no evidence behind it.
+     * Adding five fields to carry one bit of information — "is there a `un`?" — would
+     * make every reader believe there is more to compare than there is. The publish
+     * path needs "is there an id", and `hasAuthorIdentifier` answers exactly that.
+     */
     readonly authorId?: string;
+    /**
+     * The name the platform displays for the author.
+     *
+     * On Tieba this is the rendered `user_name`, falling back to `name_show`. It is a
+     * **nickname**: changeable at will, reusable by someone else, and therefore not an
+     * identity. Comparing it is a last resort, never proof.
+     */
     readonly authorName?: string;
     readonly content: string;
     readonly createdAt?: string;

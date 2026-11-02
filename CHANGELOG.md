@@ -2,6 +2,137 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.2.22] — 2026-11-02
+
+这一版**没有新功能**。它做的是把 v0.2.21 安全补强（PR #7）与 v0.2.22 工作台（PR #8）合并之后
+剩下的三个「说得不对」的地方改对，然后按版本号收尾：`0.2.21 → 0.2.22` 是因为
+**运行时报告的行为变了**（`truncated` 的取值、工作台显示的步骤），不是因为加了能力。
+
+开篇仍然说清楚这一版**没有**做到什么：
+
+- **没有真机验证。** 贴吧在本机仍然 403，所以这一版的每一条结论都来自假适配器与本地渲染，
+  没有一条是「在真实帖子上跑通了」。分页那一条尤其如此：手上的证据是**一个帖子、一个网络
+  环境、两次请求**（`pn=0` 200、`pn=30` 403）。
+- **没有改全局能力声明。** 原因见第三节，不是遗漏。
+- **没有拆作者字段。** 五个候选字段（`authorHandle` 等）评估后推后，理由写在
+  `src/types.ts` 的 `Floor.authorId` 注释里，不是忘了。
+
+### 一、分页截断：403 不再被报成「读完了」
+
+`walkFloors` 的错误分支原本只记 `failed` 与 `stopReason`，把 `truncated` 留在初始值
+`false`。于是「平台声明 5 页、第 1 页读完、第 2 页 403」这一种情况会同时报出
+`complete=false`、`stopReason='deleted_or_unavailable'`、`truncated=false` —— 前两个对，
+第三个把「还有页没读」说成了「没有更多页」。
+
+现在 `truncated` 只在**有正面证据**时置位：平台声明的页数多于已读页数、声明的楼层数多于
+已见楼层数、或上一页明确 `hasMore: true`。第 1 页就失败时它仍是 `false` —— 那时什么都
+不知道，说「有截断」同样是撒谎，只是方向相反。
+
+同时补了三件配套的事：错误分支会往 `issues` 里写一条给人看的说明（第几页断的、声明几页、
+读了几页、这不是完整结果）；`collectThread` 在「中断且有截断」时补一条同义提示；
+`FloorWalk.truncated` 与 `CollectedThread.truncated` 的文档改成与实现一致。
+
+行为没变的部分：不重试、失败分类不变、`complete` 仍然 `false`、已读楼层照样保留。
+
+### 二、工作台：批准的是内容，不是「那边还是同一个人」
+
+`approvalStillApplies()` 只比较候选、版本、正文哈希、目标位置四件事。作者换人时它
+仍然返回 `applies: true`，而页面把这个 `true` 渲染成一句「已批准」，紧挨着一个发表按钮。
+点下去会被 `publishCandidate` 拒绝（作者核验走 `resolveTarget` + `snapshotStillValid`），
+于是主人看到的是「明明批准了却说没批准」。
+
+修复**没有**走「给批准加作者字段」那条路：那会造成第二处作者比对，和 `snapshotStillValid`
+有可能给出不同答案，而两个判定打架时无法判断谁对。改成把两件事并排说清楚：
+
+- 每个工作台状态新增 `approval: { content, target }` 两块；
+- `content` 说批准覆盖什么（正文、版本、目标位置）；
+- `target` 由新函数 `describeTargetIdentity()` 给出，只有四个取值：
+  `not_approved` / `not_rechecked` / `unverifiable` / `no_snapshot`。**没有「已核验」
+  这一档** —— 页面没有重新读过平台，它无权这么说；
+- `not_rechecked` 时页面照常提供发表按钮，但旁边必须显示「发表时会重新读取平台并核对作者」；
+- `unverifiable`（只有昵称）与 `no_snapshot`（没有快照）是**注定被拒**的两种，工作台提前
+  退回「审阅」步并给出阻断原因，不再摆一个点了一定失败的按钮。
+
+新增 `WorkbenchState.notices`，与 `blockers` 分开：阻断项是「你不能往下走」，说明项是
+「你往下走时还会发生什么」。把两者混在一起，读的人会一起略过。
+
+### 三、贴吧分页能力：不改声明，只让运行时说实话
+
+先查清调用关系：`comment.paginate` **没有任何调用点**会走 `assertCapability()`。
+读取路径（`collectThread` / `walkFloors`）压根不经过能力闸门 —— 闸门只服务发表
+（`comment.publish` / `comment.reply`）与验收面板。所以把它降级成 `degraded` 不会
+误伤第一页，也就没有「不降级就会误导」的压力。
+
+那为什么不降级？因为证据只有一条：一个帖子、一个网络环境、`pn=30` 返回一次 403。用它去
+描述「贴吧所有分页都不可用」，是拿一次观测冒充一个平台的性质。声明保持 `supported`，
+运行时按实际读到哪儿如实报告（第一节）。这两条现在都有测试钉住，包括「`src` 里不许出现对
+`comment.paginate` 的闸门调用」这一条反向断言。
+
+### 四、作者身份语义
+
+三处「名字说的和代码做的不是一回事」：
+
+- **`hasStableAuthor` → `hasAuthorIdentifier`。** 它只检查 `targetAuthorId` 是非空字符串，
+  不检查稳定、不检查像不像账号。旧名保留为委托别名（`@deprecated`），两者不可能分叉 ——
+  有测试直接比对两个函数的返回值，也有一条读源码确认别名没有复制实现。
+- **`isAccountHandle` 的注释是错的。** 注释写「只有数字 handle 才算账号 ID」，实现是
+  「数字 **或** un !== name_show」。真实 WAP 页面根本没有数字 uid（190 KB 页面里
+  `data-uid="数字"` 命中 0 次），照注释实现会把所有贴吧身份降级成未知。**改注释，不改行为**，
+  并补测试把「登录名 ≠ 昵称」这件事钉住。
+- **作者字段拆分推后。** `authorHandle` / `authorDisplayName` / `authorNumericId` /
+  `authorIdentitySource` / `authorIdentityConfidence` 五个字段评估后**不加**：真实数据里
+  没有数字 uid，加了 `authorNumericId` 会处处 `undefined`，`authorIdentityConfidence` 也就
+  没有证据支撑。五个字段只为承载一个比特（有没有 `un`），会让每个读者以为可比对的东西比
+  实际多。`Floor.authorId` 的文档写清了这一点，并有一条测试断言这五个字段**不存在** ——
+  将来真加了，那条会失败，逼着人重新审一遍闸门。
+
+### 五、测试命名去掉版本前缀
+
+同一件事写在 `v0221-*` 里，下一版又要改成 `v0222-*`，这种重命名不产生任何信息。这一版把
+**本次涉及的五个文件**改成按功能命名，其余历史文件（`v0211`…`v0219`、`v0221` 的另外五个
+文件、`v0222` 的四个工作台文件）**不动**：它们被 CHANGELOG 段落按名字引用，改名会让历史
+记录指向不存在的文件。这是一个明确的取舍，不是改了一半。
+
+| 原名 | 新名 |
+|---|---|
+| `v0221-author-identity-binding.test.ts` | `publish-author-identity-binding.test.ts` |
+| `v0221-identity-semantics.test.ts` | `identity-guard-semantics.test.ts` |
+| `v0221-identity-fields.test.ts` | `tieba-author-fields.test.ts` |
+| `v0221-participant-handle.test.ts` | `participant-handle.test.ts` |
+| `v0221-pagination-403.test.ts` | `pagination-forbidden-page.test.ts` |
+
+### 六、测试
+
+全量 **1487 项通过、0 失败、0 跳过**。这一版新增 41 项（四个新文件）并在既有 DOM 测试里
+加了 4 项：
+
+- `test/pagination-truncation-state.test.ts`（10 项）：`truncated` 的四种证据与两种
+  「不知道」，外加正常两页、最后一页、不重试、不多发请求。
+- `test/workbench-approval-scope.test.ts`（11 项）：批准范围两行制；两种注定被拒的状态
+  提前阻断；并用真实 `publishCandidate` 与工作台状态**逐个对齐**，防止界面与闸门各说各的。
+- `test/author-identifier-semantics.test.ts`（12 项）：改名后语义不变、别名不复制实现、
+  `un` 与 `name_show` 不可混用、被推后的五个字段确实不存在。
+- `test/pagination-capability-scope.test.ts`（8 项）：`comment.paginate` 不在读取闸门上、
+  发表不用它、403 时运行时如实报告。
+- `test/v0222-workbench-dom.test.ts`（19 → 23 项）：真实渲染下两行必须同时出现、
+  `blocking` 时不出发表按钮、没有 `approval` 字段的旧视图不白屏。
+
+改了两条既有断言，都是**它们记录的正是被修的缺陷**：
+`test/pagination-integrity.test.ts` 的「声明 4 页只读到 2 页时 truncated=false」，
+以及 `pagination-forbidden-page.test.ts` 里那条自己写着「若此断言开始失败说明字段被修正，
+请更新注释」的断言。前者把 `truncated` 定义成了 `page_cap` 的同义词，后者本来就等着这一天。
+
+另外把两个夹具改成**真实形状**而不是放宽：`v0222-workbench.test.ts` 与
+`v0222-workbench-flow.test.ts` 的候选原本**没有目标快照**（或字段名是旧的
+`postId`/`kind`），而真实候选一定有——`runtime.ts` 把 `resolveTarget` 的结果整个挂在
+候选上。补上之后，「没有快照」这件事才成为一条被测的边界，而不是夹具的默认值。
+
+### 七、构建与发行
+
+`lib/` 全部由 `tsc -p tsconfig.json` 重新生成，没有手工改编译产物。测试类型检查的棘轮从
+316 收紧到 314（本轮新增的 41 项测试没有引入任何类型错误，顺带修掉两条旧错误）。
+`package.json` 版本 `0.2.22`，README 的安装命令、发布包名、测试总数与表格同步更新。
+
 ## [0.2.21] — 2026-10-31
 
 这一版做三件事：**把「发表能力」从声明变成证据**、给敏感改动加一层行级识别、以及把「一次

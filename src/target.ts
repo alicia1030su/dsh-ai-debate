@@ -305,14 +305,46 @@ export function snapshotStillValid(before: TargetSnapshot, after: TargetSnapshot
 }
 
 /**
- * Whether the snapshot identifies the author by a stable id.
+ * Whether the snapshot carries *any* author identifier at all.
  *
- * A snapshot carrying only a display name cannot prove *who* wrote the post, and the
- * publish path requires proof, so this is what the publisher consults to decide
- * whether automatic publishing is allowed at all.
+ * ## What this actually checks, stated plainly
+ *
+ * One thing: `targetAuthorId` is a non-empty string. It does **not** check that the
+ * value is stable, platform-issued, numeric, or unique. A Tieba `un` (login name) and a
+ * numeric uid both pass; so would a display name if a platform ever wrote one into that
+ * field.
+ *
+ * The v0.2.0 name `hasStableAuthor` promised more than the body delivers, and the
+ * mismatch was load-bearing: `publisher.ts` calls this to decide whether the author can
+ * be proven at publish time, and a reader of the call site reasonably believed
+ * "stable" meant "cannot be changed by the other party".
+ *
+ * It is accurate *for Tieba*, where `un` is a login name and cannot be renamed — which
+ * is why the permissive check has been safe there. It would not be accurate for a
+ * platform that filled the field with a nickname, and that is precisely the assumption
+ * this rename makes visible instead of hiding in a comment.
+ *
+ * Renamed in v0.2.22. `hasStableAuthor` remains as a deprecated alias so any external
+ * caller — and every v0.2.x test — keeps working unchanged. The alias delegates, so the
+ * two can never drift.
+ *
+ * @see hasStableAuthor
+ */
+export function hasAuthorIdentifier(snapshot: TargetSnapshot): boolean {
+  return typeof snapshot.targetAuthorId === 'string' && snapshot.targetAuthorId.length > 0
+}
+
+/**
+ * Deprecated alias of {@link hasAuthorIdentifier}.
+ *
+ * Kept because the function was exported from v0.2.0 and someone may have imported it.
+ * It does the same thing; the name was the only problem. New code should call
+ * `hasAuthorIdentifier`, which says what it does.
+ *
+ * @deprecated use {@link hasAuthorIdentifier} — this name overstates the check.
  */
 export function hasStableAuthor(snapshot: TargetSnapshot): boolean {
-  return typeof snapshot.targetAuthorId === 'string' && snapshot.targetAuthorId.length > 0
+  return hasAuthorIdentifier(snapshot)
 }
 
 /** Human-readable explanation for each problem. */
