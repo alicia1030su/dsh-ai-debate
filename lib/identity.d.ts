@@ -235,6 +235,14 @@ export type IdentityAssurance = 'identity_verified' | 'identity_unknown' | 'iden
 export interface IdentitySightings {
     /** The numeric uid, when some surface stated one. */
     readonly numericUid?: string;
+    /**
+     * Which namespace that number belongs to (v0.2.23 patch 3).
+     *
+     * Required for the uid to count as proof. A bare number is not an identity —
+     * Tieba's `un` can itself be all digits — so an unplaced number is treated as an
+     * unverified claim, exactly like a handle with no recorded source.
+     */
+    readonly namespace?: NumericUidNamespace;
     /** The handle, when some surface stated one. */
     readonly handle?: string;
     /** Every source that has described this post id. */
@@ -251,6 +259,17 @@ export interface IdentitySightings {
  * unverified claim, and the wording at every call site must match that.
  */
 export declare function assuranceOf(sighting: IdentitySightings): IdentityAssurance;
+/**
+ * Whether the identity was confirmed by more than one *independent* surface.
+ *
+ * Deliberately separate from the assurance: "we have enough to act" and "we checked
+ * it twice" are different statements, and merging them is how a single-source match
+ * ends up described as "cross-verified".
+ *
+ * Two rows from the same surface are one source. `platform_contract` is what a row
+ * that did not say gets, so two such rows corroborate nothing.
+ */
+export declare function corroborationOf(sighting: IdentitySightings): 'corroborated' | 'single_source';
 /** Whether an assurance level may be used for an automatic owner decision. */
 export declare function allowsAutomaticIdentityDecision(assurance: IdentityAssurance): boolean;
 /** A short, honest phrase for each level, suitable for a UI badge or a log. */
@@ -318,7 +337,7 @@ export interface OwnerIdentityEvidence {
  * call it. Having one implementation is the point: if the gate had its own idea
  * of what counts, the two would drift and the drift would be the vulnerability.
  */
-export declare function assuranceFromEvidence(evidence: OwnerIdentityEvidence | undefined): 'verified' | 'unverified';
+export declare function assuranceFromEvidence(evidence: OwnerIdentityEvidence | undefined): IdentityAssurance;
 /**
  * Explain an assurance in terms of the evidence, for a UI badge or a log line.
  *

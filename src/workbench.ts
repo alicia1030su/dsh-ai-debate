@@ -527,7 +527,7 @@ export function describeOwnerIdentity(session: StoredSession | undefined): Owner
   }
 
   const evidence = session.ownerIdentityEvidence
-  const proven = assuranceFromEvidence(evidence as never) === 'verified'
+  const proven = assuranceFromEvidence(evidence as never) === 'identity_verified'
 
   if (proven) {
     return {

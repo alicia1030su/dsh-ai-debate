@@ -312,7 +312,7 @@ export function checkPublishPolicy(
   // the wrong value. None of those should be able to authorise a public post.
   const claimedAndProven =
     attempt.ownerIdentityAssurance === 'verified' &&
-    assuranceFromEvidence(attempt.ownerIdentityEvidence) === 'verified'
+    assuranceFromEvidence(attempt.ownerIdentityEvidence) === 'identity_verified'
 
   if (!claimedAndProven) {
     const why =

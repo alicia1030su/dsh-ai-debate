@@ -338,6 +338,14 @@ export type IdentityAssurance = 'identity_verified' | 'identity_unknown' | 'iden
 export interface IdentitySightings {
   /** The numeric uid, when some surface stated one. */
   readonly numericUid?: string
+  /**
+   * Which namespace that number belongs to (v0.2.23 patch 3).
+   *
+   * Required for the uid to count as proof. A bare number is not an identity —
+   * Tieba's `un` can itself be all digits — so an unplaced number is treated as an
+   * unverified claim, exactly like a handle with no recorded source.
+   */
+  readonly namespace?: NumericUidNamespace
   /** The handle, when some surface stated one. */
   readonly handle?: string
   /** Every source that has described this post id. */
@@ -355,14 +363,63 @@ export interface IdentitySightings {
  * unverified claim, and the wording at every call site must match that.
  */
 export function assuranceOf(sighting: IdentitySightings): IdentityAssurance {
-  if (sighting.conflicted) return 'identity_conflict'
-  if (sighting.numericUid !== undefined && sighting.numericUid !== '') return 'identity_verified'
-  const distinct = new Set(sighting.sources)
-  if (distinct.size >= 2 && sighting.handle !== undefined && sighting.handle !== '') {
-    // Two independent surfaces agreeing on the same login name is corroboration.
-    return 'identity_verified'
-  }
+  return verdictFrom({
+    conflicted: sighting.conflicted,
+    // A number counts only when it can be placed in a namespace.
+    hasPlacedNumericUid:
+      sighting.numericUid !== undefined && sighting.numericUid !== '' && sighting.namespace !== undefined,
+    hasHandle: sighting.handle !== undefined && sighting.handle !== '',
+  })
+}
+
+/**
+ * The single ladder both entry points walk.
+ *
+ * ## Why this function exists
+ *
+ * `assuranceOf` (per-post) and `assuranceFromEvidence` (owner resolution) used to
+ * encode different opinions about the same fact: a login name on one surface was
+ * `identity_unknown` to one and `verified` to the other. The publish gate consulted
+ * only the second, so the stricter rule never stopped anything — it just made the
+ * two disagree in logs and in the UI.
+ *
+ * Having one implementation is the fix. Neither caller may add a rule of its own;
+ * they only translate their input into these three booleans.
+ *
+ * ## Why a single authoritative source is enough
+ *
+ * A surface whose contract says "this field is the `un`" is stating the account, not
+ * guessing it. Tieba's normal read consults exactly one such surface, so demanding
+ * corroboration would mean nothing ever publishes — caution that costs the product
+ * its purpose. Corroboration is recorded separately by `corroborationOf` and shown
+ * to the reader; it does not gate the send.
+ */
+function verdictFrom(input: {
+  readonly conflicted: boolean
+  readonly hasPlacedNumericUid: boolean
+  readonly hasHandle: boolean
+}): IdentityAssurance {
+  if (input.conflicted) return 'identity_conflict'
+  if (input.hasPlacedNumericUid || input.hasHandle) return 'identity_verified'
   return 'identity_unknown'
+}
+
+/**
+ * Whether the identity was confirmed by more than one *independent* surface.
+ *
+ * Deliberately separate from the assurance: "we have enough to act" and "we checked
+ * it twice" are different statements, and merging them is how a single-source match
+ * ends up described as "cross-verified".
+ *
+ * Two rows from the same surface are one source. `platform_contract` is what a row
+ * that did not say gets, so two such rows corroborate nothing.
+ */
+export function corroborationOf(sighting: IdentitySightings): 'corroborated' | 'single_source' {
+  const distinct = new Set(sighting.sources)
+  const hasIdentifier =
+    (sighting.numericUid !== undefined && sighting.numericUid !== '') ||
+    (sighting.handle !== undefined && sighting.handle !== '')
+  return distinct.size >= 2 && hasIdentifier ? 'corroborated' : 'single_source'
 }
 
 /** Whether an assurance level may be used for an automatic owner decision. */
@@ -447,26 +504,27 @@ export interface OwnerIdentityEvidence {
  * call it. Having one implementation is the point: if the gate had its own idea
  * of what counts, the two would drift and the drift would be the vulnerability.
  */
-export function assuranceFromEvidence(evidence: OwnerIdentityEvidence | undefined): 'verified' | 'unverified' {
-  if (evidence === undefined) return 'unverified'
-  switch (evidence.kind) {
-    case 'numeric_uid':
-      // A numeric id counts only inside a named namespace. An unnamed number could
-      // be a login name that happens to be digits, which is exactly the confusion
-      // this release removes.
-      return evidence.namespace !== undefined && evidence.value !== undefined && evidence.value !== ''
-        ? 'verified'
-        : 'unverified'
-    case 'handle':
-      // A login name counts only when a surface declared the row's provenance.
-      return evidence.source !== undefined && evidence.value !== undefined && evidence.value !== ''
-        ? 'verified'
-        : 'unverified'
-    case 'nickname':
-    case 'legacy':
-    case 'none':
-      return 'unverified'
-  }
+export function assuranceFromEvidence(evidence: OwnerIdentityEvidence | undefined): IdentityAssurance {
+  // No evidence at all reads as "never checked", not as "checked and rejected".
+  if (evidence === undefined) return 'identity_unknown'
+  const verdict = verdictFrom({
+    // Evidence describes one past decision, so there is no second sighting to
+    // contradict it here; conflicts are carried on the session, not on the evidence.
+    conflicted: false,
+    hasPlacedNumericUid:
+      evidence.kind === 'numeric_uid' &&
+      evidence.namespace !== undefined &&
+      evidence.value !== undefined &&
+      evidence.value !== '',
+    hasHandle:
+      evidence.kind === 'handle' &&
+      evidence.source !== undefined &&
+      evidence.value !== undefined &&
+      evidence.value !== '',
+  })
+  // The verdict vocabulary is shared with `assuranceOf` on purpose: two ladders that
+  // also speak two dialects is how the original inconsistency survived review.
+  return verdict
 }
 
 /**
