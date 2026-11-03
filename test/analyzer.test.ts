@@ -111,9 +111,11 @@ test('test 4: the AI locks onto the opponent, not whoever spoke last', () => {
 
   assert.equal(dispute.owner.displayName, '主人')
   assert.equal(dispute.opponent?.displayName, '对手B', '争论对象必须是 对手B，不能是最后发言的路人C')
-  // The key is the display name: identity merges across a handle being present on
-  // one post and absent on another, which the platform does inconsistently.
-  assert.equal(dispute.opponent?.key, '对手B')
+  // The key is now an identity (`handle:…`), not a display name. What must still hold
+  // is that the *person* is 对手B — asserted on `displayName` above — and that the key
+  // is not the owner's.
+  assert.match(dispute.opponent?.key ?? '', /^handle:|^name:/)
+  assert.notEqual(dispute.opponent?.key, dispute.owner.key)
   assert.ok(
     (dispute.opponentEvidence?.exchanges ?? 0) >= 4,
     `主人与对手B的往来应该被统计到，实际 ${dispute.opponentEvidence?.exchanges}`,

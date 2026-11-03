@@ -140,19 +140,29 @@ test('un 为空时 matchKind 退化为 name，且不产生 handle 计数', () =>
 // 情形 4：同名不同 un —— 危险情形，必须能看出"这个名字下面有两个账号"
 // ---------------------------------------------------------------------------
 
-test('两个不同 un 共用同一昵称时，distinctHandles 变为 2', () => {
-  // 这正是 isAccountHandle 放宽后带来的**保护性**后果：
-  // 主人身份匹配时看到 distinctHandles > 1 就会拒绝，而不是赌一把。
+test('两个不同 un 共用同一昵称时，是两个参与者而不是一个', () => {
+  // v0.2.23 patch 2 changed this from "one participant with distinctHandles = 2" to
+  // "two participants". The old shape was the P0 bug: merging them meant the owner's
+  // statements silently included the other account's words. Counting them was only a
+  // heuristic guard on the nickname path; separating them removes the confusion at
+  // the source.
   const data = collected([
     makeNested({ postId: 'c1', parentPostId: FLOOR_ID, authorId: 'user_aaa', authorName: '小明', content: '我是小明' }),
     makeNested({ postId: 'c2', parentPostId: FLOOR_ID, authorId: 'user_bbb', authorName: '小明', content: '我也是小明' }),
   ])
 
   const participants = describeParticipants(data, 1)
-  const person = byName(participants, '小明')
-  assert.ok(person)
-  assert.equal(person!.distinctHandles, 2, '两个不同账号用同一昵称，必须能数出 2 个 handle')
-  assert.equal(person!.postCount, 2, '按显示名归并，两条发言落在同一个 key 下')
+  const named = participants.filter((entry) => entry.displayName === '小明')
+  assert.equal(named.length, 2, '两个不同账号即使同名，也必须是两个参与者')
+  assert.deepEqual(
+    named.map((entry) => entry.handle).sort(),
+    ['user_aaa', 'user_bbb'],
+    '两个账号各自保留自己的 handle',
+  )
+  // Each participant carries exactly its own posts.
+  for (const entry of named) {
+    assert.equal(entry.postCount, 1, `${entry.handle} 只应"拥有"自己那一条发言`)
+  }
 })
 
 // ---------------------------------------------------------------------------

@@ -151,9 +151,10 @@ test('没有楼层号也能识别争论对象', () => {
 test('没有楼层号也能列出参与者与层内回复', () => {
   const collected = microThread()
   const participants = describeParticipants(collected, 'post-root')
-  // The root author plus the two commenters.
+  // The root author plus the two commenters. `key` is an identity (`handle:…`) since
+  // v0.2.23 patch 2, so the people are asserted through `displayName`.
   assert.deepEqual(
-    participants.map((participant) => participant.key).sort(),
+    participants.map((participant) => participant.displayName).sort(),
     ['发帖人', '对面', '我的小号'].sort(),
   )
 

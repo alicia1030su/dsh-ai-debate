@@ -944,6 +944,13 @@ export interface TimelineEntry {
    * *provably* instead of by comparing that id against a login name.
    */
   readonly authorNumericUid?: string
+  /**
+   * Which namespace `authorNumericUid` belongs to (v0.2.23).
+   *
+   * Carried onto the timeline so the identity key can place the number. Tieba has
+   * two unrelated numeric namespaces; a number without one cannot be compared.
+   */
+  readonly authorNumericUidNamespace?: 'user_id' | 'tieba_uid'
   /** Which surface produced the author fields above (v0.2.23). */
   readonly authorSource?: IdentitySource
   /** Display order within the floor; floors use 0. */
@@ -967,6 +974,9 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
       authorId: entry.floor.authorId,
       authorName: entry.floor.authorName,
       ...(entry.floor.authorNumericUid === undefined ? {} : { authorNumericUid: entry.floor.authorNumericUid }),
+      ...(entry.floor.authorNumericUidKind === undefined
+        ? {}
+        : { authorNumericUidNamespace: entry.floor.authorNumericUidKind }),
       ...(entry.floor.authorSource === undefined ? {} : { authorSource: entry.floor.authorSource }),
       order: 0,
       content: entry.floor.content,
@@ -982,6 +992,9 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
         authorId: reply.authorId,
         authorName: reply.authorName,
         ...(reply.authorNumericUid === undefined ? {} : { authorNumericUid: reply.authorNumericUid }),
+        ...(reply.authorNumericUidKind === undefined
+          ? {}
+          : { authorNumericUidNamespace: reply.authorNumericUidKind }),
         ...(reply.authorSource === undefined ? {} : { authorSource: reply.authorSource }),
         order: index + 1,
         content: reply.content,

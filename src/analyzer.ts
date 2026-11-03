@@ -452,25 +452,37 @@ function indexParticipants(
   // Merge into participants, resolving nameless posts through the directory.
   const byKey = new Map<string, Participant>()
   /**
-   * Distinct account handles seen under each display name.
+   * Distinct *identities* seen under each display name.
    *
-   * "Account handle", not "numeric id": on Tieba these are login names (`un`), which
-   * are the stable part. The old comment said "numeric", which is what the code was
-   * once believed to do rather than what it does.
+   * This is the ambiguity detector: two accounts may share a nickname, and when
+   * they do, "the user called 小财神" no longer points at one person. It is keyed by
+   * the nickname (not by the identity key) precisely so that it can answer that
+   * question, and it stores identity keys so the count is about accounts rather
+   * than about spellings.
    */
-  const handlesByKey = new Map<string, Set<string>>()
+  const identitiesByName = new Map<string, Set<string>>()
 
   timeline.forEach((entry, index) => {
     if (!entry.authorName && !entry.authorId) return
     const handle = isAccountHandle(entry.authorId, entry.authorName) ? entry.authorId : undefined
+    // The grouping key is an identity; the display name is only a label.
     const name = resolveKey(entry, nameByHandle)
+    const display = entry.authorName ?? nameByHandle.get(entry.authorId ?? '') ?? name
 
-    if (handle) {
-      const set = handlesByKey.get(name) ?? new Set<string>()
-      set.add(handle)
-      handlesByKey.set(name, set)
+    {
+      // Only *account-backed* keys count. A `name:` key means the record carried no
+      // account identifier at all, so counting it would make every nickname-only
+      // thread look ambiguous — and, worse, would hide the genuine two-accounts-one-
+      // nickname case behind a number that measures something else.
+      if (name.startsWith('uid:') || name.startsWith('handle:')) {
+        const set = identitiesByName.get(display) ?? new Set<string>()
+        set.add(name)
+        identitiesByName.set(display, set)
+      }
     }
-    const distinctHandles = handlesByKey.get(name)?.size ?? 0
+    // Named `distinctHandles` for continuity with the published field, but it counts
+    // distinct *identities* under one display name.
+    const distinctHandles = identitiesByName.get(display)?.size ?? 0
 
     const existing = byKey.get(name)
     /**
@@ -540,7 +552,7 @@ function indexParticipants(
         : entry.platform !== undefined && entry.platform !== 'tieba'
           ? { source: 'platform_contract' as IdentitySource }
           : {}),
-      displayName: name,
+      displayName: display,
       matchKind: numericForThisEntry ?? handleForThisEntry ? 'id' : 'name',
       postCount: 1,
       lastPostId: entry.postId,
@@ -583,12 +595,53 @@ export function resolveKey(
   entry: TimelineEntry,
   nameByHandle: ReadonlyMap<string, string>,
 ): string {
-  if (entry.authorName) return entry.authorName
-  if (entry.authorId !== undefined) {
-    const resolved = nameByHandle.get(entry.authorId)
-    if (resolved) return resolved
+  return identityKeyOf(entry, nameByHandle)
+}
+
+/**
+ * The grouping key for one record: an *identity*, not a label.
+ *
+ * ## The P0 this replaces
+ *
+ * Until v0.2.23 patch 2 this returned `entry.authorName` first. Since a display
+ * name is a label anyone may take, two different accounts that chose the same
+ * nickname collapsed into one participant — so the owner's `ownerStatements`
+ * contained the other account's words, and the AI argued using a stranger's
+ * opinion as if it were the owner's. Reproduced end to end in
+ * `test/same-nickname-two-accounts.test.ts`.
+ *
+ * ## The rule now
+ *
+ * - A numeric uid keys on `uid:<namespace>:<value>`. The namespace is part of the
+ *   key because Tieba's `user_id` and `tieba_uid` are unrelated namespaces.
+ * - A login name keys on `handle:<name>`.
+ * - A record with **no account identifier** keys on `name:<display>`. It is kept
+ *   readable — a thread can be analysed from names alone — but that key can never
+ *   equal a `handle:` or `uid:` key, so a nickname-only record is never silently
+ *   attributed to a real account.
+ *
+ * The prefixes are load-bearing. Without them a display name of `handle:x` (or of
+ * `uid:user_id:1`) would collide with a real identity key.
+ */
+function identityKeyOf(
+  entry: TimelineEntry,
+  nameByHandle: ReadonlyMap<string, string>,
+): string {
+  if (entry.authorNumericUid !== undefined && entry.authorNumericUid !== '') {
+    // A uid with no declared namespace cannot be placed, so it keys on the platform
+    // alone rather than pretending to be either Tieba namespace.
+    const namespace = entry.authorNumericUidNamespace ?? 'unstated'
+    return `uid:${entry.platform ?? 'unknown'}:${namespace}:${entry.authorNumericUid}`
   }
-  return entry.authorId ?? '未知'
+  if (isAccountHandle(entry.authorId, entry.authorName)) {
+    return `handle:${entry.platform ?? 'unknown'}:${entry.authorId}`
+  }
+  // No account identifier. Fall back to the display name, resolved through the
+  // directory when this row only carried a handle-like token.
+  const byDirectory =
+    entry.authorId === undefined ? undefined : nameByHandle.get(entry.authorId)
+  const display = entry.authorName ?? byDirectory ?? entry.authorId
+  return display === undefined ? 'name:未知' : `name:${display}`
 }
 
 /**
@@ -807,9 +860,17 @@ function resolveOwnerKey(
   }
 
   if (owner.userName) {
-    const match = participants.get(owner.userName)
+    // Keys are identities now, so a nickname is not a key. Collect every participant
+    // *displayed* under that name and require exactly one.
+    const matches = [...participants.values()].filter(
+      (participant) => participant.displayName === owner.userName,
+    )
+    const match = matches[0]
     if (match) {
-      const handles = match.distinctHandles ?? 0
+      // Two accounts sharing the nickname is precisely the case where "the user
+      // called X" stops naming one person, so the count that matters is how many
+      // *identities* the label covers.
+      const handles = matches.length
       if (handles > 1) {
         throw new Error(
           `昵称「${owner.userName}」在帖子里出现了 ${handles} 个不同的账号，无法确定哪一个是主人。` +
@@ -853,7 +914,9 @@ function pickOpponent(
   floorTimeline: readonly TimelineEntry[],
   ownerKey: string,
   trigger: TimelineEntry,
-  participants: ReadonlyMap<string, Participant>,
+  // Kept in the signature for call-site stability; the mapping is now derived from
+  // the timeline itself because a display name may belong to more than one identity.
+  _participants: ReadonlyMap<string, Participant>,
   notes: string[],
   keyOf: (entry: TimelineEntry) => string,
 ): OpponentPick {
@@ -874,17 +937,47 @@ function pickOpponent(
       .map((entry) => entry.authorName)
       .filter((name): name is string => Boolean(name)),
   )
-  // The owner key itself is a display name, so it doubles as an answerable name.
-  ownerNames.add(ownerKey)
+
+  /**
+   * Display name → identity key, and the ambiguity that makes the mapping useless.
+   *
+   * `replyToName` is always a display name, so it has to be translated before it can
+   * be compared with an identity key. When two accounts share the nickname, the
+   * translation is *not* unique — and guessing one of them would recreate exactly
+   * the confusion this release removes. Such a name is dropped from the map, so a
+   * reply edge pointing at it counts for nobody instead of for the wrong account.
+   */
+  const nameToKey = new Map<string, string>()
+  const ambiguousNames = new Set<string>()
+  for (const entry of floorTimeline) {
+    const display = entry.authorName
+    if (display === undefined) continue
+    const key = keyOf(entry)
+    const previous = nameToKey.get(display)
+    if (previous !== undefined && previous !== key) {
+      ambiguousNames.add(display)
+      continue
+    }
+    nameToKey.set(display, key)
+  }
+  for (const name of ambiguousNames) nameToKey.delete(name)
   const isOwnerName = (name: string | undefined): boolean => name !== undefined && ownerNames.has(name)
 
   before.forEach((entry, index) => {
     const key = keyOf(entry)
     if (key === ownerKey) {
       // An owner post naming someone is a direct reply edge.
-      if (entry.replyToName && participants.has(entry.replyToName)) {
-        const target = entry.replyToName
-        if (target !== ownerKey) {
+      // `replyToName` is a display name, so it must be mapped to an identity key
+      // before it can be compared with `ownerKey` — which is now an identity, not a
+      // label. Comparing the two directly was always false after the key change,
+      // which would have let "the owner replied to themselves" register as an
+      // opponent edge.
+      const targetName = entry.replyToName
+      const targetKey =
+        targetName === undefined ? undefined : nameToKey.get(targetName)
+      if (targetName !== undefined && targetKey !== undefined && targetKey !== ownerKey) {
+        const target = targetKey
+        {
           const current = stats.get(target) ?? {
             ownerRepliesTo: 0,
             repliesToOwner: 0,

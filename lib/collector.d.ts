@@ -287,6 +287,13 @@ export interface TimelineEntry {
      * *provably* instead of by comparing that id against a login name.
      */
     readonly authorNumericUid?: string;
+    /**
+     * Which namespace `authorNumericUid` belongs to (v0.2.23).
+     *
+     * Carried onto the timeline so the identity key can place the number. Tieba has
+     * two unrelated numeric namespaces; a number without one cannot be compared.
+     */
+    readonly authorNumericUidNamespace?: 'user_id' | 'tieba_uid';
     /** Which surface produced the author fields above (v0.2.23). */
     readonly authorSource?: IdentitySource;
     /** Display order within the floor; floors use 0. */

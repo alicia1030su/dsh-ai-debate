@@ -570,7 +570,11 @@ test('the owners own post is accepted as a trigger', async () => {
   try {
     const analysis = await runAnalysis(runtime, { url: data.thread.url, postId: 'n7' })
     assert.ok(analysis.sessionId)
-    assert.equal(analysis.dispute.owner.key, '主人')
+    // v0.2.23 patch 2: the participant key is an identity (`handle:…`), no longer a
+    // display name. The nickname survives on `displayName`, which is what the UI
+    // shows; the key is only an internal grouping handle.
+    assert.equal(analysis.dispute.owner.displayName, '主人')
+    assert.match(analysis.dispute.owner.key, /^handle:/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -605,7 +609,11 @@ test('binding the owner by nickname still accepts their post when the row carrie
   try {
     const analysis = await runAnalysis(runtime, { url: fixture.thread.url, postId: ownerPost.postId })
     assert.ok(analysis.sessionId, 'the owner post must be accepted')
-    assert.equal(analysis.dispute.owner.key, '主人')
+    // v0.2.23 patch 2: the participant key is an identity (`handle:…`), no longer a
+    // display name. The nickname survives on `displayName`, which is what the UI
+    // shows; the key is only an internal grouping handle.
+    assert.equal(analysis.dispute.owner.displayName, '主人')
+    assert.match(analysis.dispute.owner.key, /^handle:/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
