@@ -28,6 +28,7 @@ import {
 import {
   assuranceOf,
   conflictBetween,
+  corroborationOf,
   type AuthorIdentity,
   type IdentityAssurance,
   type IdentityConflictReport,
@@ -115,6 +116,14 @@ export interface CollectedThread {
   readonly complete: boolean
   /** The separated verdicts. Always present on a v0.2.2 or later read. */
   readonly completeness: CompletenessReport
+  /**
+   * How well each post's identity was corroborated (v0.2.23 patch 5).
+   *
+   * Separate from `assurance` because the two answer different questions: assurance
+   * says "is this enough to act on", corroboration says "was it checked twice".
+   * Merging them is how a single-source match ends up described as cross-verified.
+   */
+  readonly corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>
   /** Floors the platform declares but that were not readable (usually deleted). */
   readonly missingCount?: number
   /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -511,6 +520,8 @@ export async function walkNested(
   degraded?: boolean
   conflicts?: readonly IdentityConflictReport[]
   assurance?: ReadonlyMap<string, IdentityAssurance>
+  /** How well each post's identity was corroborated (v0.2.23 patch 5). */
+  corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>
 }> {
   const maxPages = options.maxPages ?? 10
   const seen = new Map<string, NestedReply>()
@@ -598,20 +609,38 @@ export async function walkNested(
    * exactly one surface, so nothing was cross-checked at all.
    */
   const assurance = new Map<string, IdentityAssurance>()
+  /**
+   * How well each post's identity was corroborated (v0.2.23 patch 5).
+   *
+   * Computed from *per-surface observations*, not from the number of source names:
+   * "two surfaces were consulted" and "two surfaces agreed" are different claims,
+   * and only the second may be shown to the user as cross-checked.
+   */
+  const corroboration = new Map<string, 'corroborated' | 'contested' | 'single_source'>()
   for (const [postId, reply] of firstSurface) {
-    const sources = new Set<IdentitySource>()
-    sources.add(reply.authorSource ?? 'platform_contract')
-    const later = replies.find((entry) => entry.postId === postId)
-    if (later?.authorSource !== undefined) sources.add(later.authorSource)
-    assurance.set(
-      postId,
-      assuranceOf({
-        ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
-        ...(reply.authorId === undefined ? {} : { handle: reply.authorId }),
-        sources: [...sources],
-        conflicted: conflicts.some((entry) => entry.postId === postId),
-      }),
-    )
+    // Every sighting of this post id, not just the first and one later one: the
+    // earlier code looked at two entries, so a third surface could never contribute
+    // to (or contradict) the verdict.
+    const sightingsForPost = replies.filter((entry) => entry.postId === postId)
+    const observations = sightingsForPost.map((entry) => ({
+      source: (entry.authorSource ?? 'platform_contract') as IdentitySource,
+      ...(entry.authorNumericUid === undefined ? {} : { numericUid: entry.authorNumericUid }),
+      ...(entry.authorNumericUidKind === undefined
+        ? {}
+        : { namespace: entry.authorNumericUidKind }),
+      ...(entry.authorId === undefined ? {} : { handle: entry.authorId }),
+    }))
+    const sources = new Set(observations.map((entry) => entry.source))
+    const conflicted = conflicts.some((entry) => entry.postId === postId)
+    const sighting = {
+      ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+      ...(reply.authorId === undefined ? {} : { handle: reply.authorId }),
+      sources: [...sources],
+      conflicted,
+      observations,
+    }
+    assurance.set(postId, assuranceOf(sighting))
+    corroboration.set(postId, corroborationOf(sighting))
   }
 
   return {
@@ -630,6 +659,7 @@ export async function walkNested(
     degraded,
     ...(conflicts.length === 0 ? {} : { conflicts }),
     ...(assurance.size === 0 ? {} : { assurance }),
+    ...(corroboration.size === 0 ? {} : { corroboration }),
   }
 }
 
@@ -749,6 +779,15 @@ export async function collectThread(
   let nestedIncomplete = false
   /** Proven cross-source disagreements, accumulated across every floor. */
   const identityConflicts: IdentityConflictReport[] = []
+  /**
+   * Per-post corroboration verdicts, accumulated across every floor.
+   *
+   * The same shape `walkNested` produces; folded here so the analyzer can say whether
+   * the owner's identity was checked once or twice. Keys are post ids, which are
+   * unique across floors, so a later floor cannot silently overwrite an earlier
+   * verdict with a different one.
+   */
+  const corroboration = new Map<string, 'corroborated' | 'contested' | 'single_source'>()
   for (const floor of floors) {
     const targetIndex = nestedTargets.indexOf(floor)
     const shouldFetch = nestedLimit > 0 && targetIndex >= 0 && targetIndex < nestedLimit
@@ -775,6 +814,13 @@ export async function collectThread(
       for (const conflict of nested.conflicts) {
         identityConflicts.push(conflict)
         issues.push(conflict.summary)
+      }
+    }
+    // Corroboration is per post id across all surfaces, so it is collected here and
+    // reported upward — the same way conflicts are.
+    if (nested.corroboration !== undefined) {
+      for (const [postId, verdict] of nested.corroboration) {
+        corroboration.set(postId, verdict)
       }
     }
     if (nested.error) {
@@ -818,6 +864,7 @@ export async function collectThread(
     truncated: all.truncated,
     nestedIncomplete,
     ...(identityConflicts.length === 0 ? {} : { identityConflicts }),
+    ...(corroboration.size === 0 ? {} : { corroboration }),
     issues,
   }
 }

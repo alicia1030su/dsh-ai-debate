@@ -94,6 +94,14 @@ export interface CollectedThread {
     readonly complete: boolean;
     /** The separated verdicts. Always present on a v0.2.2 or later read. */
     readonly completeness: CompletenessReport;
+    /**
+     * How well each post's identity was corroborated (v0.2.23 patch 5).
+     *
+     * Separate from `assurance` because the two answer different questions: assurance
+     * says "is this enough to act on", corroboration says "was it checked twice".
+     * Merging them is how a single-source match ends up described as cross-verified.
+     */
+    readonly corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>;
     /** Floors the platform declares but that were not readable (usually deleted). */
     readonly missingCount?: number;
     /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -234,6 +242,8 @@ export declare function walkNested(adapter: PlatformAdapter, ref: ThreadRef, flo
     degraded?: boolean;
     conflicts?: readonly IdentityConflictReport[];
     assurance?: ReadonlyMap<string, IdentityAssurance>;
+    /** How well each post's identity was corroborated (v0.2.23 patch 5). */
+    corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>;
 }>;
 /**
  * Collect a thread: metadata, every floor page, then nested replies for the

@@ -232,6 +232,28 @@ export declare function conflictBetween(input: {
  */
 export type IdentityAssurance = 'identity_verified' | 'identity_unknown' | 'identity_conflict';
 /** A per-post record of every surface that described it. */
+/**
+ * What one surface actually said about a post's author.
+ *
+ * ## Why this exists
+ *
+ * Corroboration used to be inferred from the *number* of source names. That cannot
+ * distinguish "two surfaces agreed" from "two surfaces were consulted", and the
+ * difference is the whole point: a count is not a comparison.
+ *
+ * Recording what each source said makes the comparison possible, and makes
+ * "not comparable" distinguishable from "agreed".
+ */
+export interface IdentityObservation {
+    /** The surface that produced this observation. */
+    readonly source: IdentitySource;
+    /** The numeric uid, when this surface stated one. */
+    readonly numericUid?: string;
+    /** Which namespace that number belongs to, when stated. */
+    readonly namespace?: NumericUidNamespace;
+    /** The login name, when this surface stated one. */
+    readonly handle?: string;
+}
 export interface IdentitySightings {
     /** The numeric uid, when some surface stated one. */
     readonly numericUid?: string;
@@ -249,6 +271,14 @@ export interface IdentitySightings {
     readonly sources: readonly IdentitySource[];
     /** True when two sightings were compared and proven different. */
     readonly conflicted: boolean;
+    /**
+     * Per-surface observations, when the caller recorded them.
+     *
+     * Absent means "not compared". Corroboration is then reported as
+     * `single_source`, because two source names with no comparison behind them are a
+     * count, not evidence.
+     */
+    readonly observations?: readonly IdentityObservation[];
 }
 /**
  * Decide the assurance level for one post from its sightings.
@@ -269,7 +299,7 @@ export declare function assuranceOf(sighting: IdentitySightings): IdentityAssura
  * Two rows from the same surface are one source. `platform_contract` is what a row
  * that did not say gets, so two such rows corroborate nothing.
  */
-export declare function corroborationOf(sighting: IdentitySightings): 'corroborated' | 'single_source';
+export declare function corroborationOf(sighting: IdentitySightings): 'corroborated' | 'contested' | 'single_source';
 /** Whether an assurance level may be used for an automatic owner decision. */
 export declare function allowsAutomaticIdentityDecision(assurance: IdentityAssurance): boolean;
 /** A short, honest phrase for each level, suitable for a UI badge or a log. */

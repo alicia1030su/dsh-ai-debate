@@ -80,18 +80,37 @@ test('P1：单来源不等于已交叉验证', () => {
   assert.equal(assuranceOf(sighting), 'identity_verified')
   assert.equal(corroborationOf(sighting), 'single_source', '一个来源不能说成交叉验证')
 
+  // Two sources that agree *and said so* are corroboration.
   const twoIndependent = {
     handle: 'silver_fox',
     sources: ['wap_floor', 'comment_page'] as const,
     conflicted: false,
+    observations: [
+      { source: 'wap_floor' as const, handle: 'silver_fox' },
+      { source: 'comment_page' as const, handle: 'silver_fox' },
+    ],
   }
   assert.equal(corroborationOf(twoIndependent), 'corroborated')
+
+  // Two source *names* with no recorded comparison are a count, not evidence. This is
+  // the v0.2.23 patch 5 correction: the old implementation returned `corroborated`
+  // here purely because the list had two entries.
+  const twoNamesOnly = {
+    handle: 'silver_fox',
+    sources: ['wap_floor', 'comment_page'] as const,
+    conflicted: false,
+  }
+  assert.equal(corroborationOf(twoNamesOnly), 'single_source', '没有比对就不能声称印证')
 
   // The same surface twice is still one source, not two.
   const sameTwice = {
     handle: 'silver_fox',
     sources: ['wap_floor', 'wap_floor'] as const,
     conflicted: false,
+    observations: [
+      { source: 'wap_floor' as const, handle: 'silver_fox' },
+      { source: 'wap_floor' as const, handle: 'silver_fox' },
+    ],
   }
   assert.equal(corroborationOf(sameTwice), 'single_source', '同源两次不是独立验证')
 })

@@ -335,6 +335,29 @@ export function conflictBetween(input: {
 export type IdentityAssurance = 'identity_verified' | 'identity_unknown' | 'identity_conflict'
 
 /** A per-post record of every surface that described it. */
+/**
+ * What one surface actually said about a post's author.
+ *
+ * ## Why this exists
+ *
+ * Corroboration used to be inferred from the *number* of source names. That cannot
+ * distinguish "two surfaces agreed" from "two surfaces were consulted", and the
+ * difference is the whole point: a count is not a comparison.
+ *
+ * Recording what each source said makes the comparison possible, and makes
+ * "not comparable" distinguishable from "agreed".
+ */
+export interface IdentityObservation {
+  /** The surface that produced this observation. */
+  readonly source: IdentitySource
+  /** The numeric uid, when this surface stated one. */
+  readonly numericUid?: string
+  /** Which namespace that number belongs to, when stated. */
+  readonly namespace?: NumericUidNamespace
+  /** The login name, when this surface stated one. */
+  readonly handle?: string
+}
+
 export interface IdentitySightings {
   /** The numeric uid, when some surface stated one. */
   readonly numericUid?: string
@@ -352,6 +375,14 @@ export interface IdentitySightings {
   readonly sources: readonly IdentitySource[]
   /** True when two sightings were compared and proven different. */
   readonly conflicted: boolean
+  /**
+   * Per-surface observations, when the caller recorded them.
+   *
+   * Absent means "not compared". Corroboration is then reported as
+   * `single_source`, because two source names with no comparison behind them are a
+   * count, not evidence.
+   */
+  readonly observations?: readonly IdentityObservation[]
 }
 
 /**
@@ -414,12 +445,48 @@ function verdictFrom(input: {
  * Two rows from the same surface are one source. `platform_contract` is what a row
  * that did not say gets, so two such rows corroborate nothing.
  */
-export function corroborationOf(sighting: IdentitySightings): 'corroborated' | 'single_source' {
-  const distinct = new Set(sighting.sources)
-  const hasIdentifier =
-    (sighting.numericUid !== undefined && sighting.numericUid !== '') ||
-    (sighting.handle !== undefined && sighting.handle !== '')
-  return distinct.size >= 2 && hasIdentifier ? 'corroborated' : 'single_source'
+export function corroborationOf(
+  sighting: IdentitySightings,
+): 'corroborated' | 'contested' | 'single_source' {
+  // A conflict outranks everything: the caller saw two surfaces prove different
+  // accounts, and no amount of agreement on other fields undoes that.
+  if (sighting.conflicted) return 'contested'
+
+  const observations = sighting.observations ?? []
+  // Distinct surfaces, not distinct rows: one surface answering twice is one source.
+  const sources = new Set(observations.map((entry) => entry.source))
+  if (sources.size < 2) return 'single_source'
+
+  // Compare only within a namespace. A uid and a handle name different kinds of
+  // thing, so "they disagree" would be as wrong as "they agree" — neither was
+  // compared. `undefined` here means genuinely incomparable, not equal.
+  const handles = new Set<string>()
+  const uids = new Set<string>()
+  for (const entry of observations) {
+    if (entry.handle !== undefined && entry.handle !== '') handles.add(entry.handle)
+    if (entry.numericUid !== undefined && entry.numericUid !== '' && entry.namespace !== undefined) {
+      uids.add(`${entry.namespace}:${entry.numericUid}`)
+    }
+  }
+
+  if (handles.size > 1) return 'contested'
+  if (uids.size > 1) return 'contested'
+
+  // Corroboration needs one identifier that two sources both stated and agreed on.
+  // Agreement on a handle plus agreement on a uid, each from a single source, is not
+  // corroboration of either.
+  const handleEchoes = observations.filter(
+    (entry) => handles.size === 1 && entry.handle === [...handles][0],
+  ).length
+  const uidEchoes = observations.filter(
+    (entry) =>
+      uids.size === 1 &&
+      entry.numericUid !== undefined &&
+      `${entry.namespace}:${entry.numericUid}` === [...uids][0],
+  ).length
+  const agreedByTwo = handleEchoes >= 2 || uidEchoes >= 2
+
+  return agreedByTwo ? 'corroborated' : 'single_source'
 }
 
 /** Whether an assurance level may be used for an automatic owner decision. */

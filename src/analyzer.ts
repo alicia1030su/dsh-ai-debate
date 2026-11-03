@@ -326,6 +326,25 @@ export function analyzeDispute(
   const participants = indexParticipants(timeline, nameByHandle)
   const resolvedOwner = resolveOwnerKey(participants, effectiveOwner, notes)
   const ownerKey = resolvedOwner.key
+
+  // ## Say how well the owner's identity is backed, in words
+  //
+  // `corroborationOf` was previously exported and called from nowhere, so the
+  // "cross-checked" distinction existed only in comments. Surfacing it here is what
+  // makes it a fact the reader can act on — and what stops a single-source match from
+  // being described as verified-by-two-parties.
+  const ownerCorroboration = collected.corroboration?.get(
+    // The owner's identity is only corroborated if the *post* that established it was.
+    // `ownerKey` is the participant key; the post is the first statement by them.
+    timeline.find((entry) => keyOf(entry) === ownerKey)?.postId ?? '',
+  )
+  if (ownerCorroboration === 'corroborated') {
+    notes.push('主人身份由两个独立来源相互印证。')
+  } else if (ownerCorroboration === 'contested') {
+    notes.push('两个来源对主人的身份给出了不同结论，需要人工核对。')
+  } else if (ownerCorroboration !== undefined && resolvedOwner.assurance === 'verified') {
+    notes.push('主人身份来源单一，未经第二个来源印证（这不是错误，只是尚未交叉核对）。')
+  }
   const ownerParticipant = participants.get(ownerKey)
   if (!ownerParticipant) {
     throw new Error(
