@@ -523,6 +523,13 @@ export async function walkNested(
    * was exactly the place that threw it away.
    */
   const firstSurface = new Map<string, NestedReply>()
+  /**
+   * True when the walk stopped while the platform still claimed more replies.
+   *
+   * Distinct from `degraded` (a source that says it is incomplete) and from a short
+   * count: this is "the platform said there is more, and we could not get it".
+   */
+  let truncated = false
   const conflicts: IdentityConflictReport[] = []
   let page = 1
   let error: string | undefined
@@ -565,7 +572,18 @@ export async function walkNested(
         if (!conflicts.some((entry) => entry.postId === reply.postId)) conflicts.push(conflict)
       }
     }
-    if (!result.hasMore || added === 0) break
+    if (!result.hasMore || added === 0) {
+      // Record *why* the walk stopped. `hasMore === true` with no progress means the
+      // platform promised more replies and then served only ones we already had —
+      // the walk ends, but the floor is not complete.
+      //
+      // v0.2.23: this used to be indistinguishable from a clean end, so a rate-limited
+      // or truncated nested read reported `complete: true`. A reader that trusts that
+      // flag believes it has seen every reply the floor has, which is precisely the
+      // claim the "partial reads are never presented as complete" rule forbids.
+      if (result.hasMore) truncated = true
+      break
+    }
     page += 1
   }
 
@@ -606,6 +624,7 @@ export async function walkNested(
       error === undefined &&
       !degraded &&
       conflicts.length === 0 &&
+      !truncated &&
       (declared === undefined || replies.length >= declared),
     error,
     degraded,
