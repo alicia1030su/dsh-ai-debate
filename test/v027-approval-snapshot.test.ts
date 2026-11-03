@@ -194,6 +194,10 @@ test('候选被重新生成后：旧快照不再匹配（真实 store，不是�
           threadTitle: 't',
           forumName: 'f',
           ownerKey: 'o',
+          ownerIdentityAssurance: 'verified' as const,
+          // The evidence the label refers to: a login name declared by a real
+          // surface. Without it the gate refuses the label as unproven.
+          ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
           disputeFloorPostId: 'n1',
           disputeFloorNumber: 1,
           triggerPostId: 'n2',

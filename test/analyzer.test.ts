@@ -111,9 +111,11 @@ test('test 4: the AI locks onto the opponent, not whoever spoke last', () => {
 
   assert.equal(dispute.owner.displayName, '主人')
   assert.equal(dispute.opponent?.displayName, '对手B', '争论对象必须是 对手B，不能是最后发言的路人C')
-  // The key is the display name: identity merges across a handle being present on
-  // one post and absent on another, which the platform does inconsistently.
-  assert.equal(dispute.opponent?.key, '对手B')
+  // The key is now an identity (`handle:…`), not a display name. What must still hold
+  // is that the *person* is 对手B — asserted on `displayName` above — and that the key
+  // is not the owner's.
+  assert.match(dispute.opponent?.key ?? '', /^handle:|^name:/)
+  assert.notEqual(dispute.opponent?.key, dispute.owner.key)
   assert.ok(
     (dispute.opponentEvidence?.exchanges ?? 0) >= 4,
     `主人与对手B的往来应该被统计到，实际 ${dispute.opponentEvidence?.exchanges}`,
@@ -243,11 +245,13 @@ test('an absent owner is a clear error, not a silent empty analysis', () => {
     [makeFloor({ floorNumber: 1, postId: '1000', authorId: 'z', authorName: '别人', content: '发言', nestedCount: 0 })],
     {},
   )
-  // The message names what was configured and states that nickname fallback is
-  // deliberately refused — that is the P0-3 contract, so assert on it.
+  // The P0-3 contract is that a configured id which matches nothing is an error,
+  // never a silent nickname fallback. The exact sentence differs by branch, so the
+  // assertion pins the contract — names the configured id, refuses — rather than
+  // one branch's wording.
   assert.throws(
     () => analyzeDispute(data, { userId: 'nobody' }, { postId: '1000' }),
-    /配置的主人用户 ID 是 nobody.*不会退回去按昵称匹配/s,
+    /nobody.*(不会退回去按昵称匹配|没有这个 ID|没有暴露 ID)/s,
   )
 })
 
@@ -261,7 +265,15 @@ test('a configured owner id never degrades to a matching nickname', () => {
       makeFloor({
         floorNumber: 1,
         postId: '1200',
+        // v0.2.23: the platform stated a numeric uid, so it is declared as one.
+        // The bare-`authorId` form this fixture used to carry is now read as a
+        // login name, which is the whole point of the split.
         authorId: '12345',
+        authorNumericUid: '12345',
+        // `total_comment` reports a `user_id`; the fixture must say which space
+        // produced the number or it tests a row the adapter cannot emit.
+        authorNumericUidKind: 'user_id',
+        authorSource: 'total_comment',
         authorName: 'Alice',
         content: '这个方案不行',
         nestedCount: 0,
@@ -270,8 +282,16 @@ test('a configured owner id never degrades to a matching nickname', () => {
     {},
   )
   assert.throws(
-    () => analyzeDispute(data, { userId: '99999', userName: 'Alice' }, { postId: '1200' }),
-    /配置的主人用户 ID 是 99999.*不会退回去按昵称匹配/s,
+    // v0.2.23 patch 4: a numeric id must state its namespace, so these fixtures say
+    // `user_id` explicitly. Without it the refusal fires on the missing namespace
+    // instead of on the id mismatch, and the test would pass for the wrong reason.
+    () =>
+      analyzeDispute(
+        data,
+        { userId: '99999', userIdNamespace: 'user_id', platform: 'tieba', userName: 'Alice' },
+        { postId: '1200' },
+      ),
+    /99999.*(没有这个 ID|不会退回去按昵称匹配)/s,
   )
 })
 
@@ -284,6 +304,9 @@ test('a matching owner id is still accepted when a nickname is also configured',
         floorNumber: 1,
         postId: '1300',
         authorId: '12345',
+        authorNumericUid: '12345',
+        authorNumericUidKind: 'user_id',
+        authorSource: 'total_comment',
         authorName: 'Alice',
         content: '我不同意这个做法',
         nestedCount: 0,
@@ -291,7 +314,11 @@ test('a matching owner id is still accepted when a nickname is also configured',
     ],
     {},
   )
-  const dispute = analyzeDispute(data, { userId: '12345', userName: 'Alice' }, { postId: '1300' })
+  const dispute = analyzeDispute(
+    data,
+    { userId: '12345', userIdNamespace: 'user_id', platform: 'tieba', userName: 'Alice' },
+    { postId: '1300' },
+  )
   assert.equal(dispute.owner.userId, '12345')
 })
 
@@ -307,7 +334,9 @@ test('a nickname match is refused when ids exist but the configured id is absent
   )
   assert.throws(
     () => analyzeDispute(data, { userId: 'ccc', userName: '同名' }, { postId: '1400' }),
-    /配置的主人用户 ID 是 ccc/,
+    // Contract: the configured id is named and the analysis refuses. Two branches
+    // can produce this (id-wrong vs ids-not-exposed), and both are correct refusals.
+    /ccc.*(ID|id)/s,
   )
 })
 

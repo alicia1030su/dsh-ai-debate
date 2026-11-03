@@ -360,11 +360,14 @@ export function describeAssessment(assessment: CandidateSecurityAssessment): str
 export function ownerFromBinding(input: {
   readonly platform: string
   readonly accountId?: string
+  /** Platform-verified login name, v0.2.23. */
+  readonly handle?: string
   readonly displayName?: string
 }): VerifiedOwner {
   return {
     platform: input.platform,
     ...(input.accountId !== undefined ? { accountId: input.accountId } : {}),
+    ...(input.handle !== undefined ? { handle: input.handle } : {}),
     ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
   }
 }

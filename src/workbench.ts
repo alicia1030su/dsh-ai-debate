@@ -23,6 +23,7 @@
  */
 
 import type { StoredCandidate, StoredSession } from './store.js'
+import { assuranceFromEvidence, describeEvidence } from './identity.js'
 
 /** Which step of the flow the owner is on. */
 export type WorkbenchStep =
@@ -112,11 +113,54 @@ export interface MissingEvidence {
 }
 
 /** Everything the workbench page needs, in one shape. */
+/**
+ * The five states the workbench must let a reader tell apart.
+ *
+ * | state | what it means | can publish |
+ * | --- | --- | --- |
+ * | `verified` | evidence supports the owner's identity | yes |
+ * | `unverified` | readable, but nothing proves who it is | no |
+ * | `conflict` | two surfaces proved *different* accounts | no, must be resolved |
+ * | `legacy_unknown` | a pre-v0.2.23 record; provenance was never recorded | no |
+ * | `recheck_required` | identity is fine; the *target* is re-read at publish | proceed, with warning |
+ *
+ * The last one is not a defect. Target authorship is deliberately re-verified at
+ * send time, so "this still needs a check" is the normal state of a ready page,
+ * not a failure — and saying so is what keeps the other four believable.
+ */
+export type OwnerIdentityViewState =
+  | 'verified'
+  | 'unverified'
+  | 'conflict'
+  | 'legacy_unknown'
+  | 'recheck_required'
+  | 'unknown'
+
+export interface OwnerIdentityView {
+  readonly state: OwnerIdentityViewState
+  /** One line a person can act on. Never "unknown error". */
+  readonly detail: string
+  /** True when the publish button must not be offered. */
+  readonly blocking: boolean
+  /** The evidence, in words, for the reader who wants to check. */
+  readonly evidence?: string
+}
+
 export interface WorkbenchState {
   readonly step: WorkbenchStep
   readonly steps: readonly WorkbenchStepView[]
   /** Ordered reasons the *next* irreversible action cannot happen yet. */
   readonly blockers: readonly string[]
+  /**
+   * What is known about the *owner's* identity, and whether it is enough.
+   *
+   * v0.2.23 surfaced a bare "cannot publish" with no reason. A grey button that
+   * says nothing teaches the reader to guess, and the guess is usually "the tool is
+   * broken". This carries the five states the page must distinguish, all derived
+   * from the session plus the evidence the gate itself uses — never inferred by the
+   * client, which cannot see the session at all.
+   */
+  readonly ownerIdentity: OwnerIdentityView
   /**
    * Facts the reader must know but that do not block anything.
    *
@@ -253,6 +297,7 @@ export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
       },
       missingEvidence: gaps,
       outcome: 'not_attempted',
+      ownerIdentity: describeOwnerIdentity(undefined),
       counts: { floors: 0, nested: 0, candidates: 0 },
       ...(capability === undefined ? {} : { capability }),
     }
@@ -268,6 +313,13 @@ export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
   // What the approval covers, and what it does not. Computed once, used by the step
   // decision below and by the page.
   const targetIdentity = describeTargetIdentity(current, input.approvalApplies)
+  /**
+   * The owner's identity, which is a *different* question from the target's.
+   *
+   * Both can block, for unrelated reasons, and the page has to say which. A reader
+   * told only "cannot publish" will retry the same thing forever.
+   */
+  const ownerIdentity = describeOwnerIdentity(session)
 
   if (!hasTarget) {
     step = 'target'
@@ -294,6 +346,15 @@ export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
         ? '候选在批准之后被改过（正文、目标或版本变了），旧批准已失效，需要重新批准。'
         : '这条候选还没有人工批准。所有模式都必须逐条批准，包括有限自动。',
     )
+  } else if (ownerIdentity.blocking) {
+    // The owner's identity is the more fundamental failure: if we cannot prove whose
+    // words these are, re-checking the target is moot. Reported before the target
+    // check so the page names the first thing to fix.
+    step = 'review'
+    blockers.push(ownerIdentity.detail)
+    if (ownerIdentity.evidence !== undefined) {
+      notices.push(`身份依据：${ownerIdentity.evidence}`)
+    }
   } else if (targetIdentity.blocking) {
     // The content is approved, but the publish path is certain to refuse on identity
     // grounds. Staying on `publish` and rendering a button that always fails would be a
@@ -335,6 +396,7 @@ export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
     steps: buildSteps(step, doneFlags),
     blockers,
     notices,
+    ownerIdentity,
     approval: {
       content: {
         applies: input.approvalApplies,
@@ -430,6 +492,68 @@ function deriveOutcome(
  * truth: this page has not re-read the platform, and no boolean stored here could make
  * it have done so.
  */
+/**
+ * Describe what is known about the owner's identity.
+ *
+ * ## Derived, not stored
+ *
+ * This reads the session's evidence and recomputes with the *same* function the
+ * publish gate uses (`assuranceFromEvidence`). A page that invented its own idea of
+ * "verified" would sooner or later disagree with the gate, and the disagreement
+ * would show up as a button that lies.
+ *
+ * The order of checks matters: a conflict is reported before "unverified", because
+ * "we proved these are different people" is more informative — and more alarming —
+ * than "we could not prove anything".
+ */
+export function describeOwnerIdentity(session: StoredSession | undefined): OwnerIdentityView {
+  if (session === undefined) {
+    return {
+      state: 'unknown',
+      blocking: true,
+      detail: '还没有会话：先分析一条讨论，才能知道主人是谁。',
+    }
+  }
+
+  if (session.identityConflicts !== undefined && session.identityConflicts.length > 0) {
+    return {
+      state: 'conflict',
+      blocking: true,
+      detail:
+        '这个帖子里有不同的数据源把同一条回复判给了不同账号，无法确定哪一个是主人。' +
+        '再次批准也不能解除这个冲突——需要先核对帖子本身，或换一条能读到稳定 ID 的讨论。',
+      evidence: session.identityConflicts.map((entry) => entry.summary).join('；'),
+    }
+  }
+
+  const evidence = session.ownerIdentityEvidence
+  const proven = assuranceFromEvidence(evidence as never) === 'identity_verified'
+
+  if (proven) {
+    return {
+      state: 'verified',
+      blocking: false,
+      detail: '主人的身份有可核对的依据。发表时仍会重新读取目标作者，那是另一道检查。',
+      evidence: describeEvidence(evidence as never),
+    }
+  }
+
+  // A legacy-only session reads the same as "unverified" to the gate, but the reader
+  // deserves the distinction: "we never recorded how this was identified" is a
+  // different problem from "we looked and could not prove it".
+  const legacy = evidence === undefined || evidence.kind === 'legacy'
+  return {
+    state: legacy ? 'legacy_unknown' : 'unverified',
+    blocking: true,
+    detail: legacy
+      ? '这是一个旧会话：当时没有记录账号标识的来源，因此无法证明这条回复属于谁。' +
+        '只读查看不受影响；要发表，请重新分析一次，或在配置里填写可核验的登录名/数字 ID。'
+      : '主人的身份只有昵称之类的弱依据，不足以证明这条回复属于谁。' +
+        '请改填可核验的贴吧登录名（un）或数字 ID。',
+    evidence: describeEvidence(evidence as never),
+  }
+}
+
 export function describeTargetIdentity(
   candidate: Pick<StoredCandidate, 'targetSnapshot'> | undefined,
   contentApproved: boolean,

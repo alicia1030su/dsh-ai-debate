@@ -58,11 +58,11 @@ interface Rig {
 function makeRig(input: { sessionTtlMs?: number; dir?: string; maxPublishesPerThread?: number } = {}): Rig {
   const dir = input.dir ?? mkdtempSync(join(tmpdir(), 'debate-ledger-'))
   const store = new DebateStore({ dir, sessionTtlMs: input.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000 })
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const config = resolveConfig({
     ...DEFAULT_CONFIG,
-    ownerUserId: 'owner-1',
+    ownerHandle: 'owner-1',
     aiAccountUserId: '1001',
     llmBaseUrl: 'http://127.0.0.1:1/v1',
     llmModel: 'test-model',
@@ -143,7 +143,7 @@ async function simulateConfirmedPublish(store: DebateStore, key: string, postId:
 test('confirmed publish survives session expiry and blocks a second one', async () => {
   const rig = makeRig({ sessionTtlMs: 60_000 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const first = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const key = rig.store.snapshot().dedupe[0]!.key
     await simulateConfirmedPublish(rig.store, key, 'already-sent')
@@ -181,7 +181,7 @@ test('confirmed publish survives session expiry and blocks a second one', async 
 test('pending publish survives session expiry and still blocks a retry', async () => {
   const rig = makeRig({ sessionTtlMs: 60_000 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const first = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const key = rig.store.snapshot().dedupe[0]!.key
 
@@ -230,7 +230,7 @@ test('a confirmed publish survives a process restart', async () => {
   let key = ''
   try {
     const first = makeRig({ dir, sessionTtlMs: 60_000 })
-    const analysis = await runAnalysis(first.runtime, { url: threePartyThread().thread.url, postId: 'n7' })
+    const analysis = await runAnalysis(first.runtime, { url: threePartyThread({ authorSource: 'wap_inline' }).thread.url, postId: 'n7' })
     key = first.store.snapshot().dedupe[0]!.key
     await simulateConfirmedPublish(first.store, key, 'sent-before-restart')
     void analysis
@@ -242,7 +242,7 @@ test('a confirmed publish survives a process restart', async () => {
     assert.equal(restored?.publishState, 'confirmed', '重启后 confirmed 必须还在')
     assert.equal(restored?.publishedPostId, 'sent-before-restart', '重启后 post id 必须还在')
 
-    const again = await runAnalysis(second.runtime, { url: threePartyThread().thread.url, postId: 'n7' })
+    const again = await runAnalysis(second.runtime, { url: threePartyThread({ authorSource: 'wap_inline' }).thread.url, postId: 'n7' })
     assert.equal(second.store.findDedupe(key)?.publishState, 'confirmed', '重启后再分析仍不得覆盖')
     assert.equal(second.store.getSession(again.sessionId)?.state, 'PUBLISHED', '重启后也应是只读会话')
     assert.equal(second.adapter.publishes.length, 0, '重启后不得重新发表')
@@ -254,7 +254,7 @@ test('a confirmed publish survives a process restart', async () => {
 test('two concurrent analyses of one trigger produce exactly one session', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     // Both calls start before either finishes, which is the race the store's
     // single-mutate decision has to absorb.
     const [a, b] = await Promise.all([
@@ -274,7 +274,7 @@ test('two concurrent analyses of one trigger produce exactly one session', async
 test('different triggers keep independent ledger rows', async () => {
   const rig = makeRig({ sessionTtlMs: 60_000 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const first = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const firstKey = dedupeKey({
       platform: 'tieba',
@@ -309,7 +309,7 @@ test('a failed publish may be retried, and the retry keeps the original firstSee
   // path is what gets exercised, so the timestamp is recent and the TTL is long.
   const rig = makeRig({ sessionTtlMs: 7 * 24 * 60 * 60 * 1000 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const key = rig.store.snapshot().dedupe[0]!.key
     const firstSeen = new Date(Date.now() - 1000).toISOString()
@@ -340,7 +340,7 @@ test('a failed publish may be retried, and the retry keeps the original firstSee
 test('the ledger row is merged, never replaced with a blank one', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const key = rig.store.snapshot().dedupe[0]!.key
     void analysis
@@ -368,7 +368,7 @@ test('the ledger row is merged, never replaced with a blank one', async () => {
 test('publishing twice through the full pipeline sends exactly one reply', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const first = await publishOnce(rig, analysis.sessionId)
     assert.equal(first.ok, true, `首次发表应该成功：${first.message}`)

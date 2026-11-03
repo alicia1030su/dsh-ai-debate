@@ -13,7 +13,8 @@
  * partial-result reporting for free, and cannot quietly implement "read page 1
  * and call it done".
  */
-import { type Floor, type NestedReply, type PlatformAdapter, type ReplyContext, type Thread, type ThreadRef } from './types.js';
+import { type Floor, type IdentitySource, type NestedReply, type PlatformAdapter, type PlatformId, type ReplyContext, type Thread, type ThreadRef } from './types.js';
+import { type CorroborationReason, type CorroborationVerdict, type IdentityObservation, type IdentityAssurance, type IdentityConflictReport } from './identity.js';
 /** How much of a thread to collect. */
 export interface CollectOptions {
     /** Hard cap on floor pages walked. */
@@ -93,6 +94,33 @@ export interface CollectedThread {
     readonly complete: boolean;
     /** The separated verdicts. Always present on a v0.2.2 or later read. */
     readonly completeness: CompletenessReport;
+    /**
+     * How well each post's identity was corroborated (v0.2.23 patch 5).
+     *
+     * Separate from `assurance` because the two answer different questions: assurance
+     * says "is this enough to act on", corroboration says "was it checked twice".
+     * Merging them is how a single-source match ends up described as cross-verified.
+     */
+    readonly corroboration?: ReadonlyMap<string, CorroborationVerdict>;
+    /**
+     * Why each corroboration verdict came out that way.
+     *
+     * Carried alongside rather than recomputed by the consumer: the collector is the
+     * only place that saw the per-surface observations, and a second derivation could
+     * disagree with the first.
+     */
+    readonly corroborationReasons?: ReadonlyMap<string, CorroborationReason>;
+    /**
+     * Every identity sighting per post id, including ones whose comment was
+     * de-duplicated away (v0.2.23 patch 8).
+     *
+     * Exposed so a caller can audit *why* a verdict came out the way it did, and so
+     * the fact that two surfaces spoke about one comment survives anywhere the raw
+     * collection is inspected.
+     */
+    readonly identityObservations?: ReadonlyMap<string, readonly IdentityObservation[]>;
+    /** Post ids whose distinct sightings exceeded the retention cap. */
+    readonly observationOverflow?: readonly string[];
     /** Floors the platform declares but that were not readable (usually deleted). */
     readonly missingCount?: number;
     /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -108,6 +136,16 @@ export interface CollectedThread {
     readonly truncated?: boolean;
     /** True when any floor's nested replies were read incompletely. */
     readonly nestedIncomplete?: boolean;
+    /**
+     * Proven cross-source authorship disagreements found while collecting
+     * (v0.2.23).
+     *
+     * A non-empty list means at least one post id was described by two surfaces
+     * with identities that cannot both be true. Owner resolution and publishing
+     * must refuse while this is non-empty for the affected post — see
+     * `analyzer.resolveOwnerKey` and `safety.checkPublishPolicy`.
+     */
+    readonly identityConflicts?: readonly IdentityConflictReport[];
     /** Non-fatal problems, phrased for a human. */
     readonly issues: readonly string[];
 }
@@ -221,6 +259,16 @@ export declare function walkNested(adapter: PlatformAdapter, ref: ThreadRef, flo
     complete: boolean;
     error?: string;
     degraded?: boolean;
+    conflicts?: readonly IdentityConflictReport[];
+    assurance?: ReadonlyMap<string, IdentityAssurance>;
+    /** How well each post's identity was corroborated (v0.2.23 patch 5). */
+    corroboration?: ReadonlyMap<string, CorroborationVerdict>;
+    /** The reason behind each verdict, for user-facing text. */
+    corroborationReasons?: ReadonlyMap<string, CorroborationReason>;
+    /** Every retained identity sighting, per post id. */
+    identityObservations?: ReadonlyMap<string, IdentityObservation[]>;
+    /** Post ids that hit the retention cap. */
+    observationOverflow?: string[];
 }>;
 /**
  * Collect a thread: metadata, every floor page, then nested replies for the
@@ -245,6 +293,14 @@ export interface TimelineEntry {
     readonly kind: 'floor' | 'nested';
     readonly postId: string;
     /**
+     * Which platform this entry came from (v0.2.23).
+     *
+     * Needed by owner resolution: the meaning of a legacy `authorId` is a property
+     * of the platform's contract (Tieba: a login name; Weibo: a stable account id),
+     * not of the string's shape.
+     */
+    readonly platform: PlatformId;
+    /**
      * The floor this entry belongs to, by the floor post's stable id.
      *
      * v0.2.1: this is the grouping key. It used to be `floorNumber`, which forced
@@ -258,6 +314,23 @@ export interface TimelineEntry {
     readonly floorNumber?: number;
     readonly authorId?: string;
     readonly authorName?: string;
+    /**
+     * Numeric account id, when a surface stated one as a number (v0.2.23).
+     *
+     * Absent for WAP-floor and WAP-inline rows, which carry no uid at all. Its
+     * presence is what lets an owner configured with a numeric id be matched
+     * *provably* instead of by comparing that id against a login name.
+     */
+    readonly authorNumericUid?: string;
+    /**
+     * Which namespace `authorNumericUid` belongs to (v0.2.23).
+     *
+     * Carried onto the timeline so the identity key can place the number. Tieba has
+     * two unrelated numeric namespaces; a number without one cannot be compared.
+     */
+    readonly authorNumericUidNamespace?: 'user_id' | 'tieba_uid';
+    /** Which surface produced the author fields above (v0.2.23). */
+    readonly authorSource?: IdentitySource;
     /** Display order within the floor; floors use 0. */
     readonly order: number;
     readonly content: string;

@@ -320,8 +320,8 @@ test('端到端：含提示词注入的引用文本不改变立场归属（§三
   const { brief, sources } = buildBrief({ platform: 'tieba', threadId: '900', collected: data, dispute })
 
   // Identity is decided by account id, not by anything in the text.
-  assert.equal(dispute.owner.key, '主人')
-  assert.equal(dispute.opponent?.key, '对手B')
+  assert.equal(dispute.owner.displayName, '主人')
+  assert.equal(dispute.opponent?.displayName, '对手B')
   assert.equal(brief.targetPostId, 't1', '回复目标仍是对手的发言，不受注入文本影响')
   // The owner's evidence never includes the opponent's post.
   assert.equal(brief.owner.evidence.includes('t1'), false)

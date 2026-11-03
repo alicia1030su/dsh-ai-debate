@@ -298,6 +298,14 @@ window.__ModuleLoader__.load({
       workbenchNoBuild: '当前构建没有接上工作台（workbench 未提供），所以这个区块读不到状态。',
       workbenchStepNow: '当前步骤',
       workbenchBlocked: '还不能往下走',
+      // v0.2.23: the owner's identity is a different question from the target's, and a
+      // page that only says "cannot publish" teaches the reader to retry forever.
+      workbenchOwnerTitle: '主人身份',
+      workbenchOwnerVerified: '有可核对的依据',
+      workbenchOwnerUnverified: '依据不足',
+      workbenchOwnerConflict: '来源冲突',
+      workbenchOwnerLegacy: '旧会话，来源不明',
+      workbenchOwnerUnknown: '尚无会话',
       workbenchMissing: '缺失证据',
       workbenchCounts: '已读取',
       workbenchCountsLine: '楼层 {floors} 条 · 楼中楼 {nested} 条 · 候选 {candidates} 条',
@@ -624,6 +632,12 @@ window.__ModuleLoader__.load({
       workbenchNoBuild: 'This build has no workbench wired up, so this section cannot read its state.',
       workbenchStepNow: 'Current step',
       workbenchBlocked: 'Not yet',
+      workbenchOwnerTitle: "Owner's identity",
+      workbenchOwnerVerified: 'Supported by evidence',
+      workbenchOwnerUnverified: 'Not enough evidence',
+      workbenchOwnerConflict: 'Sources disagree',
+      workbenchOwnerLegacy: 'Old session, provenance unrecorded',
+      workbenchOwnerUnknown: 'No session yet',
       workbenchMissing: 'Missing evidence',
       workbenchCounts: 'Read',
       workbenchCountsLine: '{floors} floors · {nested} nested replies · {candidates} candidates',
@@ -3101,6 +3115,29 @@ window.__ModuleLoader__.load({
         unverifiable: t('workbenchIdentityUnverifiable'),
         no_snapshot: t('workbenchIdentityNoSnapshot'),
       }
+      // The owner's identity, rendered from the backend's own derivation. The client
+      // has no session access, so this label can only echo what the server decided —
+      // it can never upgrade an unverified identity by guessing.
+      const ownerLabel = {
+        verified: t('workbenchOwnerVerified'),
+        unverified: t('workbenchOwnerUnverified'),
+        conflict: t('workbenchOwnerConflict'),
+        legacy_unknown: t('workbenchOwnerLegacy'),
+        recheck_required: t('workbenchOwnerVerified'),
+        unknown: t('workbenchOwnerUnknown'),
+      }
+      const ownerRow =
+        wb.ownerIdentity === undefined
+          ? null
+          : h(
+              'li',
+              { key: 'owner' },
+              `${t('workbenchOwnerTitle')}：` +
+                `${ownerLabel[wb.ownerIdentity.state] ?? t('workbenchOwnerUnknown')}` +
+                `——${wb.ownerIdentity.detail}` +
+                (wb.ownerIdentity.evidence ? `（${wb.ownerIdentity.evidence}）` : ''),
+            )
+
       const stepLine = (wb.steps || [])
         .map((step) => {
           const mark = step.status === 'done' ? '✅' : step.status === 'current' ? '▶' : '·'
@@ -3139,6 +3176,7 @@ window.__ModuleLoader__.load({
                     `${wb.approval.content?.applies === true ? '✅ ' : '❌ '}` +
                     `${wb.approval.content?.detail ?? ''}`,
                 ),
+                ...(ownerRow === null ? [] : [ownerRow]),
                 h(
                   'li',
                   { key: 'target' },

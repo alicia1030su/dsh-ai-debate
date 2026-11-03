@@ -39,6 +39,12 @@ function attempt(overrides: Partial<PublishAttempt> = {}): PublishAttempt {
     threadPublishes: 0,
     humanApproved: false,
     securityDecision: 'allow',
+    // v0.2.23: this file tests the policy matrix, not identity. The owner is
+    // declared verified so the identity gate does not answer for other gates.
+    ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     now: 1_000_000,
     ...overrides,
   }

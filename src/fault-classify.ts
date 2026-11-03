@@ -90,6 +90,11 @@ const CHALLENGE_MARKERS = [
   /verify you are (a )?human/i,
   /异常流量/,
   /访问受限/,
+  // v0.2.23: Baidu's verification host. The HTTP layer already recognised it; the
+  // classifier did not, so a `wappass` body was classified `platform_refused`
+  // while the transport called it `captcha`. `tieba-403-diagnosis.test.ts` fails
+  // if either list drifts from the other again.
+  /wappass\.baidu\.com/i,
 ]
 
 /** Session-expired markers. */

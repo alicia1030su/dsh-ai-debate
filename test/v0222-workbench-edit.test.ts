@@ -78,6 +78,10 @@ function session(overrides: Partial<StoredSession> = {}): StoredSession {
     threadTitle: '讨论',
     forumName: '区',
     ownerKey: 'o1',
+    ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     disputeFloorPostId: 'p-1',
     disputeFloorNumber: 1,
     triggerPostId: 'p-2',

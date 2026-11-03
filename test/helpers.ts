@@ -96,6 +96,26 @@ export function makeFloor(input: {
   content: string
   createdAt?: string
   nestedCount?: number
+  /**
+   * Which surface produced the author fields (v0.2.23).
+   *
+   * Omitted keeps the v0.2.22 shape so existing fixtures stay meaningful as
+   * "records written before the identity split". Tests that mean "the platform
+   * stated a numeric uid" must say so with `authorNumericUid` + `authorSource`,
+   * because a bare numeric `authorId` is now read as a login name.
+   */
+  authorNumericUid?: string
+  /**
+   * Which numeric namespace the uid came from (v0.2.23 patch 4).
+   *
+   * A uid without this cannot be placed, so a fixture that means "this row carried a
+   * `tieba_uid`" must say so. Omitting it made the row untestable against an owner
+   * configured in either namespace — and silently made namespace tests pass for the
+   * wrong reason. `total_comment` reports `tieba_uid`; `comment_page` reports
+   * `user_id`.
+   */
+  authorNumericUidKind?: 'user_id' | 'tieba_uid'
+  authorSource?: Floor['authorSource']
 }): Floor {
   return {
     platform: 'tieba',
@@ -103,6 +123,11 @@ export function makeFloor(input: {
     postId: input.postId,
     authorId: input.authorId,
     authorName: input.authorName,
+    ...(input.authorNumericUid === undefined ? {} : { authorNumericUid: input.authorNumericUid }),
+    ...(input.authorNumericUidKind === undefined
+      ? {}
+      : { authorNumericUidKind: input.authorNumericUidKind }),
+    ...(input.authorSource === undefined ? {} : { authorSource: input.authorSource }),
     content: input.content,
     createdAt: input.createdAt ?? '2024-1-1',
     images: [],
@@ -120,6 +145,16 @@ export function makeNested(input: {
   content: string
   replyToName?: string
   createdAt?: string
+  /**
+   * Which surface produced the author fields (v0.2.23).
+   *
+   * Omitted keeps the v0.2.22 shape, which v0.2.23 reads as a legacy record: a
+   * Tieba `authorId` with no stated surface is a login name of unknown
+   * provenance, so it cannot authorise a publish.
+   */
+  authorSource?: NestedReply['authorSource']
+  authorNumericUid?: string
+  authorNumericUidKind?: 'user_id' | 'tieba_uid'
 }): NestedReply {
   return {
     platform: 'tieba',
@@ -127,6 +162,14 @@ export function makeNested(input: {
     parentPostId: input.parentPostId,
     authorId: input.authorId,
     authorName: input.authorName,
+    // v0.2.23 fields must be *returned*, not merely accepted: adding them to the
+    // parameter list alone left every fixture silently legacy, which made the
+    // identity gate refuse sessions that meant "verified".
+    ...(input.authorSource === undefined ? {} : { authorSource: input.authorSource }),
+    ...(input.authorNumericUid === undefined ? {} : { authorNumericUid: input.authorNumericUid }),
+    ...(input.authorNumericUidKind === undefined
+      ? {}
+      : { authorNumericUidKind: input.authorNumericUidKind }),
     replyToName: input.replyToName,
     content: input.content,
     createdAt: input.createdAt ?? '2024-1-1',
@@ -320,7 +363,20 @@ export class FakeAdapter implements PlatformAdapter {
 }
 
 /** Build a simple synthetic three-party thread for analyzer tests. */
-export function threePartyThread(ids?: { threadId?: string; floorPostId?: string; postPrefix?: string }): {
+export function threePartyThread(ids?: {
+  threadId?: string
+  floorPostId?: string
+  postPrefix?: string
+  /**
+   * Declare which surface produced the author fields (v0.2.23).
+   *
+   * Omitted keeps the original v0.2.22 fixture exactly as it was: an `authorId`
+   * with no recorded namespace. v0.2.23 reads that as `legacy_unknown`, which is
+   * readable but cannot authorise a publish — so tests that assert a successful
+   * send must opt in here instead of the old fixture being quietly rewritten.
+   */
+  authorSource?: 'wap_inline' | 'wap_floor' | 'comment_page' | 'total_comment'
+}): {
   thread: Thread
   floors: readonly Floor[]
   nested: Readonly<Record<string, readonly NestedReply[]>>
@@ -338,6 +394,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
       postId: p('n1'),
       parentPostId: floorPostId,
       authorId: 'owner-1',
+      ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
       authorName: '主人',
       content: '这个方案我认为不可行，成本会翻倍。',
     }),
@@ -345,6 +402,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
       postId: p('n2'),
       parentPostId: floorPostId,
       authorId: 'opp-1',
+      ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
       authorName: '对手B',
       content: '回复 主人 :你凭什么说成本会翻倍？有数据吗？',
       replyToName: '主人',
@@ -353,6 +411,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
       postId: p('n3'),
       parentPostId: floorPostId,
       authorId: 'other-1',
+      ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
       authorName: '路人C',
       content: '路过，我觉得都行吧，看情况。',
     }),
@@ -360,6 +419,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
       postId: p('n4'),
       parentPostId: floorPostId,
       authorId: 'owner-1',
+      ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
       authorName: '主人',
       content: '回复 对手B :前面贴过报价了，翻倍是按去年两次采购价算的。',
       replyToName: '对手B',
@@ -368,6 +428,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
       postId: p('n5'),
       parentPostId: floorPostId,
       authorId: 'opp-1',
+      ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
       authorName: '对手B',
       content: '回复 主人 :那报价是同型号吗？你拿别的型号比没意义吧。',
       replyToName: '主人',
@@ -376,6 +437,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
       postId: p('n6'),
       parentPostId: floorPostId,
       authorId: 'other-1',
+      ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
       authorName: '路人C',
       content: '我倒觉得可以试试看，反正也没多少钱。',
     }),
@@ -383,6 +445,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
       postId: p('n7'),
       parentPostId: floorPostId,
       authorId: 'owner-1',
+      ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
       authorName: '主人',
       content: '@吵架小号 过来帮我说两句，这人一直绕。',
     }),
@@ -409,6 +472,7 @@ export function threePartyThread(ids?: { threadId?: string; floorPostId?: string
         floorNumber: 1,
         postId: floorPostId,
         authorId: 'author-1',
+        ...(ids?.authorSource === undefined ? {} : { authorSource: ids.authorSource }),
         authorName: '楼主',
         content: '大家看看这个方案值不值得做。',
         nestedCount: nested.length,

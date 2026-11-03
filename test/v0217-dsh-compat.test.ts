@@ -336,6 +336,10 @@ test('存储：带 legacyOwnerKey 的旧去重记录仍能通过校验', () => {
     platform: 'tieba',
     threadId: '2',
     ownerKey: 'old-name',
+    ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     triggerPostId: '3',
     sessionId: 's1',
     legacyOwnerKey: '旧昵称',

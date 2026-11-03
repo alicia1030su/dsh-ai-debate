@@ -21,7 +21,7 @@
  *   `data-list-count`; the actual replies come from `/p/comment`.
  */
 
-import type { Floor, NestedReply } from '../../types.js'
+import type { Floor, IdentitySource, NestedReply } from '../../types.js'
 
 /** Decode the entities Tieba emits inside attributes and text nodes. */
 export function decodeEntities(input: string): string {
@@ -244,13 +244,27 @@ function readFloorTime(block: string): string | undefined {
 function readFloorAuthor(block: string, info: Record<string, unknown>): {
   authorId?: string
   authorName?: string
+  authorNumericUid?: string
+  authorSource: IdentitySource
 } {
   const un = typeof info.un === 'string' && info.un ? info.un : undefined
   const nameShow = typeof info.name_show === 'string' && info.name_show ? info.name_show : undefined
   const rendered = /<a href="javascript:;" class="user_name">([\s\S]*?)<\/a>/.exec(headOf(block))?.[1]
+  // v0.2.23: the WAP page carries no numeric uid. `un` goes into `authorId` as a
+  // **handle**, and `authorNumericUid` stays undefined no matter what `un` looks
+  // like — a handle of `1254480024` is still a handle, and copying it into the uid
+  // namespace is exactly the collision this release ends.
+  const numericFromInfo =
+    typeof info.user_id === 'number'
+      ? String(info.user_id)
+      : typeof info.user_id === 'string' && /^\d+$/.test(info.user_id)
+        ? info.user_id
+        : undefined
   return {
     authorId: un,
     authorName: rendered ? toPlainText(rendered) || nameShow : nameShow,
+    ...(numericFromInfo === undefined ? {} : { authorNumericUid: numericFromInfo }),
+    authorSource: 'wap_floor',
   }
 }
 
@@ -296,6 +310,8 @@ export function parseWapFloors(html: string): readonly ParsedFloor[] {
         postId: identity.postId,
         authorId: author.authorId,
         authorName: author.authorName,
+        ...(author.authorNumericUid === undefined ? {} : { authorNumericUid: author.authorNumericUid }),
+        authorSource: author.authorSource,
         content: readFloorContent(block),
         createdAt: readFloorTime(block),
         images: extractImages(block),
@@ -365,6 +381,9 @@ export function parseInlineNested(block: string, floorPostId: string): readonly 
         parentPostId: floorPostId,
         authorId: author,
         authorName,
+        // v0.2.23: inline nested rows come from the same WAP surface as the
+        // floors, so they carry the same `un`-only shape. No numeric uid here.
+        authorSource: 'wap_inline',
         replyToName,
         content: replyToName ? content.slice(target ? (target[0] as string).length : 0).trim() : content,
         // The inline copy carries no timestamp, and the reply target is a name
@@ -490,13 +509,62 @@ export function parseCommentPage(html: string, floorPostId: string): ParsedComme
       relationUncertain = replyToName === undefined
     }
 
+    // ## Who wrote this?
+    //
+    // v0.2.22 took `leadAnchors.find(class contains "at")` — the *first* anchor in
+    // the lead markup — and used it for both the handle and the display name. On a
+    // comment row that prefix can hold two anchors: the author, and the person
+    // being replied to. Whichever came first won, so a reply could be attributed
+    // to the person it answered. That is how a row whose `data-info` said
+    // `un=银狐_玉耀` was reported under a different name.
+    //
+    // ## What this surface actually carries (v0.2.23, measured)
+    //
+    // Checked against `test/fixtures/comment-page1.html`, a real 20 KB row set:
+    //
+    // - `username="…"` is **empty or whitespace** on most rows (`""`, `" "`), and
+    //   holds a name on some (`羽绫观月`). It is not a reliable account id, and on
+    //   the rows where it is populated it is still a *login name*.
+    // - `"user_name"` and `"un"` in `data-field` are `null`.
+    // - `"user_id"` does not appear **at all** (0 occurrences in the fixture).
+    // - The only stable account token is `data-field.id`, shaped
+    //   `tb.1.a7b4b627.gsJrXfSBOI9eOAKwO6pv4Q` — a portrait-derived opaque id.
+    //
+    // So this parser must not pretend a handle exists when the surface leaves it
+    // blank. The earlier reading ("username is the author's account") was a
+    // guess; the fixture refutes it.
     const leadAnchors = findAnchors(leadHtml)
-    const authorAnchor = leadAnchors.find((anchor) => /\bclass="[^"]*\bat\b[^"]*"/.test(anchor.attrs))
-    const authorId = authorAnchor ? attr(authorAnchor.attrs, 'username') : undefined
+    const namedLead = leadAnchors.find((anchor) => {
+      const value = attr(anchor.attrs, 'username')
+      return value !== undefined && value.trim() !== ''
+    })
+    const authorAnchor = namedLead ?? (leadAnchors.length === 1 ? leadAnchors[0] : undefined)
+    const rawHandle = authorAnchor ? attr(authorAnchor.attrs, 'username') : undefined
+    const handle = rawHandle !== undefined && rawHandle.trim() !== '' ? rawHandle.trim() : undefined
+    // The opaque `id` from the anchor's own `data-field`. Not a numeric uid, and
+    // not stable forever — a portrait token changes with the avatar — so it is
+    // carried as a portrait corroborator rather than an account id.
+    const anchorField = authorAnchor ? attr(authorAnchor.attrs, 'data-field') : undefined
+    let anchorId: string | undefined
+    if (anchorField !== undefined) {
+      try {
+        const parsed = JSON.parse(decodeEntities(anchorField)) as Record<string, unknown>
+        if (typeof parsed.id === 'string' && parsed.id !== '') anchorId = parsed.id
+      } catch {
+        anchorId = undefined
+      }
+    }
+    const numericUidRaw = authorAnchor
+      ? attr(authorAnchor.attrs, 'user_id') ?? attr(authorAnchor.attrs, 'uid')
+      : undefined
+    const numericUid =
+      numericUidRaw !== undefined && /^\d+$/.test(numericUidRaw) ? numericUidRaw : undefined
     const authorName =
       (authorAnchor ? toPlainText(authorAnchor.inner).trim() || undefined : undefined) ??
       (typeof field.showname === 'string' && field.showname ? field.showname : undefined) ??
       (typeof field.user_name === 'string' && field.user_name ? field.user_name : undefined)
+    const portrait =
+      (typeof field.portrait === 'string' && field.portrait ? field.portrait : undefined) ?? anchorId
 
     const time = /<span class="lzl_time">([^<]*)<\/span>/.exec(block)?.[1]
 
@@ -505,14 +573,16 @@ export function parseCommentPage(html: string, floorPostId: string): ParsedComme
         platform: 'tieba',
         postId,
         parentPostId: floorPostId,
-        authorId: authorId ?? (typeof field.user_name === 'string' && field.user_name ? field.user_name : undefined),
+        authorId: handle ?? (typeof field.user_name === 'string' && field.user_name ? field.user_name : undefined),
         authorName,
+        ...(numericUid === undefined ? {} : { authorNumericUid: numericUid }),
+        authorSource: 'comment_page',
         replyToName,
         content: bodyText,
         createdAt: time ? decodeEntities(time).trim() : undefined,
         relationUncertain,
       },
-      portrait: typeof field.portrait === 'string' ? field.portrait : undefined,
+      portrait,
     })
   }
   return { replies, total, totalPages }
@@ -529,7 +599,18 @@ export interface TotalCommentEntry {
 export interface InlineComment {
   readonly commentId: string
   readonly postId: string
+  /**
+   * The login name, when this surface published one (v0.2.23 patch 7).
+   *
+   * `totalComment` publishes `user_id` — a numeric account id — and **not** a `un`.
+   * v0.2.22 put that number here, which made it indistinguishable from a login name
+   * and let a `handle: "12345"` configuration match a row whose 12345 was a uid.
+   * This surface therefore leaves `authorId` undefined and uses
+   * {@link authorNumericUid} instead.
+   */
   readonly authorId?: string
+  /** The numeric account id, in the `user_id` namespace. */
+  readonly authorNumericUid?: string
   readonly authorName?: string
   readonly content: string
   readonly createdAt?: string
@@ -575,10 +656,14 @@ export function parseTotalComment(raw: string): {
       }
       const commentId = row.comment_id === undefined ? undefined : String(row.comment_id)
       if (!commentId) continue
+      // `row.user_id` is a numeric account id, not a login name. Copying it into
+      // `authorId` is the namespace confusion this patch removes: the same number
+      // would satisfy a handle match while actually being a uid.
+      const numericUid = row.user_id === undefined ? undefined : String(row.user_id)
       inline.push({
         commentId,
         postId: row.post_id === undefined ? floorPostId : String(row.post_id),
-        authorId: row.user_id === undefined ? undefined : String(row.user_id),
+        ...(numericUid === undefined ? {} : { authorNumericUid: numericUid }),
         authorName: row.username || (row.user_id === undefined ? undefined : userNames.get(String(row.user_id))),
         content: row.content ?? '',
         createdAt: row.now_time ? new Date(row.now_time * 1000).toISOString() : undefined,

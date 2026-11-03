@@ -15,13 +15,67 @@
  */
 import type { NestedReply, PlatformId } from './types.js';
 import type { CollectedThread, TimelineEntry } from './collector.js';
+import type { IdentitySource, OwnerIdentityEvidence } from './identity.js';
 /** How the owner was identified. */
 export type OwnerMatchKind = 'id' | 'name';
 /** A person in the conversation. */
 export interface Participant {
     /** Display name; also the merge key for identity across mixed handles. */
     readonly key: string;
+    /**
+     * Numeric platform account id, **only** when a surface stated one (v0.2.23).
+     *
+     * Before v0.2.23 this field held the login name (`un`), because Tieba's WAP
+     * page is the only surface most reads use and it exposes nothing numeric. That
+     * made `participant.userId === owner.userId` a comparison between a handle and
+     * a uid: always false, and — worse — it made `anyIdsExposed` true, so the
+     * owner check took the "the id is wrong" branch and never said "this surface
+     * cannot prove ids at all".
+     */
     readonly userId?: string;
+    /** Login name (`un` / `username`), the strongest identity a WAP read offers. */
+    readonly handle?: string;
+    /**
+     * A pre-v0.2.23 account string whose namespace was never recorded (v0.2.23).
+     *
+     * On Tieba, v0.2.22 documented `authorId` as the `un` login name, so this is
+     * read as a handle for display purposes. It is kept in its own field because a
+     * historical record cannot prove it was a handle any more than it can prove it
+     * was a uid — and an owner match that relies on it must say so rather than
+     * present itself as a uid match.
+     */
+    readonly legacyAccountId?: string;
+    /**
+     * Which namespace the numeric uid belongs to, as *observed* (v0.2.23 patch 4).
+     *
+     * This must come from the record that carried the number, never from the owner's
+     * configuration. Deriving it from the config is what let a `tieba_uid: 12345`
+     * owner match a `user_id: 12345` post: the numbers were equal, the namespaces were
+     * not, and the evidence then recorded the *configured* namespace — producing a
+     * record that looked consistent with a match that never happened.
+     */
+    readonly userIdNamespace?: 'user_id' | 'tieba_uid';
+    /** The platform the numeric uid was read from, for the same reason. */
+    readonly platform?: string;
+    /**
+     * Which surface this participant's records came from (v0.2.23).
+     *
+     * Carried onto the evidence so a handle match can say *where* the login name was
+     * seen. Absent for all-legacy participants, which is precisely why they cannot
+     * be verified.
+     */
+    readonly source?: IdentitySource;
+    /**
+     * True when at least one of this participant's records declared which surface it
+     * came from (v0.2.23).
+     *
+     * A participant built entirely from legacy rows can be *displayed* and
+     * *analysed*, but cannot be called verified: we never learned what kind of
+     * account string those rows held. Without this flag, a legacy row whose
+     * `authorId` happened to equal a configured handle would have resolved as
+     * `verified` — the exact up-grade rule 2 of the compatibility contract forbids.
+     */
+    readonly hasDeclaredSource?: boolean;
     readonly displayName: string;
     /** How the key was derived, so the UI can explain a name-based match. */
     readonly matchKind: OwnerMatchKind;
@@ -98,6 +152,25 @@ export interface Dispute {
     readonly needsConfirmation: boolean;
     /** Human-readable reasons for `needsConfirmation`, or for the choice made. */
     readonly notes: readonly string[];
+    /**
+     * How strongly the owner's identity was established (v0.2.23).
+     *
+     * - `verified` — a numeric uid matched, or a login handle matched under a
+     *   surface that states one.
+     * - `unverified` — the owner was resolved (for reading) from a legacy record or
+     *   a nickname. The analysis is useful; a publish is not authorised by it.
+     *
+     * Kept separate from `notes` because prose cannot be enforced. The publish gate
+     * reads this field; a note would only be read by a human who happened to look.
+     */
+    readonly ownerIdentityAssurance: 'verified' | 'unverified';
+    /**
+     * What backed that assurance (v0.2.23).
+     *
+     * Carried so the publish gate can *recompute* the verdict instead of trusting a
+     * stored string. See `OwnerIdentityEvidence` for why a bare label was not enough.
+     */
+    readonly ownerIdentityEvidence: OwnerIdentityEvidence;
 }
 /** The trigger that started this task. */
 export interface TriggerRef {
@@ -127,6 +200,23 @@ export interface OwnerIdentity {
     readonly platform?: PlatformId;
     /** Stable platform id; preferred. */
     readonly userId?: string;
+    /**
+     * Which namespace `userId` belongs to (v0.2.23).
+     *
+     * A bare number is not an identity: Tieba publishes both a `user_id` and a
+     * `tieba_uid`, in unrelated namespaces. Recording which one the config meant
+     * lets the gate refuse a numeric claim that cannot be placed.
+     */
+    readonly userIdNamespace?: 'user_id' | 'tieba_uid';
+    /**
+     * Login name (`un`) as published by the platform (v0.2.23).
+     *
+     * This is the only owner field that can match a WAP floor: that surface
+     * publishes `un` and no numeric uid. It is matched against `authorId`, which
+     * v0.2.23 defines as the handle — never against a numeric uid, and never
+     * merged with `userName`, because a login name is not a nickname.
+     */
+    readonly handle?: string;
     /** Display name; used only when no id is configured or matched. */
     readonly userName?: string;
 }

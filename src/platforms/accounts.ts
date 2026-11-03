@@ -50,13 +50,21 @@ import type { PlatformId } from '../types.js'
  * - `name_only` — the platform exposed no id at all; matching is by nickname and
  *   is therefore the weakest claim the plugin can make.
  */
-export type AccountIdStrength = 'stable' | 'slug' | 'opaque' | 'name_only'
+export type AccountIdStrength = 'stable' | 'handle_only' | 'slug' | 'opaque' | 'name_only'
 
 /** One account on one platform. */
 export interface PlatformAccount {
   readonly platform: PlatformId
   /** Platform-native stable id. Absent when only a display name is known. */
   readonly accountId?: string
+  /**
+   * Login name / handle (`un` on Tieba), when the owner knows it (v0.2.23).
+   *
+   * Distinct from `displayName`: a login name is not a nickname and cannot be
+   * changed by its owner. Distinct from `accountId`: on Tieba the uid is numeric
+   * while `un` is a login name, and the two live in different namespaces.
+   */
+  readonly handle?: string
   /** Display name. For humans and logs only — never a matching key. */
   readonly displayName?: string
   /** How strong `accountId` is; decides whether it may be the sole match. */
@@ -103,6 +111,8 @@ export const EMPTY_BINDING: PlatformAccountBinding = Object.freeze({
 export function resolveBindings(input: {
   legacy: {
     ownerUserId: string
+    /** Login name (`un`), v0.2.23. Optional so callers written before it still compile. */
+    ownerHandle?: string
     ownerUserName: string
     aiAccountUserId: string
     aiAccountName: string
@@ -162,12 +172,14 @@ const LEGACY_PLATFORM: PlatformId = 'tieba'
  */
 function legacyOwnerBinding(legacy: {
   ownerUserId: string
+  ownerHandle?: string
   ownerUserName: string
   allowedOwnerIds: string
 }): OwnerBinding | undefined {
   const id = (legacy.ownerUserId ?? '').trim()
+  const handle = (legacy.ownerHandle ?? '').trim()
   const name = (legacy.ownerUserName ?? '').trim()
-  if (id === '' && name === '') return undefined
+  if (id === '' && handle === '' && name === '') return undefined
 
   const additional = (legacy.allowedOwnerIds ?? '')
     .split(',')
@@ -184,10 +196,18 @@ function legacyOwnerBinding(legacy: {
     primary: {
       platform: LEGACY_PLATFORM,
       ...(id !== '' ? { accountId: id } : {}),
+      // v0.2.23: the login name is its own field, never folded into accountId.
+      // Empty means "not configured", so it must not enter the binding at all:
+      // an empty-string handle would win the resolution order and shadow a
+      // nickname the owner did configure.
+      ...(handle !== '' ? { handle } : {}),
       ...(name !== '' ? { displayName: name } : {}),
       // A configured id is platform-assigned; a name-only binding is weaker and
       // the analyzer already knows to treat it as such.
-      idStrength: id !== '' ? 'stable' : 'name_only',
+      // A handle is not "stable" in the id-strength sense (it is not a uid), but
+      // it is far stronger than a nickname: the platform will not let its owner
+      // rename it. `handle_only` says exactly that.
+      idStrength: id !== '' ? 'stable' : handle !== '' ? 'handle_only' : 'name_only',
     },
     ...(additional.length > 0 ? { additional } : {}),
   }

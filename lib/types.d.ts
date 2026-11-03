@@ -50,8 +50,63 @@ export interface ForumRef {
     /** Display name. */
     readonly name: string;
 }
+/**
+ * Which platform surface an author field came from.
+ *
+ * v0.2.23: kept in `types.ts` rather than `identity.ts` so the data shape does
+ * not depend on the comparison module, and so an old session that predates the
+ * field can be read as `platform_contract` without importing anything new.
+ */
+export type IdentitySource = 'wap_floor' | 'wap_inline' | 'comment_page' | 'total_comment' | 'platform_contract';
+/**
+ * The author fields every author-bearing record may carry from v0.2.23 on.
+ *
+ * These are **additive**: `authorId` and `authorName` keep their v0.2.22 names
+ * and meanings so历史会话 still read. What changed is that a caller can now tell
+ * *what kind of thing* `authorId` is, instead of having to guess from its text.
+ */
+export interface AuthorFields {
+    /**
+     * Numeric account id, present **only** when the surface stated one numerically
+     * (`/p/totalComment`'s `user_id` is the only such surface today).
+     *
+     * A handle that happens to be all digits is not copied here — that is the
+     * collision this field exists to end.
+     */
+    readonly authorNumericUid?: string;
+    /**
+     * Which numeric namespace `authorNumericUid` belongs to (v0.2.23).
+     *
+     * `user_id` (from `/p/totalComment`) and `tieba_uid` are separate id spaces;
+     * equal numbers in different spaces are different accounts. Without this tag a
+     * uid cannot be compared against anything.
+     */
+    readonly authorNumericUidKind?: 'user_id' | 'tieba_uid';
+    /** Which surface produced the author fields above. */
+    readonly authorSource?: IdentitySource;
+    /**
+     * A proven cross-source disagreement about who wrote this record (v0.2.23).
+     *
+     * Present only when two surfaces described the same post id with identities
+     * that cannot both be true. Downstream owner resolution must refuse rather
+     * than choose.
+     */
+    readonly identityConflict?: {
+        readonly code: 'identity_conflict';
+        readonly summary: string;
+        /**
+         * Which surface supplied each side of the disagreement.
+         *
+         * `'unknown'` when the row never declared one. It is deliberately not folded into
+         * a pretend source name: a reader who sees a surface name will believe a surface
+         * was consulted.
+         */
+        readonly firstSource: IdentitySource | 'unknown';
+        readonly secondSource: IdentitySource | 'unknown';
+    };
+}
 /** The thread (主题帖) under discussion. */
-export interface Thread {
+export interface Thread extends AuthorFields {
     readonly platform: PlatformId;
     readonly forum: ForumRef;
     /** Thread id (贴吧的 kz/tid). */
@@ -70,7 +125,7 @@ export interface Thread {
     readonly images: readonly string[];
 }
 /** One first-level floor (楼层). */
-export interface Floor {
+export interface Floor extends AuthorFields {
     readonly platform: PlatformId;
     /**
      * The floor number as displayed (1-based), when the platform displays one.
@@ -123,7 +178,7 @@ export interface Floor {
     readonly inlineNested?: readonly NestedReply[];
 }
 /** One nested reply (楼中楼). */
-export interface NestedReply {
+export interface NestedReply extends AuthorFields {
     readonly platform: PlatformId;
     readonly postId: string;
     /** The floor this reply hangs under. */

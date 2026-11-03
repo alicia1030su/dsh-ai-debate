@@ -165,7 +165,11 @@ test('登录名与昵称相同时，不额外计数（这一侧也没被放宽�
   assert.ok((person!.distinctHandles ?? 0) <= 1)
 })
 
-test('同名不同登录名，仍然数出两个 handle（保护方向未被削弱）', () => {
+test('同名不同登录名：拆成两个参与者，保护方向更强', () => {
+  // Before v0.2.23 patch 2 these merged into one participant carrying
+  // `distinctHandles: 2`. Merging was the P0: the owner's statements then contained
+  // the other account's words. They are now separate participants, so the protection
+  // is structural rather than a counter that a caller has to remember to check.
   const participants = describeParticipants(
     collected([
       makeNested({ postId: 'c1', parentPostId: '500', authorId: 'user_aaa', authorName: '小明', content: '我' }),
@@ -173,8 +177,9 @@ test('同名不同登录名，仍然数出两个 handle（保护方向未被削�
     ]),
     1,
   )
-  const person = participants.find((entry) => entry.displayName === '小明')
-  assert.equal(person!.distinctHandles, 2)
+  const named = participants.filter((entry) => entry.displayName === '小明')
+  assert.equal(named.length, 2, '同名不同账号必须是两个参与者')
+  assert.deepEqual(named.map((entry) => entry.handle).sort(), ['user_aaa', 'user_bbb'])
 })
 
 // ---------------------------------------------------------------------------

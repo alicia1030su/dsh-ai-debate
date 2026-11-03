@@ -46,10 +46,10 @@ function makeRig(input: { adapter?: FakeAdapter } = {}): {
 } {
   const dir = mkdtempSync(join(tmpdir(), 'debate-v015-verify-'))
   const store = new DebateStore({ dir })
-  const adapter = input.adapter ?? new FakeAdapter(threePartyThread())
+  const adapter = input.adapter ?? new FakeAdapter(threePartyThread({ authorSource: 'wap_inline' }))
   const config = resolveConfig({
     ...DEFAULT_CONFIG,
-    ownerUserId: 'owner-1',
+    ownerHandle: 'owner-1',
     aiAccountUserId: '1001',
     llmBaseUrl: 'http://127.0.0.1:1/v1',
     llmModel: 'test-model',
@@ -74,7 +74,7 @@ function makeRig(input: { adapter?: FakeAdapter } = {}): {
 
 /** Drive a session to the point where publishing is the next step. */
 async function prepare(rig: ReturnType<typeof makeRig>): Promise<{ sessionId: string; candidateId: string; text: string }> {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: TRIGGER })
   const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
   return { sessionId: analysis.sessionId, candidateId: generated.candidateId, text: generated.text }

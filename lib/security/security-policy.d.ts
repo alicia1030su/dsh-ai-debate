@@ -159,6 +159,8 @@ export declare function describeAssessment(assessment: CandidateSecurityAssessme
 export declare function ownerFromBinding(input: {
     readonly platform: string;
     readonly accountId?: string;
+    /** Platform-verified login name, v0.2.23. */
+    readonly handle?: string;
     readonly displayName?: string;
 }): VerifiedOwner;
 //# sourceMappingURL=security-policy.d.ts.map

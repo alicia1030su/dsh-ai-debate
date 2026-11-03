@@ -35,6 +35,10 @@ function sessionOn(platform: string, id: string) {
     threadTitle: '帖子',
     forumName: '版块',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     disputeFloorPostId: 'n1',
     disputeFloorNumber: 1,
     triggerPostId: 'n2',

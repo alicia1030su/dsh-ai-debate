@@ -45,6 +45,10 @@ function readySession(): Record<string, unknown> {
     threadTitle: '测试帖',
     forumName: '测试吧',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',

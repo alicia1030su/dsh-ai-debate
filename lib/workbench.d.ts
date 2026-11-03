@@ -100,11 +100,46 @@ export interface MissingEvidence {
     readonly detail: string;
 }
 /** Everything the workbench page needs, in one shape. */
+/**
+ * The five states the workbench must let a reader tell apart.
+ *
+ * | state | what it means | can publish |
+ * | --- | --- | --- |
+ * | `verified` | evidence supports the owner's identity | yes |
+ * | `unverified` | readable, but nothing proves who it is | no |
+ * | `conflict` | two surfaces proved *different* accounts | no, must be resolved |
+ * | `legacy_unknown` | a pre-v0.2.23 record; provenance was never recorded | no |
+ * | `recheck_required` | identity is fine; the *target* is re-read at publish | proceed, with warning |
+ *
+ * The last one is not a defect. Target authorship is deliberately re-verified at
+ * send time, so "this still needs a check" is the normal state of a ready page,
+ * not a failure — and saying so is what keeps the other four believable.
+ */
+export type OwnerIdentityViewState = 'verified' | 'unverified' | 'conflict' | 'legacy_unknown' | 'recheck_required' | 'unknown';
+export interface OwnerIdentityView {
+    readonly state: OwnerIdentityViewState;
+    /** One line a person can act on. Never "unknown error". */
+    readonly detail: string;
+    /** True when the publish button must not be offered. */
+    readonly blocking: boolean;
+    /** The evidence, in words, for the reader who wants to check. */
+    readonly evidence?: string;
+}
 export interface WorkbenchState {
     readonly step: WorkbenchStep;
     readonly steps: readonly WorkbenchStepView[];
     /** Ordered reasons the *next* irreversible action cannot happen yet. */
     readonly blockers: readonly string[];
+    /**
+     * What is known about the *owner's* identity, and whether it is enough.
+     *
+     * v0.2.23 surfaced a bare "cannot publish" with no reason. A grey button that
+     * says nothing teaches the reader to guess, and the guess is usually "the tool is
+     * broken". This carries the five states the page must distinguish, all derived
+     * from the session plus the evidence the gate itself uses — never inferred by the
+     * client, which cannot see the session at all.
+     */
+    readonly ownerIdentity: OwnerIdentityView;
     /**
      * Facts the reader must know but that do not block anything.
      *
@@ -225,6 +260,21 @@ export declare function deriveWorkbenchState(input: WorkbenchInput): WorkbenchSt
  * truth: this page has not re-read the platform, and no boolean stored here could make
  * it have done so.
  */
+/**
+ * Describe what is known about the owner's identity.
+ *
+ * ## Derived, not stored
+ *
+ * This reads the session's evidence and recomputes with the *same* function the
+ * publish gate uses (`assuranceFromEvidence`). A page that invented its own idea of
+ * "verified" would sooner or later disagree with the gate, and the disagreement
+ * would show up as a button that lies.
+ *
+ * The order of checks matters: a conflict is reported before "unverified", because
+ * "we proved these are different people" is more informative — and more alarming —
+ * than "we could not prove anything".
+ */
+export declare function describeOwnerIdentity(session: StoredSession | undefined): OwnerIdentityView;
 export declare function describeTargetIdentity(candidate: Pick<StoredCandidate, 'targetSnapshot'> | undefined, contentApproved: boolean): TargetIdentityView;
 /**
  * Whether an approval still authorizes the candidate **as it is now**.

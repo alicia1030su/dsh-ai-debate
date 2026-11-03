@@ -17,12 +17,26 @@
 import {
   PlatformError,
   type Floor,
+  type IdentitySource,
   type NestedReply,
   type PlatformAdapter,
+  type PlatformId,
   type ReplyContext,
   type Thread,
   type ThreadRef,
 } from './types.js'
+import {
+  assuranceOf,
+  conflictBetween,
+  corroborationOf,
+  corroborationReason,
+  type CorroborationReason,
+  type CorroborationVerdict,
+  type IdentityObservation,
+  type AuthorIdentity,
+  type IdentityAssurance,
+  type IdentityConflictReport,
+} from './identity.js'
 
 /** How much of a thread to collect. */
 export interface CollectOptions {
@@ -106,6 +120,33 @@ export interface CollectedThread {
   readonly complete: boolean
   /** The separated verdicts. Always present on a v0.2.2 or later read. */
   readonly completeness: CompletenessReport
+  /**
+   * How well each post's identity was corroborated (v0.2.23 patch 5).
+   *
+   * Separate from `assurance` because the two answer different questions: assurance
+   * says "is this enough to act on", corroboration says "was it checked twice".
+   * Merging them is how a single-source match ends up described as cross-verified.
+   */
+  readonly corroboration?: ReadonlyMap<string, CorroborationVerdict>
+  /**
+   * Why each corroboration verdict came out that way.
+   *
+   * Carried alongside rather than recomputed by the consumer: the collector is the
+   * only place that saw the per-surface observations, and a second derivation could
+   * disagree with the first.
+   */
+  readonly corroborationReasons?: ReadonlyMap<string, CorroborationReason>
+  /**
+   * Every identity sighting per post id, including ones whose comment was
+   * de-duplicated away (v0.2.23 patch 8).
+   *
+   * Exposed so a caller can audit *why* a verdict came out the way it did, and so
+   * the fact that two surfaces spoke about one comment survives anywhere the raw
+   * collection is inspected.
+   */
+  readonly identityObservations?: ReadonlyMap<string, readonly IdentityObservation[]>
+  /** Post ids whose distinct sightings exceeded the retention cap. */
+  readonly observationOverflow?: readonly string[]
   /** Floors the platform declares but that were not readable (usually deleted). */
   readonly missingCount?: number
   /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -122,6 +163,16 @@ export interface CollectedThread {
 
   /** True when any floor's nested replies were read incompletely. */
   readonly nestedIncomplete?: boolean
+  /**
+   * Proven cross-source authorship disagreements found while collecting
+   * (v0.2.23).
+   *
+   * A non-empty list means at least one post id was described by two surfaces
+   * with identities that cannot both be true. Owner resolution and publishing
+   * must refuse while this is non-empty for the affected post — see
+   * `analyzer.resolveOwnerKey` and `safety.checkPublishPolicy`.
+   */
+  readonly identityConflicts?: readonly IdentityConflictReport[]
   /** Non-fatal problems, phrased for a human. */
   readonly issues: readonly string[]
 }
@@ -305,6 +356,17 @@ export async function walkFloors(
                 : '上一页明确表示还有更多内容') +
             '：已读取的部分保留，但这不是完整结果。',
         )
+      } else {
+        // v0.2.23: a failure with no evidence of more pages is still a failure,
+        // and the reason must survive. v0.2.22 left `issues` empty here, so the
+        // only thing a caller could report was "no floors" — which the tool
+        // turned into "the post may be deleted or require login", even when the
+        // platform had answered with a security-verification page.
+        issues = appendIssue(
+          issues,
+          `第 ${page} 页读取失败（${failed}）：没有读到任何内容，` +
+            '这不是「读完了」，是「没有开始」。',
+        )
       }
       break
     }
@@ -468,15 +530,76 @@ export async function walkFloors(
   }
 }
 
+/**
+ * Distinct identity sightings kept per comment before the cap applies.
+ *
+ * Bounded because a hostile or broken page could otherwise enumerate handles for one
+ * post id indefinitely. Reachable combinations in practice are three origins times a
+ * handful of values, so this is far above normal and low enough to stay small.
+ */
+const MAX_OBSERVATIONS_PER_POST = 8
+
 /** Walk every page of nested replies under one floor. */
 export async function walkNested(
   adapter: PlatformAdapter,
   ref: ThreadRef,
   floor: Floor,
   options: { maxPages?: number; signal?: AbortSignal } = {},
-): Promise<{ replies: readonly NestedReply[]; complete: boolean; error?: string; degraded?: boolean }> {
+): Promise<{
+  replies: readonly NestedReply[]
+  complete: boolean
+  error?: string
+  degraded?: boolean
+  conflicts?: readonly IdentityConflictReport[]
+  assurance?: ReadonlyMap<string, IdentityAssurance>
+  /** How well each post's identity was corroborated (v0.2.23 patch 5). */
+  corroboration?: ReadonlyMap<string, CorroborationVerdict>
+  /** The reason behind each verdict, for user-facing text. */
+  corroborationReasons?: ReadonlyMap<string, CorroborationReason>
+  /** Every retained identity sighting, per post id. */
+  identityObservations?: ReadonlyMap<string, IdentityObservation[]>
+  /** Post ids that hit the retention cap. */
+  observationOverflow?: string[]
+}> {
   const maxPages = options.maxPages ?? 10
   const seen = new Map<string, NestedReply>()
+  /**
+   * The first sighting of each post id, kept so a later sighting can be compared
+   * against it instead of being discarded.
+   *
+   * v0.2.22 dropped the duplicate here with `if (!seen.has(...))`. That is the
+   * one place where a cross-source disagreement could have been noticed, and it
+   * was exactly the place that threw it away.
+   */
+  const firstSurface = new Map<string, NestedReply>()
+  /**
+   * Every identity sighting, kept per post id (v0.2.23 patch 8).
+   *
+   * ## Why this is separate from `seen`
+   *
+   * `seen` de-duplicates comments by post id, which is right for counting, for
+   * candidate generation and for publishing. But the corroboration verdict used to be
+   * computed from that same de-duplicated list, so `replies.filter(postId === x)`
+   * always returned a single row — one observation per post, forever. `corroborated`,
+   * `incomparable` and `inconsistent` were unreachable through the production path
+   * even though each had passing unit tests.
+   *
+   * This map is written *before* a duplicate is discarded, so the second sighting of
+   * a comment survives for identity analysis while the comment itself is still
+   * counted once.
+   */
+  const identityObservations = new Map<string, IdentityObservation[]>()
+  /** Post ids whose distinct observations exceeded the cap. Never silent. */
+  const observationOverflow = new Set<string>()
+  const record = makeRecorder(identityObservations, observationOverflow)
+  /**
+   * True when the walk stopped while the platform still claimed more replies.
+   *
+   * Distinct from `degraded` (a source that says it is incomplete) and from a short
+   * count: this is "the platform said there is more, and we could not get it".
+   */
+  let truncated = false
+  const conflicts: IdentityConflictReport[] = []
   let page = 1
   let error: string | undefined
   let degraded = false
@@ -492,24 +615,197 @@ export async function walkNested(
     if (result.incomplete) degraded = true
     let added = 0
     for (const reply of result.replies) {
-      if (!seen.has(reply.postId)) {
+      // Recorded for *both* the first sighting and every later one, before the
+      // duplicate is discarded below.
+      record(reply)
+      const previous = firstSurface.get(reply.postId)
+      if (previous === undefined) {
         seen.set(reply.postId, reply)
+        firstSurface.set(reply.postId, reply)
         added += 1
+        continue
+      }
+      const conflict = conflictBetween({
+        platform: reply.platform,
+        postId: reply.postId,
+        first: identityOfReply(previous),
+        second: identityOfReply(reply),
+      })
+      if (conflict !== undefined) {
+        seen.set(reply.postId, {
+          ...previous,
+          identityConflict: {
+            code: 'identity_conflict',
+            summary: conflict.summary,
+            // Not `platform_contract`: an undeclared source is *unknown*, and naming
+            // it makes a reader think a surface was consulted.
+            firstSource: previous.authorSource ?? 'unknown',
+            secondSource: reply.authorSource ?? 'unknown',
+          },
+        })
+        if (!conflicts.some((entry) => entry.postId === reply.postId)) conflicts.push(conflict)
       }
     }
-    if (!result.hasMore || added === 0) break
+    if (!result.hasMore || added === 0) {
+      // Record *why* the walk stopped. `hasMore === true` with no progress means the
+      // platform promised more replies and then served only ones we already had —
+      // the walk ends, but the floor is not complete.
+      //
+      // v0.2.23: this used to be indistinguishable from a clean end, so a rate-limited
+      // or truncated nested read reported `complete: true`. A reader that trusts that
+      // flag believes it has seen every reply the floor has, which is precisely the
+      // claim the "partial reads are never presented as complete" rule forbids.
+      if (result.hasMore) truncated = true
+      break
+    }
     page += 1
   }
 
   const replies = [...seen.values()]
   const declared = floor.nestedCount
+  /**
+   * Per-post assurance, so callers can tell "checked and agreed" from "only one
+   * surface spoke" (v0.2.23).
+   *
+   * Without this, an empty `conflicts` list reads as "authorship is fine", which
+   * is the misreading this map exists to prevent: on Tieba a normal read consults
+   * exactly one surface, so nothing was cross-checked at all.
+   */
+  const assurance = new Map<string, IdentityAssurance>()
+  /**
+   * How well each post's identity was corroborated (v0.2.23 patch 5).
+   *
+   * Computed from *per-surface observations*, not from the number of source names:
+   * "two surfaces were consulted" and "two surfaces agreed" are different claims,
+   * and only the second may be shown to the user as cross-checked.
+   */
+  const corroboration = new Map<string, CorroborationVerdict>()
+  const corroborationReasons = new Map<string, CorroborationReason>()
+  for (const [postId, reply] of firstSurface) {
+    // Every sighting of this post id, not just the first and one later one: the
+    // earlier code looked at two entries, so a third surface could never contribute
+    // to (or contradict) the verdict.
+    // From the retained observations, not from `replies`: that list is de-duplicated
+    // by post id, so filtering it always produced exactly one row and made every
+    // verdict but `single_source` unreachable.
+    // Already in observation shape, and already provenance-honest: an undeclared
+    // source stays absent so it cannot pose as an independent surface.
+    const observations = identityObservations.get(postId) ?? []
+    // Only declared origins. An undeclared row contributes nothing to the source
+    // list, which is what makes "two sources" mean two real surfaces.
+    const sources = new Set(
+      observations
+        .map((entry) => entry.source)
+        .filter((value): value is IdentitySource => value !== undefined),
+    )
+    const conflicted = conflicts.some((entry) => entry.postId === postId)
+    const sighting = {
+      ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+      ...(reply.authorId === undefined ? {} : { handle: reply.authorId }),
+      sources: [...sources],
+      conflicted,
+      observations,
+    }
+    assurance.set(postId, assuranceOf(sighting))
+    corroboration.set(postId, corroborationOf(sighting))
+    corroborationReasons.set(postId, corroborationReason(sighting))
+  }
+
   return {
     replies,
     // A page that declares itself incomplete (a degraded source) is never a
-    // complete read, even if the counts happen to line up.
-    complete: error === undefined && !degraded && (declared === undefined || replies.length >= declared),
+    // complete read, even if the counts happen to line up. Neither is a read
+    // containing an unresolved authorship conflict: we cannot claim to have
+    // understood a floor we cannot attribute.
+    complete:
+      error === undefined &&
+      !degraded &&
+      conflicts.length === 0 &&
+      !truncated &&
+      (declared === undefined || replies.length >= declared),
     error,
     degraded,
+    ...(conflicts.length === 0 ? {} : { conflicts }),
+    ...(assurance.size === 0 ? {} : { assurance }),
+    ...(corroboration.size === 0 ? {} : { corroboration }),
+    ...(corroborationReasons.size === 0 ? {} : { corroborationReasons }),
+    ...(identityObservations.size === 0 ? {} : { identityObservations }),
+    ...(observationOverflow.size === 0 ? {} : { observationOverflow: [...observationOverflow] }),
+  }
+}
+
+/**
+ * Project a nested reply onto the identity fields the comparison needs.
+ *
+ * A record with no `authorSource` predates v0.2.23 and is returned as a legacy
+ * identity: its `authorId` is deliberately **not** promoted to a handle, because
+ * we know it was some account string but not which namespace it belonged to.
+ * That makes it compare as `unknown_legacy_record` rather than accidentally
+ * matching a handle today.
+ */
+function identityOfReply(reply: NestedReply): AuthorIdentity {
+  const legacy = reply.authorSource === undefined
+  // A value already declared as the numeric uid must not also be read as a
+  // handle: one string cannot belong to two namespaces at once.
+  const duplicated = reply.authorNumericUid !== undefined && reply.authorId === reply.authorNumericUid
+  return {
+    platform: reply.platform,
+    ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+    ...(reply.authorNumericUidKind === undefined
+      ? {}
+      : { numericUidKind: reply.authorNumericUidKind }),
+    ...(legacy || reply.authorId === undefined || duplicated ? {} : { handle: reply.authorId }),
+    ...(reply.authorName === undefined ? {} : { displayName: reply.authorName }),
+    // Absent, not renamed: an unknown origin must not present itself as a surface.
+    ...(reply.authorSource === undefined ? {} : { source: reply.authorSource }),
+  }
+}
+
+/**
+ * Add one sighting, ignoring exact repeats and flagging any overflow.
+ *
+ * Two rules, both deliberate:
+ *
+ * - an **identical** sighting is dropped. The same surface answering twice is one
+ *   piece of evidence, and keeping both would let a retry look like corroboration.
+ * - a cap, but **not silent**: once exceeded, the post id is recorded in
+ *   `observationOverflow` and surfaced in the corroboration reason. Dropping a
+ *   conflicting sighting quietly is the one thing this must not do, because that is
+ *   exactly how a real disagreement disappears.
+ */
+function makeRecorder(
+  store: Map<string, IdentityObservation[]>,
+  overflow: Set<string>,
+): (reply: NestedReply) => void {
+  return (reply) => {
+    const observation = observationOf(reply)
+    const existing = store.get(reply.postId) ?? []
+    const key = (entry: IdentityObservation): string =>
+      `${entry.source ?? ''}|${entry.handle ?? ''}|${entry.numericUid ?? ''}|${entry.namespace ?? ''}`
+    if (existing.some((entry) => key(entry) === key(observation))) return
+    if (existing.length >= MAX_OBSERVATIONS_PER_POST) {
+      overflow.add(reply.postId)
+      return
+    }
+    existing.push(observation)
+    store.set(reply.postId, existing)
+  }
+}
+
+/**
+ * What one sighting says about the author, in the shape corroboration consumes.
+ *
+ * Kept separate from {@link identityOfReply} because that one deliberately hides a
+ * legacy row's `authorId` (it cannot prove it was a handle). Corroboration needs the
+ * raw value to notice that two sightings disagree, and the row is still `__unknown__`
+ * provenance so it never counts as an independent source.
+ */
+function observationOf(reply: NestedReply): IdentityObservation {
+  return {
+    ...(reply.authorSource === undefined ? {} : { source: reply.authorSource }),
+    ...(reply.authorId === undefined ? {} : { handle: reply.authorId }),
+    ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+    ...(reply.authorNumericUidKind === undefined ? {} : { namespace: reply.authorNumericUidKind }),
   }
 }
 
@@ -601,6 +897,21 @@ export async function collectThread(
   let nestedDone = 0
 
   let nestedIncomplete = false
+  /** Proven cross-source disagreements, accumulated across every floor. */
+  const identityConflicts: IdentityConflictReport[] = []
+  /**
+   * Per-post corroboration verdicts, accumulated across every floor.
+   *
+   * The same shape `walkNested` produces; folded here so the analyzer can say whether
+   * the owner's identity was checked once or twice. Keys are post ids, which are
+   * unique across floors, so a later floor cannot silently overwrite an earlier
+   * verdict with a different one.
+   */
+  const corroboration = new Map<string, CorroborationVerdict>()
+  /** Why each verdict came out that way, so callers can explain it without re-deriving. */
+  const corroborationReasons = new Map<string, CorroborationReason>()
+  const identityObservations = new Map<string, IdentityObservation[]>()
+  const observationOverflow = new Set<string>()
   for (const floor of floors) {
     const targetIndex = nestedTargets.indexOf(floor)
     const shouldFetch = nestedLimit > 0 && targetIndex >= 0 && targetIndex < nestedLimit
@@ -621,6 +932,34 @@ export async function collectThread(
       total: Math.min(nestedTargets.length, nestedLimit),
     })
     const nested = await walkNested(adapter, ref, floor, { signal: options.signal })
+    // v0.2.23: a proven authorship disagreement makes the whole read untrustworthy
+    // for owner purposes. Collected here, reported upward, never resolved here.
+    if (nested.conflicts !== undefined) {
+      for (const conflict of nested.conflicts) {
+        identityConflicts.push(conflict)
+        issues.push(conflict.summary)
+      }
+    }
+    // Corroboration is per post id across all surfaces, so it is collected here and
+    // reported upward — the same way conflicts are.
+    if (nested.corroboration !== undefined) {
+      for (const [postId, verdict] of nested.corroboration) {
+        corroboration.set(postId, verdict)
+      }
+    }
+    if (nested.corroborationReasons !== undefined) {
+      for (const [postId, reason] of nested.corroborationReasons) {
+        corroborationReasons.set(postId, reason)
+      }
+    }
+    if (nested.identityObservations !== undefined) {
+      for (const [postId, sightings] of nested.identityObservations) {
+        identityObservations.set(postId, [...sightings])
+      }
+    }
+    if (nested.observationOverflow !== undefined) {
+      for (const postId of nested.observationOverflow) observationOverflow.add(postId)
+    }
     if (nested.error) {
       nestedIncomplete = true
       issues.push(`${floorLabel(floor.floorNumber, floor.postId)} 楼中楼读取失败：${nested.error}`)
@@ -661,6 +1000,11 @@ export async function collectThread(
     stopReason: all.stopReason,
     truncated: all.truncated,
     nestedIncomplete,
+    ...(identityConflicts.length === 0 ? {} : { identityConflicts }),
+    ...(corroboration.size === 0 ? {} : { corroboration }),
+    ...(corroborationReasons.size === 0 ? {} : { corroborationReasons }),
+    ...(identityObservations.size === 0 ? {} : { identityObservations }),
+    ...(observationOverflow.size === 0 ? {} : { observationOverflow: [...observationOverflow] }),
     issues,
   }
 }
@@ -758,6 +1102,14 @@ export interface TimelineEntry {
   readonly kind: 'floor' | 'nested'
   readonly postId: string
   /**
+   * Which platform this entry came from (v0.2.23).
+   *
+   * Needed by owner resolution: the meaning of a legacy `authorId` is a property
+   * of the platform's contract (Tieba: a login name; Weibo: a stable account id),
+   * not of the string's shape.
+   */
+  readonly platform: PlatformId
+  /**
    * The floor this entry belongs to, by the floor post's stable id.
    *
    * v0.2.1: this is the grouping key. It used to be `floorNumber`, which forced
@@ -771,6 +1123,23 @@ export interface TimelineEntry {
   readonly floorNumber?: number
   readonly authorId?: string
   readonly authorName?: string
+  /**
+   * Numeric account id, when a surface stated one as a number (v0.2.23).
+   *
+   * Absent for WAP-floor and WAP-inline rows, which carry no uid at all. Its
+   * presence is what lets an owner configured with a numeric id be matched
+   * *provably* instead of by comparing that id against a login name.
+   */
+  readonly authorNumericUid?: string
+  /**
+   * Which namespace `authorNumericUid` belongs to (v0.2.23).
+   *
+   * Carried onto the timeline so the identity key can place the number. Tieba has
+   * two unrelated numeric namespaces; a number without one cannot be compared.
+   */
+  readonly authorNumericUidNamespace?: 'user_id' | 'tieba_uid'
+  /** Which surface produced the author fields above (v0.2.23). */
+  readonly authorSource?: IdentitySource
   /** Display order within the floor; floors use 0. */
   readonly order: number
   readonly content: string
@@ -786,10 +1155,16 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
     out.push({
       kind: 'floor',
       postId: entry.floor.postId,
+      platform: entry.floor.platform,
       floorPostId: entry.floor.postId,
       floorNumber: entry.floor.floorNumber,
       authorId: entry.floor.authorId,
       authorName: entry.floor.authorName,
+      ...(entry.floor.authorNumericUid === undefined ? {} : { authorNumericUid: entry.floor.authorNumericUid }),
+      ...(entry.floor.authorNumericUidKind === undefined
+        ? {}
+        : { authorNumericUidNamespace: entry.floor.authorNumericUidKind }),
+      ...(entry.floor.authorSource === undefined ? {} : { authorSource: entry.floor.authorSource }),
       order: 0,
       content: entry.floor.content,
       createdAt: entry.floor.createdAt,
@@ -798,10 +1173,16 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
       out.push({
         kind: 'nested',
         postId: reply.postId,
+        platform: reply.platform,
         floorPostId: entry.floor.postId,
         floorNumber: entry.floor.floorNumber,
         authorId: reply.authorId,
         authorName: reply.authorName,
+        ...(reply.authorNumericUid === undefined ? {} : { authorNumericUid: reply.authorNumericUid }),
+        ...(reply.authorNumericUidKind === undefined
+          ? {}
+          : { authorNumericUidNamespace: reply.authorNumericUidKind }),
+        ...(reply.authorSource === undefined ? {} : { authorSource: reply.authorSource }),
         order: index + 1,
         content: reply.content,
         createdAt: reply.createdAt,
@@ -846,6 +1227,22 @@ export function floorOf(
 /** Throw a normalized error when a thread could not be read at all. */
 export function assertCollected(collected: CollectedThread): void {
   if (collected.floors.length === 0) {
-    throw new PlatformError('没有读取到任何楼层，该帖子可能已删除或需要登录', 'not_found')
+    // v0.2.23: carry the walk's own explanation instead of replacing it with a
+    // guess. "可能已删除或需要登录" was wrong for the most common real failure —
+    // an anti-bot page — and sent the owner looking for a deleted thread while
+    // the fix was to open a browser and clear the verification.
+    //
+    // The code is `not_found` only when the walk actually said the content is
+    // gone; a verification page or a transport error keeps its own code so the
+    // tool layer can word it correctly.
+    const reason = collected.issues[0]
+    const challenge = collected.issues.some((issue) => /安全验证|人机验证|验证码/.test(issue))
+    const gone = collected.stopReason === 'deleted_or_unavailable' && !challenge
+    throw new PlatformError(
+      reason === undefined
+        ? '没有读取到任何楼层，该帖子可能已删除或需要登录'
+        : `没有读取到任何楼层：${reason}`,
+      challenge ? 'captcha' : gone ? 'not_found' : 'unknown',
+    )
   }
 }

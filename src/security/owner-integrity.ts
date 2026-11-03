@@ -64,6 +64,15 @@ export interface StanceProblem {
 export interface VerifiedOwner {
   /** Platform-verified account id. The only thing that may define "the owner". */
   readonly accountId?: string
+  /**
+   * Platform-verified login name (`un`), v0.2.23.
+   *
+   * A binding may carry a handle instead of a numeric id — that is all Tieba's
+   * WAP surface ever publishes. Without it, a handle-only profile looked like an
+   * unbound one and was blocked by the security gate rather than by the identity
+   * gate.
+   */
+  readonly handle?: string
   readonly displayName?: string
   readonly platform: string
 }
