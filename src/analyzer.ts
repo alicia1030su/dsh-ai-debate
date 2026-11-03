@@ -17,6 +17,7 @@
 import type { NestedReply, PlatformId } from './types.js'
 import type { CollectedThread, TimelineEntry } from './collector.js'
 import { buildTimeline, floorOf } from './collector.js'
+import type { IdentitySource, OwnerIdentityEvidence } from './identity.js'
 
 /** How the owner was identified. */
 export type OwnerMatchKind = 'id' | 'name'
@@ -48,6 +49,14 @@ export interface Participant {
    * present itself as a uid match.
    */
   readonly legacyAccountId?: string
+  /**
+   * Which surface this participant's records came from (v0.2.23).
+   *
+   * Carried onto the evidence so a handle match can say *where* the login name was
+   * seen. Absent for all-legacy participants, which is precisely why they cannot
+   * be verified.
+   */
+  readonly source?: IdentitySource
   /**
    * True when at least one of this participant's records declared which surface it
    * came from (v0.2.23).
@@ -150,6 +159,13 @@ export interface Dispute {
    * reads this field; a note would only be read by a human who happened to look.
    */
   readonly ownerIdentityAssurance: 'verified' | 'unverified'
+  /**
+   * What backed that assurance (v0.2.23).
+   *
+   * Carried so the publish gate can *recompute* the verdict instead of trusting a
+   * stored string. See `OwnerIdentityEvidence` for why a bare label was not enough.
+   */
+  readonly ownerIdentityEvidence: OwnerIdentityEvidence
 }
 
 /** The trigger that started this task. */
@@ -181,6 +197,14 @@ export interface OwnerIdentity {
   readonly platform?: PlatformId
   /** Stable platform id; preferred. */
   readonly userId?: string
+  /**
+   * Which namespace `userId` belongs to (v0.2.23).
+   *
+   * A bare number is not an identity: Tieba publishes both a `user_id` and a
+   * `tieba_uid`, in unrelated namespaces. Recording which one the config meant
+   * lets the gate refuse a numeric claim that cannot be placed.
+   */
+  readonly userIdNamespace?: 'user_id' | 'tieba_uid'
   /**
    * Login name (`un`) as published by the platform (v0.2.23).
    *
@@ -354,6 +378,7 @@ export function analyzeDispute(
     needsConfirmation: opponentPick.ambiguous,
     notes,
     ownerIdentityAssurance: resolvedOwner.assurance,
+    ownerIdentityEvidence: resolvedOwner.evidence,
   }
 }
 
@@ -490,6 +515,9 @@ function indexParticipants(
         handle: existing.handle ?? handleForThisEntry,
         legacyAccountId: existing.legacyAccountId ?? legacyAccountId,
         hasDeclaredSource: existing.hasDeclaredSource === true || !legacyShape,
+        ...(existing.source === undefined && entry.authorSource !== undefined
+          ? { source: entry.authorSource }
+          : {}),
         matchKind: existing.userId ?? numericForThisEntry ?? existing.handle ?? handleForThisEntry ? 'id' : 'name',
         postCount: existing.postCount + 1,
         lastPostId: entry.postId,
@@ -504,6 +532,14 @@ function indexParticipants(
       handle: handleForThisEntry,
       legacyAccountId,
       hasDeclaredSource: !legacyShape,
+      // A platform whose contract states the account id in `authorId` needs no
+      // per-row source label: the adapter's promise *is* the provenance. Tieba is
+      // the exception, because its `authorId` is a login name, not an account id.
+      ...(entry.authorSource !== undefined
+        ? { source: entry.authorSource }
+        : entry.platform !== undefined && entry.platform !== 'tieba'
+          ? { source: 'platform_contract' as IdentitySource }
+          : {}),
       displayName: name,
       matchKind: numericForThisEntry ?? handleForThisEntry ? 'id' : 'name',
       postCount: 1,
@@ -590,7 +626,15 @@ function resolveOwnerKey(
   participants: ReadonlyMap<string, Participant>,
   owner: OwnerIdentity,
   notes: string[],
-): { readonly key: string; readonly assurance: 'verified' | 'unverified' } {
+): {
+  readonly key: string
+  readonly assurance: 'verified' | 'unverified'
+  /**
+   * What backed the resolution. Derived, never asserted: the publish gate recomputes
+   * the assurance from this record instead of trusting the string above.
+   */
+  readonly evidence: OwnerIdentityEvidence
+} {
   if (owner.userId) {    // Cross-platform refusal comes first, before any id comparison.
     //
     // A user id is scoped to one platform: Tieba's `user_id` and Weibo's `uid`
@@ -609,7 +653,24 @@ function resolveOwnerKey(
 
     for (const participant of participants.values()) {
       if (participant.userId === owner.userId) {
-        return { key: participant.key, assurance: 'verified' }
+        return {
+          key: participant.key,
+          assurance: 'verified',
+          // The configured id is a numeric uid and `participant.userId` only ever
+          // holds `authorNumericUid`, so the namespace is the one the config named.
+          evidence: {
+            kind: 'numeric_uid',
+            // Tieba needs an explicit choice because it has two numeric namespaces;
+            // any other platform has exactly one, and that platform is the namespace.
+            ...(owner.userIdNamespace !== undefined
+              ? { namespace: owner.userIdNamespace }
+              : owner.platform !== undefined && owner.platform !== 'tieba'
+                ? { namespace: `platform:${owner.platform}` as const }
+                : {}),
+            value: owner.userId,
+            ...(participant.source === undefined ? {} : { source: participant.source }),
+          },
+        }
       }
     }
 
@@ -625,13 +686,25 @@ function resolveOwnerKey(
         // coincidence, and promoting that would grant a stable-identity permission
         // to data that never carried one.
         if (participant.hasDeclaredSource === true) {
-          return { key: participant.key, assurance: 'verified' }
+          return {
+            key: participant.key,
+            assurance: 'verified',
+            evidence: {
+              kind: 'handle',
+              value: owner.handle,
+              ...(participant.source === undefined ? {} : { source: participant.source }),
+            },
+          }
         }
         notes.push(
           `登录名「${owner.handle}」匹配到一条旧格式记录（没有记录标识来源）：` +
             '身份未核验，只用于读取，不能据此发表。',
         )
-        return { key: participant.key, assurance: 'unverified' }
+        return {
+          key: participant.key,
+          assurance: 'unverified',
+          evidence: { kind: 'legacy', value: owner.handle },
+        }
       }
     }
 
@@ -659,7 +732,14 @@ function resolveOwnerKey(
         `主人是通过一条旧格式记录匹配的（账号字段「${legacyMatch.legacyAccountId}」，` +
           '写入时没有记录标识类型）：身份未核验，只用于读取，不能据此发表。',
       )
-      return { key: legacyMatch.key, assurance: 'unverified' }
+      return {
+        key: legacyMatch.key,
+        assurance: 'unverified',
+        evidence: {
+          kind: 'legacy',
+          ...(legacyMatch.legacyAccountId === undefined ? {} : { value: legacyMatch.legacyAccountId }),
+        },
+      }
     }
 
     // The id did not match. Whether a nickname fallback is even conceivable
@@ -699,13 +779,25 @@ function resolveOwnerKey(
     for (const participant of participants.values()) {
       if (participant.handle !== owner.handle) continue
       if (participant.hasDeclaredSource === true) {
-        return { key: participant.key, assurance: 'verified' }
+        return {
+          key: participant.key,
+          assurance: 'verified',
+          evidence: {
+            kind: 'handle',
+            value: owner.handle,
+            ...(participant.source === undefined ? {} : { source: participant.source }),
+          },
+        }
       }
       notes.push(
         `登录名「${owner.handle}」匹配到一条旧格式记录（没有记录标识来源）：` +
           '身份未核验，只用于读取，不能据此发表。',
       )
-      return { key: participant.key, assurance: 'unverified' }
+      return {
+        key: participant.key,
+        assurance: 'unverified',
+        evidence: { kind: 'legacy', value: owner.handle },
+      }
     }
     throw new Error(
       `帖子里没有登录名「${owner.handle}」的发言：` +
@@ -725,7 +817,11 @@ function resolveOwnerKey(
         )
       }
       notes.push(`主人是通过昵称「${owner.userName}」匹配的，建议改为配置稳定的用户 ID`)
-      return { key: match.key, assurance: 'unverified' }
+      return {
+        key: match.key,
+        assurance: 'unverified',
+        evidence: { kind: 'nickname', value: owner.userName },
+      }
     }
     throw new Error(
       `在帖子里没有找到主人（昵称 ${owner.userName}）的发言：` +

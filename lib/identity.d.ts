@@ -256,6 +256,77 @@ export declare function allowsAutomaticIdentityDecision(assurance: IdentityAssur
 /** A short, honest phrase for each level, suitable for a UI badge or a log. */
 export declare function describeAssurance(assurance: IdentityAssurance): string;
 /**
+ * Why a particular owner resolution was allowed to call itself `verified`.
+ *
+ * ## The problem this type exists to close
+ *
+ * v0.2.23's first pass stored `ownerIdentityAssurance` as a bare string on the
+ * session. That string was then read straight back by the publish gate, which
+ * meant `"unverified"` → `"verified"` in the session JSON was a complete bypass:
+ * edit one word in a file, and the gate opens. A gate whose verdict is stored as
+ * the very thing it is supposed to decide is not a gate, it is a comment.
+ *
+ * So the assurance is now **derived** from evidence at publish time. The stored
+ * string is kept for display only; the gate recomputes from this record and
+ * refuses when the evidence does not support the claim.
+ *
+ * Evidence is deliberately small and non-forgeable-by-accident: it names *which*
+ * namespace the identifier belongs to and *which* surface declared it. There is
+ * no field that says "trust me".
+ */
+/**
+ * The namespace a numeric identifier belongs to.
+ *
+ * Tieba publishes two unrelated numeric ids (`user_id` and `tieba_uid`), so those
+ * are named explicitly. Every other platform has a single numeric account id, and
+ * there the platform *is* the namespace — spelling it as `platform:<id>` keeps the
+ * record honest without inventing an equivalence to Tieba's fields.
+ */
+export type NumericUidNamespace = NumericUidKind | `platform:${string}`;
+export interface OwnerIdentityEvidence {
+    /**
+     * What kind of identifier backed the resolution.
+     *
+     * `none` and `legacy` both yield `unverified` — they are recorded rather than
+     * omitted so the UI can say *why* instead of showing a blank.
+     */
+    readonly kind: 'numeric_uid' | 'handle' | 'nickname' | 'legacy' | 'none';
+    /**
+     * The namespace a numeric identifier belongs to.
+     *
+     * Required for `numeric_uid`: a bare number is not an identity (Tieba's `un`
+     * can itself be all digits), so a numeric claim without a namespace is treated
+     * as unproven.
+     */
+    readonly namespace?: NumericUidNamespace;
+    /** The identifier value that matched, for the audit trail and the UI. */
+    readonly value?: string;
+    /**
+     * Which surface declared the identifier.
+     *
+     * A handle only counts when a source actually said "this row's author field is
+     * a login name". Rows with no recorded surface are legacy and cannot verify.
+     */
+    readonly source?: IdentitySource;
+}
+/**
+ * Recompute the assurance from evidence.
+ *
+ * ## This is the only function allowed to say "verified"
+ *
+ * Both the analyzer (when writing a session) and the publish gate (when deciding)
+ * call it. Having one implementation is the point: if the gate had its own idea
+ * of what counts, the two would drift and the drift would be the vulnerability.
+ */
+export declare function assuranceFromEvidence(evidence: OwnerIdentityEvidence | undefined): 'verified' | 'unverified';
+/**
+ * Explain an assurance in terms of the evidence, for a UI badge or a log line.
+ *
+ * The wording is the difference between "we checked" and "we guessed", and a user
+ * who cannot tell those apart cannot decide whether to trust a reply.
+ */
+export declare function describeEvidence(evidence: OwnerIdentityEvidence | undefined): string;
+/**
  * Explain why a configured owner could not be established.
  *
  * Worded for the person who configured it: what is missing, and what would fix

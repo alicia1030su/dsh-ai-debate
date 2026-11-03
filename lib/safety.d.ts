@@ -8,6 +8,7 @@
  * publisher consults the store instead of trusting its own memory.
  */
 import type { TaskState } from './store.js';
+import { type OwnerIdentityEvidence } from './identity.js';
 /** True when a transition is legal. */
 export declare function canTransition(from: TaskState, to: TaskState): boolean;
 /** Apply a transition, throwing when it is illegal. */
@@ -106,6 +107,20 @@ export interface PublishAttempt {
      * unverified: "we never checked" is not "it is fine".
      */
     readonly ownerIdentityAssurance?: 'verified' | 'unverified';
+    /**
+     * The evidence behind `ownerIdentityAssurance` (v0.2.23).
+     *
+     * ## Why the gate no longer reads the label alone
+     *
+     * Storing the verdict and then trusting it on the way back in means the verdict
+     * is only as good as the file's integrity. Editing `"unverified"` to `"verified"`
+     * in the session JSON opened the gate completely — reproduced, then closed by
+     * requiring this record and recomputing from it.
+     *
+     * `assuranceFromEvidence()` is the single implementation; the analyzer writes
+     * with it and the gate decides with it, so the two cannot drift.
+     */
+    readonly ownerIdentityEvidence?: OwnerIdentityEvidence;
     /**
      * Whether the debate analysis itself is settled (v0.2.14 §6.4).
      *

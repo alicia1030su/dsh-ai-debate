@@ -193,6 +193,9 @@ test('发表闸门：无冲突时同一策略仍可放行（对照）', () => {
     // The control: nothing about identity is in question, so the policy's other
     // gates are the only ones that can refuse.
     ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     now: 1_000_000,
   })
   assert.equal(decision.allowed, true)

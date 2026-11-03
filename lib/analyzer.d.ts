@@ -15,6 +15,7 @@
  */
 import type { NestedReply, PlatformId } from './types.js';
 import type { CollectedThread, TimelineEntry } from './collector.js';
+import type { IdentitySource, OwnerIdentityEvidence } from './identity.js';
 /** How the owner was identified. */
 export type OwnerMatchKind = 'id' | 'name';
 /** A person in the conversation. */
@@ -44,6 +45,14 @@ export interface Participant {
      * present itself as a uid match.
      */
     readonly legacyAccountId?: string;
+    /**
+     * Which surface this participant's records came from (v0.2.23).
+     *
+     * Carried onto the evidence so a handle match can say *where* the login name was
+     * seen. Absent for all-legacy participants, which is precisely why they cannot
+     * be verified.
+     */
+    readonly source?: IdentitySource;
     /**
      * True when at least one of this participant's records declared which surface it
      * came from (v0.2.23).
@@ -143,6 +152,13 @@ export interface Dispute {
      * reads this field; a note would only be read by a human who happened to look.
      */
     readonly ownerIdentityAssurance: 'verified' | 'unverified';
+    /**
+     * What backed that assurance (v0.2.23).
+     *
+     * Carried so the publish gate can *recompute* the verdict instead of trusting a
+     * stored string. See `OwnerIdentityEvidence` for why a bare label was not enough.
+     */
+    readonly ownerIdentityEvidence: OwnerIdentityEvidence;
 }
 /** The trigger that started this task. */
 export interface TriggerRef {
@@ -172,6 +188,14 @@ export interface OwnerIdentity {
     readonly platform?: PlatformId;
     /** Stable platform id; preferred. */
     readonly userId?: string;
+    /**
+     * Which namespace `userId` belongs to (v0.2.23).
+     *
+     * A bare number is not an identity: Tieba publishes both a `user_id` and a
+     * `tieba_uid`, in unrelated namespaces. Recording which one the config meant
+     * lets the gate refuse a numeric claim that cannot be placed.
+     */
+    readonly userIdNamespace?: 'user_id' | 'tieba_uid';
     /**
      * Login name (`un`) as published by the platform (v0.2.23).
      *

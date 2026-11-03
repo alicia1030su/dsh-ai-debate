@@ -124,6 +124,9 @@ function sessionWithVerdict(
     forumName: '测试吧',
     ownerKey: 'o',
     ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',
@@ -244,6 +247,9 @@ test('复现 1c：策略现在会读取安全判定（修复前它读不到）',
       // owner verified; otherwise the identity gate answers first and the assertion
       // would be testing a different refusal.
       ownerIdentityAssurance: 'verified' as const,
+      // The evidence the label refers to: a login name declared by a real
+      // surface. Without it the gate refuses the label as unproven.
+      ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
       now: Date.now(),
     },
   )

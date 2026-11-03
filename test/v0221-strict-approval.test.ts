@@ -54,6 +54,9 @@ function attempt(overrides: Partial<PublishAttempt> = {}): PublishAttempt {
     // v0.2.23: this suite tests the approval matrix; the owner is declared
     // verified so the identity gate does not answer for the approval gate.
     ownerIdentityAssurance: 'verified' as const,
+    // The evidence the label refers to: a login name declared by a real
+    // surface. Without it the gate refuses the label as unproven.
+    ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
     now: 1_000_000,
     ...overrides,
   }

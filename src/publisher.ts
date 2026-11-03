@@ -635,7 +635,12 @@ async function sendOnce(
     // from a stale session would be its own source of error.
     // v0.2.23: the owner's assurance travels with the session. A candidate built
     // from an unverified owner cannot be sent even with a valid approval.
+    // The claim and the evidence both travel: the gate recomputes from the second
+    // and refuses when they disagree.
     ownerIdentityAssurance: session.ownerIdentityAssurance,
+    ownerIdentityEvidence: session.ownerIdentityEvidence as
+      | import('./identity.js').OwnerIdentityEvidence
+      | undefined,
     ...(session.identityConflicts === undefined || session.identityConflicts.length === 0
       ? {}
       : {

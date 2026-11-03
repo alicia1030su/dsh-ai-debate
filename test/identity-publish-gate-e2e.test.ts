@@ -1,14 +1,22 @@
 /**
- * The publish gate, end to end, counted.
+ * The publish gate, both directions, counted.
  *
- * Every refusal here asserts **`FakeAdapter.publishReply` was never called**. A
- * refusal that still sends is not a refusal, and asserting only on a boolean
- * would let exactly that through.
+ * ## Why this file exists in this shape
  *
- * The controls matter as much as the refusals: if every case were refused, the
- * suite would be measuring "the gate is closed", not "the gate is correct". Two
- * positive cases run here — a verified owner, and the same session with a real
- * approval — and each asserts the send actually happened.
+ * v0.2.23's first pass proved the gate says *no* — and stopped there. A gate that
+ * only ever says no is not safe, it is broken: the product cannot do its job, and
+ * the "tests" pass while nothing works. This file pins both halves:
+ *
+ * - every refusal asserts `publishReply` was called **zero** times, because a
+ *   refusal that still sends is not a refusal;
+ * - the success case asserts it was called **exactly once**, because otherwise
+ *   every refusal above could be the gate blocking everything.
+ *
+ * ## Evidence, not labels
+ *
+ * Sessions state *what was observed* (`ownerIdentityEvidence`), not just a
+ * verdict. The gate recomputes from the evidence, so a session edited to claim
+ * `verified` without proof is refused exactly like an honest `unverified`.
  *
  * ## What is deliberately *not* claimed
  *
@@ -25,8 +33,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { DebateStore } from '../lib/store.js'
-import { publishCandidate } from '../lib/publisher.js'
+import { publishCandidate, resetInFlight } from '../lib/publisher.js'
 import { checkPublishPolicy } from '../lib/safety.js'
+import { contentHash } from '../lib/target.js'
+import { assessmentFingerprint } from '../lib/security/security-policy.js'
+import { grantApproval } from './helpers.ts'
 import type { StoredSession } from '../lib/store.js'
 import type { PlatformAdapter } from '../lib/types.js'
 
@@ -37,6 +48,15 @@ interface Counters {
   reads: number
 }
 
+const OPPONENT_HANDLE = 'opp_handle_1'
+const OWNER_HANDLE = 'silver_fox'
+const THREAD_ID = '9493941284'
+const FLOOR_POST_ID = '151679645842'
+const TARGET_POST_ID = '151694781657'
+const REPLY_TEXT = '你这条论据没有出处，我不同意这个结论。'
+/** The target's text, as the fixture adapter reports it on every re-read. */
+const TARGET_CONTENT = '你凭什么这么说'
+
 /**
  * An adapter that answers reads and **counts** every publish attempt.
  *
@@ -44,7 +64,20 @@ interface Counters {
  * sending, so it has to answer; `publishReply` is the irreversible one and is the
  * whole point of the counter.
  */
-function countingAdapter(counters: Counters, overrides: { contextAuthorId?: string } = {}): PlatformAdapter {
+function countingAdapter(
+  counters: Counters,
+  overrides: { contextAuthorId?: string } = {},
+): PlatformAdapter {
+  /**
+   * Text of the post this adapter last "published", keyed by the id it returned.
+   *
+   * The publisher reads the reply back after sending and compares both the body and
+   * the author. A fake that answered every post id with the *target's* content would
+   * fail that comparison on every successful send — a fixture artefact, not a real
+   * mismatch, which would make the positive path untestable.
+   */
+  const published = new Map<string, { text: string; authorId: string; authorName: string }>()
+
   return {
     platform: 'tieba',
     async getThread() {
@@ -52,13 +85,13 @@ function countingAdapter(counters: Counters, overrides: { contextAuthorId?: stri
       return {
         platform: 'tieba',
         forum: { platform: 'tieba', id: '9', name: '测试吧' },
-        id: '9493941284',
+        id: THREAD_ID,
         title: '测试帖',
         content: '开场',
-        authorId: 'silver_fox',
+        authorId: OWNER_HANDLE,
         authorName: '苏小玲',
         authorSource: 'wap_floor',
-        url: 'https://tieba.baidu.com/p/9493941284',
+        url: `https://tieba.baidu.com/p/${THREAD_ID}`,
         images: [],
       }
     },
@@ -72,12 +105,68 @@ function countingAdapter(counters: Counters, overrides: { contextAuthorId?: stri
     },
     async getReplyContext(_ref: unknown, postId: string) {
       counters.reads += 1
+      const mine = published.get(postId)
+      if (mine !== undefined) {
+        // What the platform would show for the reply we just sent: its text, and the
+        // account that posted it.
+        return {
+          thread: {
+            platform: 'tieba',
+            forum: { platform: 'tieba', id: '9', name: '测试吧' },
+            id: THREAD_ID,
+            title: '测试帖',
+            content: '开场',
+            authorId: OWNER_HANDLE,
+            authorName: '苏小玲',
+            authorSource: 'wap_floor',
+            url: `https://tieba.baidu.com/p/${THREAD_ID}`,
+            images: [],
+          },
+          floor: {
+            platform: 'tieba',
+            floorNumber: 1,
+            postId: FLOOR_POST_ID,
+            authorId: OWNER_HANDLE,
+            authorName: '苏小玲',
+            authorSource: 'wap_floor',
+            content: '开场',
+            images: [],
+          },
+          nested: {
+            platform: 'tieba',
+            postId,
+            // The reply hangs off the floor, not off the post it answers.
+            parentPostId: FLOOR_POST_ID,
+            authorId: mine.authorId,
+            authorName: mine.authorName,
+            authorSource: 'wap_inline',
+            content: mine.text,
+            relationUncertain: false,
+          },
+          ancestors: [],
+          siblings: [],
+        }
+      }
       return {
+        // `resolveTarget` checks that the post still belongs to the thread we think
+        // it does, so the context has to carry the thread itself.
+        thread: {
+          platform: 'tieba',
+          forum: { platform: 'tieba', id: '9', name: '测试吧' },
+          id: THREAD_ID,
+          title: '测试帖',
+          content: '开场',
+          authorId: OWNER_HANDLE,
+          authorName: '苏小玲',
+          authorSource: 'wap_floor',
+          url: `https://tieba.baidu.com/p/${THREAD_ID}`,
+          images: [],
+        },
         floor: {
           platform: 'tieba',
           floorNumber: 1,
-          postId: '900',
-          authorId: 'silver_fox',
+          postId: FLOOR_POST_ID,
+          authorId: OWNER_HANDLE,
           authorName: '苏小玲',
           authorSource: 'wap_floor',
           content: '开场',
@@ -86,11 +175,12 @@ function countingAdapter(counters: Counters, overrides: { contextAuthorId?: stri
         nested: {
           platform: 'tieba',
           postId,
-          parentPostId: '900',
-          authorId: overrides.contextAuthorId ?? 'opponent_handle',
+          parentPostId: FLOOR_POST_ID,
+          authorId: overrides.contextAuthorId ?? OPPONENT_HANDLE,
           authorName: '对手B',
+          // A declared surface is what makes a handle count as evidence.
           authorSource: 'wap_inline',
-          content: '你凭什么这么说',
+          content: TARGET_CONTENT,
           relationUncertain: false,
         },
         ancestors: [],
@@ -98,11 +188,8 @@ function countingAdapter(counters: Counters, overrides: { contextAuthorId?: stri
       }
     },
     // The publisher checks the login banner before anything else. Answering it
-    // keeps these tests about the identity gate rather than about the credential
-    // gate — a refusal for the wrong reason would make the assertions vacuous.
+    // keeps these tests about identity rather than the credential gate.
     async checkAuthentication() {
-      // The AI account must be identified too: an unreadable login id is its own
-      // refusal (`identity_unverified`), and it would fire before the owner gate.
       return {
         authenticated: true,
         userId: '1001',
@@ -110,33 +197,55 @@ function countingAdapter(counters: Counters, overrides: { contextAuthorId?: stri
         checkedAt: new Date().toISOString(),
       }
     },
-    async publishReply() {
+    async publishReply(_target: unknown, content: string) {
       counters.publishReply += 1
-      return { status: 'confirmed', postId: 'published-1' }
+      const postId = 'published-1'
+      published.set(postId, { text: content, authorId: '1001', authorName: 'ai-account' })
+      return { status: 'confirmed', postId }
     },
   } as unknown as PlatformAdapter
 }
 
 // ── a minimal stored session ────────────────────────────────────────────────
 
+type Evidence = {
+  kind: 'numeric_uid' | 'handle' | 'nickname' | 'legacy' | 'none'
+  namespace?: 'user_id' | 'tieba_uid'
+  value?: string
+  source?: string
+}
+
+/** The evidence a legitimately verified owner carries: a handle, and its surface. */
+const VERIFIED_EVIDENCE: Evidence = {
+  kind: 'handle',
+  value: OWNER_HANDLE,
+  source: 'wap_floor',
+}
+
 function sessionOf(parts: {
   identityConflicts?: { postId: string; summary: string }[]
   ownerIdentityAssurance?: 'verified' | 'unverified'
+  ownerIdentityEvidence?: Evidence
+  text?: string
+  targetAuthorId?: string
+  candidateVersion?: number
 }): StoredSession {
+  const text = parts.text ?? REPLY_TEXT
   return {
     id: 's-gate',
     platform: 'tieba',
-    threadId: '9493941284',
-    threadUrl: 'https://tieba.baidu.com/p/9493941284',
+    threadId: THREAD_ID,
+    threadUrl: `https://tieba.baidu.com/p/${THREAD_ID}`,
     threadTitle: '测试帖',
     forumName: '测试吧',
     ownerKey: '苏小玲',
     ownerName: '苏小玲',
     opponentKey: '对手B',
     opponentName: '对手B',
-    disputeFloorPostId: '900',
+    opponentUserId: OPPONENT_HANDLE,
+    disputeFloorPostId: FLOOR_POST_ID,
     disputeFloorNumber: 1,
-    triggerPostId: 'r1',
+    triggerPostId: TARGET_POST_ID,
     targetKind: 'nested',
     state: 'READY',
     statusText: '就绪',
@@ -144,23 +253,25 @@ function sessionOf(parts: {
     candidates: [
       {
         replyId: 's-gate-c1',
-        text: '你这条论据没有出处，我不同意这个结论。',
+        text,
         strategy: 'direct_rebuttal',
-        targetPostId: 'r1',
+        targetPostId: TARGET_POST_ID,
         targetSnapshot: {
           platform: 'tieba',
-          threadId: '9493941284',
-          floorPostId: '900',
+          threadId: THREAD_ID,
+          floorPostId: FLOOR_POST_ID,
           floorNumber: 1,
-          nestedReplyId: 'r1',
-          targetPostId: 'r1',
+          nestedReplyId: TARGET_POST_ID,
+          targetPostId: TARGET_POST_ID,
           targetKind: 'nested',
-          targetAuthorId: 'opponent_handle',
+          targetAuthorId: parts.targetAuthorId ?? OPPONENT_HANDLE,
           targetAuthorName: '对手B',
-          contentHash: 'hash',
+          // The real digest of what the adapter will report on re-read. A
+          // placeholder here made every publish look like the target had changed.
+          contentHash: contentHash(TARGET_CONTENT),
           capturedAt: new Date().toISOString(),
         } as never,
-        candidateVersion: 1,
+        candidateVersion: parts.candidateVersion ?? 1,
         needsConfirmation: false,
         violations: [] as string[],
         approved: false,
@@ -178,6 +289,14 @@ function sessionOf(parts: {
           decision: 'allow',
           reasons: [],
           semanticSettled: true,
+          // The approval is bound to this digest, which the publisher recomputes
+          // from the text it is about to send. Stating the real value keeps the
+          // approval meaningful instead of stubbing the comparison out.
+          fingerprint: assessmentFingerprint({
+            reply: text,
+            targetPostId: TARGET_POST_ID,
+            decision: 'allow',
+          }),
         },
         semanticSettled: true,
         createdAt: new Date().toISOString(),
@@ -191,14 +310,43 @@ function sessionOf(parts: {
     ...(parts.ownerIdentityAssurance === undefined
       ? {}
       : { ownerIdentityAssurance: parts.ownerIdentityAssurance }),
+    ...(parts.ownerIdentityEvidence === undefined
+      ? {}
+      : { ownerIdentityEvidence: parts.ownerIdentityEvidence }),
   } as StoredSession
 }
 
-/** Run a publish against a session and return the report plus the counters. */
+const POLICY = {
+  mode: 'manual' as const,
+  maxAutoPublishesPerSession: 0,
+  cooldownMs: 0,
+  maxPublishesPerThread: 10,
+  stopOnChallenge: true,
+}
+
+/**
+ * Run a publish and return the report plus the counter.
+ *
+ * `grantApproval` is called first because the stored approval is what authorises
+ * a send; a test that skipped it would be measuring the approval gate instead.
+ */
 async function attemptPublish(parts: {
   identityConflicts?: { postId: string; summary: string }[]
   ownerIdentityAssurance?: 'verified' | 'unverified'
+  ownerIdentityEvidence?: Evidence
+  text?: string
+  targetAuthorId?: string
+  /** Skip the approval, to prove the identity gate answers independently. */
+  withoutApproval?: boolean
+  /**
+   * Text the human approved, when it should differ from the candidate's.
+   *
+   * Editing the candidate *and* approving the edit is not a stale approval; the
+   * interesting case is an approval that refers to text no longer in the session.
+   */
+  approvedText?: string
 }): Promise<{ counters: Counters; ok: boolean; errorCode?: string; message?: string }> {
+  resetInFlight()
   const counters: Counters = { publishReply: 0, reads: 0 }
   const adapter = countingAdapter(counters)
   const dir = mkdtempSync(join(tmpdir(), 'p23-gate-'))
@@ -207,26 +355,33 @@ async function attemptPublish(parts: {
     await store.ready()
     const session = sessionOf(parts)
     await store.mutate((data) => ({ ...data, sessions: [session] }))
+
+    const config = {
+      ownerUserId: '',
+      ownerHandle: OWNER_HANDLE,
+      ownerUserName: '苏小玲',
+      aiAccountUserId: '1001',
+      aiAccountName: 'ai-account',
+      allowedOwnerIds: '',
+    }
+
+    if (parts.withoutApproval !== true) {
+      await grantApproval(store, {
+        sessionId: session.id,
+        candidateId: 's-gate-c1',
+        ...(parts.approvedText === undefined ? {} : { text: parts.approvedText }),
+        // `grantApproval` takes a *resolver*, not the config object: it needs to
+        // read the per-platform table the publish path will use.
+        config: () => config as never,
+      })
+    }
+
     const report = await publishCandidate(
       {
         adapter,
         store,
-        policy: {
-          mode: 'manual',
-          maxAutoPublishesPerSession: 0,
-          cooldownMs: 0,
-          maxPublishesPerThread: 10,
-          stopOnChallenge: true,
-        },
-        config: () =>
-          ({
-            ownerUserId: '',
-            ownerHandle: 'silver_fox',
-            ownerUserName: '苏小玲',
-            aiAccountUserId: '1001',
-            aiAccountName: 'ai-account',
-            allowedOwnerIds: '',
-          }) as never,
+        policy: POLICY,
+        config: () => config as never,
         llm: () => {
           throw new Error('not used')
         },
@@ -235,7 +390,7 @@ async function attemptPublish(parts: {
       {
         sessionId: session.id,
         candidateId: 's-gate-c1',
-        approvedText: '你这条论据没有出处，我不同意这个结论。',
+        approvedText: parts.approvedText ?? parts.text ?? REPLY_TEXT,
       } as never,
     )
     return {
@@ -249,111 +404,220 @@ async function attemptPublish(parts: {
   }
 }
 
-// ── refusals ───────────────────────────────────────────────────────────────
+// ── the positive path ──────────────────────────────────────────────────────
 
-test('场景1 同一 postId 两个可信来源证明作者不同 → 拒绝，发表次数 0', async () => {
+test('正向：身份已核验 + 批准有效 + 目标稳定 → 恰好发表一次', async () => {
+  // Every precondition of a legitimate send, stated so the test would fail if any
+  // of them were quietly dropped:
+  //
+  // - owner verified with *evidence* (a handle and the surface that declared it)
+  // - AI account identified (`checkAuthentication` returns a matching uid)
+  // - target postId stable, and its author unchanged since the snapshot
+  // - candidate text untampered, version current
+  // - a stored approval that matches this exact text
+  // - policy allows manual mode, quota and cooldown satisfied
   const result = await attemptPublish({
     ownerIdentityAssurance: 'verified',
+    ownerIdentityEvidence: VERIFIED_EVIDENCE,
+  })
+
+  assert.equal(result.ok, true, `合法候选必须能发表，实际：${result.errorCode ?? ''} ${result.message ?? ''}`)
+  assert.equal(result.counters.publishReply, 1, '恰好发表一次')
+})
+
+test('正向：重复提交同一候选不会二次发表', async () => {
+  resetInFlight()
+  const counters: Counters = { publishReply: 0, reads: 0 }
+  const adapter = countingAdapter(counters)
+  const dir = mkdtempSync(join(tmpdir(), 'p23-twice-'))
+  try {
+    const store = new DebateStore({ dir })
+    await store.ready()
+    await store.mutate((data) => ({
+      ...data,
+      sessions: [
+        sessionOf({
+          ownerIdentityAssurance: 'verified',
+          ownerIdentityEvidence: VERIFIED_EVIDENCE,
+        }),
+      ],
+    }))
+    const config = {
+      ownerUserId: '',
+      ownerHandle: OWNER_HANDLE,
+      ownerUserName: '苏小玲',
+      aiAccountUserId: '1001',
+      aiAccountName: 'ai-account',
+      allowedOwnerIds: '',
+    }
+    await grantApproval(store, {
+      sessionId: 's-gate',
+      candidateId: 's-gate-c1',
+      config: () => config as never,
+    })
+
+    const deps = {
+      adapter,
+      store,
+      policy: POLICY,
+      config: () => config as never,
+      llm: () => {
+        throw new Error('not used')
+      },
+      log: () => undefined,
+    } as never
+    const request = {
+      sessionId: 's-gate',
+      candidateId: 's-gate-c1',
+      approvedText: REPLY_TEXT,
+    } as never
+
+    const first = await publishCandidate(deps, request)
+    assert.equal(first.ok, true, `首次应成功：${first.errorCode ?? ''} ${first.message ?? ''}`)
+    assert.equal(counters.publishReply, 1)
+
+    const second = await publishCandidate(deps, request)
+    assert.equal(second.ok, false, '第二次不得重复发表')
+    assert.equal(counters.publishReply, 1, '平台仍只被调用一次')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── refusals: each asserts zero sends ──────────────────────────────────────
+
+test('拒绝1 身份冲突 → identity_conflict，发送 0 次', async () => {
+  const result = await attemptPublish({
+    ownerIdentityAssurance: 'verified',
+    ownerIdentityEvidence: VERIFIED_EVIDENCE,
     identityConflicts: [
       {
-        postId: 'r1',
-        summary: '同一 postId r1 在两个数据源上给出了不同的作者：un=a 与 un=b。两者登录名不同，不可能是同一个账号。',
+        postId: TARGET_POST_ID,
+        summary: '同一 postId 在两个数据源上给出了不同的作者：un=a 与 un=b。',
       },
     ],
   })
   assert.equal(result.ok, false)
   assert.equal(result.errorCode, 'identity_conflict')
-  assert.equal(result.counters.publishReply, 0, '平台一次都不能被调用')
-})
-
-test('场景2 两个来源无法比较 → 不构成冲突，但身份也不会被标为已验证', () => {
-  // "Cannot compare" is not "disagrees". The gate must not manufacture a conflict
-  // from it — but neither may it upgrade an unproven identity to verified.
-  const decision = checkPublishPolicy(
-    { mode: 'manual', maxAutoPublishesPerSession: 0, cooldownMs: 0, maxPublishesPerThread: 10, stopOnChallenge: true },
-    {
-      sessionId: 's',
-      threadId: 't',
-      sessionPublishes: 0,
-      threadPublishes: 0,
-      humanApproved: true,
-      securityDecision: 'allow',
-      semanticSettled: true,
-      ownerIdentityAssurance: 'unverified',
-      now: 1_000_000,
-    },
-  )
-  assert.equal(decision.allowed, false)
-  assert.equal((decision as { code: string }).code, 'owner_identity_unverified')
-  assert.notEqual((decision as { code: string }).code, 'identity_conflict', '不可比较不是冲突')
-})
-
-test('场景3 旧会话没有 authorSource（无 assurance 字段）→ 拒绝，发表次数 0', async () => {
-  // A session written before this release carries no assurance. The absence of
-  // evidence is not evidence: it reads as unverified and the send is stopped.
-  const result = await attemptPublish({})
-  assert.equal(result.ok, false)
-  assert.equal(result.errorCode, 'owner_identity_unverified')
   assert.equal(result.counters.publishReply, 0)
 })
 
-test('场景3b 旧会话显式 unverified → 拒绝，发表次数 0', async () => {
-  const result = await attemptPublish({ ownerIdentityAssurance: 'unverified' })
-  assert.equal(result.ok, false)
-  assert.equal(result.errorCode, 'owner_identity_unverified')
-  assert.equal(result.counters.publishReply, 0)
-})
-
-test('场景4 主人只有显示昵称 → 闸门拒绝，发表次数 0', async () => {
-  // Reaches the gate as `unverified`: a nickname resolved the owner for reading,
-  // and reading is not authorising.
-  const result = await attemptPublish({ ownerIdentityAssurance: 'unverified' })
-  assert.equal(result.ok, false)
-  assert.equal(result.errorCode, 'owner_identity_unverified')
-  assert.equal(result.counters.publishReply, 0)
-})
-
-test('场景5 不同作者使用同一昵称 → 昵称不构成证明', () => {
-  // Two accounts, one nickname. The comparison must refuse to treat the shared
-  // nickname as evidence, and must not call them the same person.
-  const decision = checkPublishPolicy(
-    { mode: 'manual', maxAutoPublishesPerSession: 0, cooldownMs: 0, maxPublishesPerThread: 10, stopOnChallenge: true },
-    {
-      sessionId: 's',
-      threadId: 't',
-      sessionPublishes: 0,
-      threadPublishes: 0,
-      humanApproved: true,
-      securityDecision: 'allow',
-      semanticSettled: true,
-      ownerIdentityAssurance: 'unverified',
-      now: 1_000_000,
-    },
-  )
-  assert.equal(decision.allowed, false)
-  assert.equal((decision as { code: string }).code, 'owner_identity_unverified')
-})
-
-test('场景6 身份冲突优先于缺批准：原因必须说身份', async () => {
+test('拒绝2 身份冲突不能靠人工批准解除', async () => {
+  // The approval is granted inside `attemptPublish`; the conflict must still win.
   const result = await attemptPublish({
     ownerIdentityAssurance: 'verified',
-    identityConflicts: [{ postId: 'r1', summary: '两个来源作者不同' }],
+    ownerIdentityEvidence: VERIFIED_EVIDENCE,
+    identityConflicts: [{ postId: TARGET_POST_ID, summary: '两个来源作者不同' }],
   })
-  assert.equal(result.ok, false)
   assert.equal(result.errorCode, 'identity_conflict')
-  assert.notEqual(result.errorCode, 'approval_required')
+  assert.notEqual(result.errorCode, 'approval_required', '原因必须是身份，不是缺批准')
   assert.equal(result.counters.publishReply, 0)
 })
 
-// ── controls ───────────────────────────────────────────────────────────────
-
-test('对照组 已核验主人 + 有批准 → 真的发表了（证明闸门不是「一律拒绝」）', async () => {
-  // Without this, every refusal above could pass while the gate simply blocked
-  // everything. The counter must reach exactly 1.
+test('拒绝3 只有标签没有证据（手改 session）→ 拒绝，发送 0 次', async () => {
+  // The reproduced bypass: edit `"unverified"` to `"verified"` in the state file.
+  // The label alone must not open the gate.
   const result = await attemptPublish({ ownerIdentityAssurance: 'verified' })
-  // The publish needs a stored approval; without one it refuses on approval, which
-  // is still a different code from the identity gate — and no send happens.
-  assert.equal(result.counters.publishReply, 0, '没有批准时不得发表')
-  assert.notEqual(result.errorCode, 'owner_identity_unverified', '不得把身份闸门当成批准闸门')
-  assert.equal(result.errorCode, 'approval_required')
+  assert.equal(result.ok, false)
+  assert.equal(result.errorCode, 'owner_identity_unverified')
+  assert.equal(result.counters.publishReply, 0)
+})
+
+test('拒绝4 证据是昵称 → 拒绝，发送 0 次', async () => {
+  const result = await attemptPublish({
+    ownerIdentityAssurance: 'verified',
+    ownerIdentityEvidence: { kind: 'nickname', value: '苏小玲' },
+  })
+  assert.equal(result.errorCode, 'owner_identity_unverified')
+  assert.equal(result.counters.publishReply, 0)
+})
+
+test('拒绝5 数字 UID 缺命名空间 → 拒绝，发送 0 次', async () => {
+  const result = await attemptPublish({
+    ownerIdentityAssurance: 'verified',
+    ownerIdentityEvidence: { kind: 'numeric_uid', value: '348099763' },
+  })
+  assert.equal(result.errorCode, 'owner_identity_unverified')
+  assert.equal(result.counters.publishReply, 0)
+})
+
+test('拒绝6 登录名缺来源 → 拒绝，发送 0 次', async () => {
+  const result = await attemptPublish({
+    ownerIdentityAssurance: 'verified',
+    ownerIdentityEvidence: { kind: 'handle', value: OWNER_HANDLE },
+  })
+  assert.equal(result.errorCode, 'owner_identity_unverified')
+  assert.equal(result.counters.publishReply, 0)
+})
+
+test('拒绝7 旧会话无证据字段 → 拒绝，发送 0 次', async () => {
+  const result = await attemptPublish({})
+  assert.equal(result.errorCode, 'owner_identity_unverified')
+  assert.equal(result.counters.publishReply, 0)
+})
+
+test('拒绝8 正文被改 → 批准失效，发送 0 次', async () => {
+  const result = await attemptPublish({
+    ownerIdentityAssurance: 'verified',
+    ownerIdentityEvidence: VERIFIED_EVIDENCE,
+    text: '我改了一句话，但用的是旧批准。',
+    approvedText: REPLY_TEXT,
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.counters.publishReply, 0, '改过正文后不得发送')
+})
+
+test('拒绝9 目标作者变了 → 拒绝，发送 0 次', async () => {
+  const result = await attemptPublish({
+    ownerIdentityAssurance: 'verified',
+    ownerIdentityEvidence: VERIFIED_EVIDENCE,
+    targetAuthorId: 'somebody_else',
+  })
+  assert.equal(result.ok, false)
+  assert.equal(result.counters.publishReply, 0)
+})
+
+// ── the policy matrix, without the publisher ───────────────────────────────
+
+test('闸门矩阵：标签与证据必须同时成立', () => {
+  const base = {
+    sessionId: 's',
+    threadId: 't',
+    sessionPublishes: 0,
+    threadPublishes: 0,
+    humanApproved: true,
+    securityDecision: 'allow' as const,
+    semanticSettled: true,
+    now: 1_000_000,
+  }
+  const allow = (extra: Record<string, unknown>) =>
+    checkPublishPolicy(POLICY, { ...base, ...extra } as never)
+
+  // Claim without proof: refused.
+  assert.equal(allow({ ownerIdentityAssurance: 'verified' }).allowed, false)
+  assert.equal(
+    allow({ ownerIdentityAssurance: 'verified', ownerIdentityEvidence: { kind: 'nickname' } }).allowed,
+    false,
+  )
+  // Proof without a claim: also refused. Both halves are required.
+  assert.equal(
+    allow({ ownerIdentityEvidence: { kind: 'handle', value: 'x', source: 'wap_floor' } }).allowed,
+    false,
+  )
+  // Both halves, handle path.
+  assert.equal(
+    allow({
+      ownerIdentityAssurance: 'verified',
+      ownerIdentityEvidence: { kind: 'handle', value: 'x', source: 'wap_floor' },
+    }).allowed,
+    true,
+  )
+  // Both halves, numeric path.
+  assert.equal(
+    allow({
+      ownerIdentityAssurance: 'verified',
+      ownerIdentityEvidence: { kind: 'numeric_uid', namespace: 'user_id', value: '1' },
+    }).allowed,
+    true,
+  )
 })

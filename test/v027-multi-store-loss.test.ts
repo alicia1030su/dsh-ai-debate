@@ -90,6 +90,9 @@ test('复现：两个 store 交错写去重台账，confirmed 记录被覆盖', 
           triggerPostId: '1',
           ownerKey: 'owner',
           ownerIdentityAssurance: 'verified' as const,
+          // The evidence the label refers to: a login name declared by a real
+          // surface. Without it the gate refuses the label as unproven.
+          ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
           sessionId: 'sess-a',
           publishState: 'confirmed',
           confirmed: true,
@@ -112,6 +115,9 @@ test('复现：两个 store 交错写去重台账，confirmed 记录被覆盖', 
           triggerPostId: '2',
           ownerKey: 'owner',
           ownerIdentityAssurance: 'verified' as const,
+          // The evidence the label refers to: a login name declared by a real
+          // surface. Without it the gate refuses the label as unproven.
+          ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
           sessionId: 'sess-b',
           publishState: 'confirmed',
           confirmed: true,

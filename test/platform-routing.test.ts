@@ -664,6 +664,9 @@ test('两个平台用了相同的帖子 id，发表额度互不影响', async ()
           threadId: 'shared',
           ownerKey: 'owner-1',
           ownerIdentityAssurance: 'verified' as const,
+          // The evidence the label refers to: a login name declared by a real
+          // surface. Without it the gate refuses the label as unproven.
+          ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
           triggerPostId: 'board-r3',
           sessionId: 's1',
           firstSeenAt: '2026-01-01T00:00:00Z',
@@ -676,6 +679,9 @@ test('两个平台用了相同的帖子 id，发表额度互不影响', async ()
           threadId: 'shared',
           ownerKey: 'owner-1',
           ownerIdentityAssurance: 'verified' as const,
+          // The evidence the label refers to: a login name declared by a real
+          // surface. Without it the gate refuses the label as unproven.
+          ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
           triggerPostId: 'micro-r3',
           sessionId: 's2',
           firstSeenAt: '2026-01-01T00:00:00Z',

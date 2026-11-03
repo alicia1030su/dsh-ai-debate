@@ -684,6 +684,7 @@ async function persistAnalysis(
     // v0.2.23: record how the owner was established. Publishing reads this; if it
     // is `unverified`, no approval can make the reply safe to send.
     ownerIdentityAssurance: dispute.ownerIdentityAssurance,
+    ownerIdentityEvidence: dispute.ownerIdentityEvidence,
     disputeFloorPostId: dispute.floorPostId,
     disputeFloorNumber: dispute.floorNumber,
     triggerPostId,

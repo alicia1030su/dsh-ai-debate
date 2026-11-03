@@ -85,6 +85,9 @@ test('复现：已初始化的文件被删掉，再次写入不得当成首次�
           triggerPostId: '1',
           ownerKey: 'o',
           ownerIdentityAssurance: 'verified' as const,
+          // The evidence the label refers to: a login name declared by a real
+          // surface. Without it the gate refuses the label as unproven.
+          ownerIdentityEvidence: { kind: 'handle' as const, value: 'owner-1', source: 'wap_floor' as const },
           sessionId: 's1',
           publishState: 'confirmed',
           firstSeenAt: new Date().toISOString(),

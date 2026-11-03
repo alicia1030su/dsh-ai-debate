@@ -233,6 +233,20 @@ export interface CandidateSecurityRecord {
    * the configured owner. Absent on sessions written before this release.
    */
   readonly ownerIdentityAssurance?: 'verified' | 'unverified'
+  /**
+   * The evidence behind `ownerIdentityAssurance` (v0.2.23).
+   *
+   * Displayed, and — more importantly — the only thing the publish gate trusts.
+   * A session whose assurance says `verified` but whose evidence does not support
+   * it is refused, so editing the label in the state file buys nothing.
+   */
+  readonly ownerIdentityEvidence?: {
+    readonly kind: 'numeric_uid' | 'handle' | 'nickname' | 'legacy' | 'none'
+    readonly namespace?: string
+    readonly value?: string
+    readonly source?: string
+  }
+  /** Present so the gate can recompute; see `OwnerIdentityEvidence`. */
   /** Post ids the AI has already published in this session. */
   readonly publishedPostIds: readonly string[]
   /** Reply texts already sent, for repetition checks. */
