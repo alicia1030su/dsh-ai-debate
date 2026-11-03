@@ -88,6 +88,17 @@ export interface HttpResult {
   readonly contentType: string
 }
 
+/**
+ * Markers that identify an anti-bot / verification page.
+ *
+ * Deliberately duplicated from `fault-classify.ts` rather than importing it:
+ * this module sits below fault classification in the dependency order, and a
+ * platform adapter must not depend on the error-classification layer. The two
+ * lists are pinned together by `test/tieba-403-diagnosis.test.ts`, which fails
+ * if either drifts.
+ */
+const CHALLENGE_BODY_MARKERS = /百度安全验证|请输入验证码|wappass\.baidu\.com|captcha|人机验证/i
+
 /** A browser-shaped user agent; the mobile one triggers the WAP rendering. */
 export const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
@@ -211,10 +222,22 @@ export class HttpClient {
         const text = decodeBody(new Uint8Array(buffer), response.headers.get('content-type') ?? '', options.encoding)
 
         if (response.status >= 400) {
-          const code = classifyStatus(response.status)
+          // v0.2.23: keep looking at the body before deciding what a 403 *means*.
+          //
+          // v0.2.22 threw `平台返回 403（forbidden）` and dropped the body. Tieba
+          // answers an anti-bot block with a 200-shaped verification page and, once
+          // the block deepens, with 403 *carrying that same page*. Without the body
+          // the caller could not tell "the platform wants a human" from "the post
+          // is gone", and the read path reported the first as the second.
+          //
+          // Only a short marker check is performed; the body is never logged.
+          const challenge = CHALLENGE_BODY_MARKERS.test(text)
+          const code = challenge ? 'captcha' : classifyStatus(response.status)
           const retryAfter = parseRetryAfter(response.headers.get('retry-after'))
           const failure = new PlatformError(
-            `平台返回 ${response.status}（${code}）`,
+            challenge
+              ? `平台返回了安全验证页（HTTP ${response.status}）：这是反爬控制，不是登录失效，也不是帖子被删除`
+              : `平台返回 ${response.status}（${code}）`,
             code,
             { status: response.status, retryAfterMs: retryAfter },
           )

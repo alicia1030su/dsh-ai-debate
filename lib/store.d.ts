@@ -183,6 +183,31 @@ export interface CandidateSecurityRecord {
     };
     readonly dialogueSummary?: string;
     readonly candidates: readonly StoredCandidate[];
+    /**
+     * Proven cross-source authorship conflicts seen when this session was created
+     * (v0.2.23).
+     *
+     * Recorded on the session, not recomputed at publish time, because publishing
+     * happens later and from a different code path. A conflict is a fact about the
+     * read, and it has to survive the trip to the publish gate — otherwise the one
+     * place that must refuse is the one place that never hears about it.
+     *
+     * Optional so every session written before this release still loads.
+     */
+    readonly identityConflicts?: readonly {
+        readonly postId: string;
+        readonly summary: string;
+    }[];
+    /**
+     * How the owner's identity was established when this session was created
+     * (v0.2.23).
+     *
+     * `unverified` means the owner was resolved from a legacy record or a nickname.
+     * Reading the session is fine; publishing from it is refused, because no human
+     * approval can certify that the account we attributed the words to is really
+     * the configured owner. Absent on sessions written before this release.
+     */
+    readonly ownerIdentityAssurance?: 'verified' | 'unverified';
     /** Post ids the AI has already published in this session. */
     readonly publishedPostIds: readonly string[];
     /** Reply texts already sent, for repetition checks. */

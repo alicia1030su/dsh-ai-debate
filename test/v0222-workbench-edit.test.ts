@@ -78,6 +78,7 @@ function session(overrides: Partial<StoredSession> = {}): StoredSession {
     threadTitle: '讨论',
     forumName: '区',
     ownerKey: 'o1',
+    ownerIdentityAssurance: 'verified' as const,
     disputeFloorPostId: 'p-1',
     disputeFloorNumber: 1,
     triggerPostId: 'p-2',

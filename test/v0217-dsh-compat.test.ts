@@ -336,6 +336,7 @@ test('存储：带 legacyOwnerKey 的旧去重记录仍能通过校验', () => {
     platform: 'tieba',
     threadId: '2',
     ownerKey: 'old-name',
+    ownerIdentityAssurance: 'verified' as const,
     triggerPostId: '3',
     sessionId: 's1',
     legacyOwnerKey: '旧昵称',

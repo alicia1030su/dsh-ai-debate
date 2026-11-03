@@ -54,7 +54,10 @@ function makeRig(input: {
 } {
   const dir = input.dir ?? mkdtempSync(join(tmpdir(), 'debate-p1-'))
   const store = new DebateStore({ dir, sessionTtlMs: input.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000 })
-  const base = input.data ?? threePartyThread()
+  // v0.2.23: declare the surface so the owner can be *verified*. Without it every
+  // row is a legacy record, the identity gate refuses before the target-author
+  // check these tests are about, and the assertions would pass for the wrong reason.
+  const base = input.data ?? threePartyThread({ authorSource: 'wap_inline' })
   const data = input.stripAuthorIds
     ? {
         thread: base.thread,
@@ -67,7 +70,7 @@ function makeRig(input: {
   const adapter = new FakeAdapter(data as typeof base)
   const config = resolveConfig({
     ...DEFAULT_CONFIG,
-    ownerUserId: 'owner-1',
+    ownerHandle: 'owner-1',
     aiAccountUserId: '1001',
     llmBaseUrl: 'http://127.0.0.1:1/v1',
     llmModel: 'test-model',
@@ -123,7 +126,7 @@ test('a snapshot with only a display name is not a stable author', () => {
 test('publishing is refused when the target is identified only by a nickname', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
 
@@ -168,7 +171,7 @@ test('publishing is refused when the target is identified only by a nickname', a
 test('publishing still works when the target carries a stable id', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
@@ -192,7 +195,7 @@ test('the per-thread cap is counted from the ledger, so expiry cannot reset it',
   const first = makeRig({ maxPublishesPerThread: 1 })
   const dir = first.dir
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(first.runtime, { url: data.thread.url, postId: 'n7' })
     const generated = await runGeneration(first.runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
@@ -249,7 +252,7 @@ test('the per-thread cap is counted from the ledger, so expiry cannot reset it',
 test('the cap for one thread does not block another thread', async () => {
   const rig = makeRig({ maxPublishesPerThread: 1 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const first = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const gen = await runGeneration(rig.runtime, { sessionId: first.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
@@ -264,7 +267,7 @@ test('the cap for one thread does not block another thread', async () => {
     assert.equal(rig.adapter.publishes.length, 1)
 
     // A second thread with its own quota, sharing the same ledger.
-    const other = threePartyThread({ threadId: '900000000999', postPrefix: 'x' })
+    const other = threePartyThread({ threadId: '900000000999', postPrefix: 'x', authorSource: 'wap_inline' })
     const otherAdapter = new FakeAdapter(other)
     const otherClient = new ScriptedLlmClient(
       Array.from({ length: 8 }, () => ({ text: modelReply({ response_target_id: 'xn5' }) })),
@@ -295,7 +298,7 @@ test('the cap for one thread does not block another thread', async () => {
 test('an unresolved attempt occupies a thread slot', async () => {
   const rig = makeRig({ maxPublishesPerThread: 1 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
 
     // A prior attempt on this thread whose outcome was never confirmed.

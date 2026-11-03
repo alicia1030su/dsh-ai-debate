@@ -52,7 +52,7 @@ const OWNER_TRIGGER = 'n7'
 function collectedThread(ownerName: string, triggerPostId = OWNER_TRIGGER): ReturnType<typeof threePartyThread> & {
   floors: { floor: unknown; nested: unknown[]; nestedComplete: boolean }[]
 } {
-  const base = threePartyThread()
+  const base = threePartyThread({ authorSource: 'wap_inline' })
   const floorPostId = base.floors[0]!.postId
   const nested = base.nested[floorPostId]!.map((reply) =>
     reply.postId === triggerPostId ? { ...reply, authorName: ownerName } : reply,
@@ -94,11 +94,11 @@ function makeRig(input: { dir?: string; maxSessions?: number; sessionTtlMs?: num
     sessionTtlMs: input.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000,
     ...(input.maxSessions === undefined ? {} : { maxSessions: input.maxSessions }),
   })
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const config = resolveConfig({
     ...DEFAULT_CONFIG,
-    ownerUserId: 'owner-1',
+    ownerHandle: 'owner-1',
     aiAccountUserId: '1001',
     llmBaseUrl: 'http://127.0.0.1:1/v1',
     llmModel: 'test-model',
@@ -138,11 +138,12 @@ function hasSession(store: DebateStore, id: string): boolean {
 
 test('P0: a display-name change does not change the dedupe identity', () => {
   const keys = ['主人旧昵称', '主人新昵称', '完全不同的名字'].map((name) => {
-    // The fixture keeps the numeric author id and varies only the display name.
-    const dispute = analyzeDispute(collectedThread(name) as never, { userId: 'owner-1' }, {
+    // The fixture keeps the account handle and varies only the display name, so
+    // identity must ride on the handle (v0.2.23), not on the nickname.
+    const dispute = analyzeDispute(collectedThread(name) as never, { handle: 'owner-1' }, {
       postId: OWNER_TRIGGER,
     })
-    assert.equal(dispute.owner.userId, 'owner-1', '两次分析必须认出同一个稳定用户')
+    assert.equal(dispute.owner.handle, 'owner-1', '两次分析必须认出同一个稳定账号')
     return dedupeKey({
       platform: 'tieba',
       threadId: THREAD_ID,
@@ -167,7 +168,7 @@ test('P0: an avatar-style profile change is not part of the identity', () => {
 test('P0: the same trigger analysed twice yields one session and one ledger row', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const first = await runAnalysis(rig.runtime, { url: data.thread.url, postId: TRIGGER_ID })
     const second = await runAnalysis(rig.runtime, { url: data.thread.url, postId: TRIGGER_ID })
     assert.equal(first.sessionId, second.sessionId)
@@ -181,7 +182,7 @@ test('P0: the same trigger analysed twice yields one session and one ledger row'
 test('P0: ten concurrent analyses of one trigger produce exactly one session', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const results = await Promise.all(
       Array.from({ length: 10 }, () => runAnalysis(rig.runtime, { url: data.thread.url, postId: TRIGGER_ID })),
     )
@@ -196,7 +197,7 @@ test('P0: ten concurrent analyses of one trigger produce exactly one session', a
 test('P0: a different trigger in the same thread is a different event', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const a = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n7' })
     const b = await runAnalysis(rig.runtime, { url: data.thread.url, postId: 'n1' })
     assert.notEqual(a.sessionId, b.sessionId)
@@ -245,7 +246,7 @@ function legacyRow(input: {
 test('P0: a legacy nickname-keyed confirmed row still blocks publishing after upgrade', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     // Exactly what an older version left behind: the key contains the old nickname.
     await rig.store.mutate((store) => ({
       ...store,
@@ -281,7 +282,7 @@ test('P0: a legacy nickname-keyed confirmed row still blocks publishing after up
 test('P0: a legacy pending row still blocks a retry after upgrade', async () => {
   const rig = makeRig()
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     await rig.store.mutate((store) => ({
       ...store,
       dedupe: [
@@ -367,7 +368,7 @@ test('P0: after a nickname change the confirmed publish is not re-opened', async
     assert.equal(rig.adapter.publishes.length, 1)
 
     // The owner renames. The ledger row still holds the OLD name in `ownerKey`.
-    const renamed = threePartyThread()
+    const renamed = threePartyThread({ authorSource: 'wap_inline' })
     const floorPostId = renamed.floors[0]!.postId
     const nested = renamed.nested[floorPostId]!.map((reply) =>
       reply.postId === OWNER_TRIGGER ? { ...reply, authorName: '主人新昵称' } : reply,
@@ -396,7 +397,7 @@ test('P0: a restart does not re-open a nickname-keyed publish', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'debate-v015-restart-'))
   try {
     const first = makeRig({ dir })
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     await first.store.mutate((store) => ({
       ...store,
       dedupe: [
@@ -543,7 +544,7 @@ test('P1: the cap counts live sessions only, not finished history', async () => 
 test('P1: a capacity error is raised instead of silently dropping a live session', async () => {
   const rig = makeRig({ maxSessions: 1 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const first = await runAnalysis(rig.runtime, { url: data.thread.url, postId: TRIGGER_ID })
     assert.ok(hasSession(rig.store, first.sessionId))
 
@@ -596,7 +597,7 @@ test('P1: confirmed publish history is untouched by session pruning', async () =
 test('P1: pruning interacts safely with a concurrent publish write', async () => {
   const rig = makeRig({ maxSessions: 50 })
   try {
-    const data = threePartyThread()
+    const data = threePartyThread({ authorSource: 'wap_inline' })
     const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: TRIGGER_ID })
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
 

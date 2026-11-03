@@ -47,6 +47,35 @@ import {
   type ParsedFloor,
 } from './parse.js'
 import { parseTiebaUrl, threadUrl, type TiebaThreadRef } from './url.js'
+import {
+  conflictBetween,
+  type AuthorIdentity,
+  type IdentityConflictReport,
+} from '../../identity.js'
+
+/**
+ * Project a nested reply onto the identity fields the comparison needs.
+ *
+ * Kept next to `getAllNested` rather than in `identity.ts` because it is a
+ * mapping from *this* record shape, and putting it there would make the shared
+ * module depend on a platform's record type.
+ */
+function identityOfNested(reply: NestedReply): AuthorIdentity {
+  // A value already declared as the numeric uid must not also be read as a login
+  // name — that duplication is how a numeric `un` and a real uid came to look
+  // interchangeable.
+  const duplicated = reply.authorNumericUid !== undefined && reply.authorId === reply.authorNumericUid
+  return {
+    platform: reply.platform,
+    ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+    ...(reply.authorNumericUidKind === undefined
+      ? {}
+      : { numericUidKind: reply.authorNumericUidKind }),
+    ...(reply.authorId === undefined || duplicated ? {} : { handle: reply.authorId }),
+    ...(reply.authorName === undefined ? {} : { displayName: reply.authorName }),
+    source: reply.authorSource ?? 'platform_contract',
+  }
+}
 
 /** Tieba serves 30 floors per WAP page. */
 const FLOORS_PER_PAGE = 30
@@ -538,8 +567,16 @@ export class TiebaAdapter implements PlatformAdapter {
       platform: 'tieba',
       postId: inline.commentId,
       parentPostId: floor.postId,
+      // v0.2.23: `totalComment` is the **only** Tieba surface that states a
+      // numeric account id, so it must say so. v0.2.22 put that number into
+      // `authorId`, where it was indistinguishable from a login name — the exact
+      // namespace confusion this release removes.
       authorId: inline.authorId,
+      ...(inline.authorId === undefined || !/^\d+$/.test(inline.authorId)
+        ? {}
+        : { authorNumericUid: inline.authorId, authorNumericUidKind: 'user_id' as const }),
       authorName: inline.authorName,
+      authorSource: 'total_comment',
       content: inline.content,
       createdAt: inline.createdAt,
     }))
@@ -582,9 +619,29 @@ export class TiebaAdapter implements PlatformAdapter {
     ref: ThreadRef,
     floor: Floor,
     options: { signal?: AbortSignal; maxPages?: number } = {},
-  ): Promise<{ replies: readonly NestedReply[]; complete: boolean; error?: string; degraded?: boolean }> {
+  ): Promise<{
+    replies: readonly NestedReply[]
+    complete: boolean
+    error?: string
+    degraded?: boolean
+    conflicts?: readonly IdentityConflictReport[]
+  }> {
     const maxPages = options.maxPages ?? 10
     const seen = new Map<string, NestedReply>()
+    /**
+     * Records already claimed by one surface, keyed by post id.
+     *
+     * v0.2.22 kept the first reply per post id and dropped the rest:
+     *
+     *     if (!seen.has(reply.postId)) { seen.set(...) }
+     *
+     * Whichever surface answered first won, silently. If `/p/comment` and the
+     * inline list disagreed about the author of one reply, the disagreement was
+     * discarded along with the second copy. v0.2.23 compares instead, and records
+     * a conflict when the two cannot both be true.
+     */
+    const firstSurface = new Map<string, NestedReply>()
+    const conflicts: IdentityConflictReport[] = []
     let page = 1
     let error: string | undefined
     let degraded = false
@@ -600,10 +657,38 @@ export class TiebaAdapter implements PlatformAdapter {
       if (result.incomplete) degraded = true
       let added = 0
       for (const reply of result.replies) {
-        if (!seen.has(reply.postId)) {
+        const previous = firstSurface.get(reply.postId)
+        if (previous === undefined) {
           seen.set(reply.postId, reply)
+          firstSurface.set(reply.postId, reply)
           added += 1
+          continue
         }
+        // Same post id, second sighting: compare the authors instead of assuming
+        // the sources agree, and instead of preferring whichever came first.
+        const conflict = conflictBetween({
+          platform: 'tieba',
+          postId: reply.postId,
+          first: identityOfNested(previous),
+          second: identityOfNested(reply),
+        })
+        if (conflict !== undefined) {
+          // Keep the first record's *content*, but stamp the conflict onto it so
+          // nothing downstream can mistake it for a resolved authorship. The
+          // second source is preserved inside the report.
+          seen.set(reply.postId, {
+            ...previous,
+            identityConflict: {
+              code: 'identity_conflict',
+              summary: conflict.summary,
+              firstSource: previous.authorSource ?? 'platform_contract',
+              secondSource: reply.authorSource ?? 'platform_contract',
+            },
+          })
+          if (!conflicts.some((entry) => entry.postId === reply.postId)) conflicts.push(conflict)
+        }
+        // A conflicting duplicate is not progress: the walk must not page further
+        // on the strength of a copy it could not attribute.
       }
       if (!result.hasMore || added === 0) break
       page += 1
@@ -612,7 +697,10 @@ export class TiebaAdapter implements PlatformAdapter {
     const replies = [...seen.values()]
     const declared = floor.nestedCount
     const complete =
-      error === undefined && !degraded && (declared === undefined || replies.length >= declared)
+      error === undefined &&
+      !degraded &&
+      conflicts.length === 0 &&
+      (declared === undefined || replies.length >= declared)
     return { replies, complete, error, degraded }
   }
 

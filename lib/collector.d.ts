@@ -13,7 +13,8 @@
  * partial-result reporting for free, and cannot quietly implement "read page 1
  * and call it done".
  */
-import { type Floor, type NestedReply, type PlatformAdapter, type ReplyContext, type Thread, type ThreadRef } from './types.js';
+import { type Floor, type IdentitySource, type NestedReply, type PlatformAdapter, type PlatformId, type ReplyContext, type Thread, type ThreadRef } from './types.js';
+import { type IdentityAssurance, type IdentityConflictReport } from './identity.js';
 /** How much of a thread to collect. */
 export interface CollectOptions {
     /** Hard cap on floor pages walked. */
@@ -108,6 +109,16 @@ export interface CollectedThread {
     readonly truncated?: boolean;
     /** True when any floor's nested replies were read incompletely. */
     readonly nestedIncomplete?: boolean;
+    /**
+     * Proven cross-source authorship disagreements found while collecting
+     * (v0.2.23).
+     *
+     * A non-empty list means at least one post id was described by two surfaces
+     * with identities that cannot both be true. Owner resolution and publishing
+     * must refuse while this is non-empty for the affected post — see
+     * `analyzer.resolveOwnerKey` and `safety.checkPublishPolicy`.
+     */
+    readonly identityConflicts?: readonly IdentityConflictReport[];
     /** Non-fatal problems, phrased for a human. */
     readonly issues: readonly string[];
 }
@@ -221,6 +232,8 @@ export declare function walkNested(adapter: PlatformAdapter, ref: ThreadRef, flo
     complete: boolean;
     error?: string;
     degraded?: boolean;
+    conflicts?: readonly IdentityConflictReport[];
+    assurance?: ReadonlyMap<string, IdentityAssurance>;
 }>;
 /**
  * Collect a thread: metadata, every floor page, then nested replies for the
@@ -245,6 +258,14 @@ export interface TimelineEntry {
     readonly kind: 'floor' | 'nested';
     readonly postId: string;
     /**
+     * Which platform this entry came from (v0.2.23).
+     *
+     * Needed by owner resolution: the meaning of a legacy `authorId` is a property
+     * of the platform's contract (Tieba: a login name; Weibo: a stable account id),
+     * not of the string's shape.
+     */
+    readonly platform: PlatformId;
+    /**
      * The floor this entry belongs to, by the floor post's stable id.
      *
      * v0.2.1: this is the grouping key. It used to be `floorNumber`, which forced
@@ -258,6 +279,16 @@ export interface TimelineEntry {
     readonly floorNumber?: number;
     readonly authorId?: string;
     readonly authorName?: string;
+    /**
+     * Numeric account id, when a surface stated one as a number (v0.2.23).
+     *
+     * Absent for WAP-floor and WAP-inline rows, which carry no uid at all. Its
+     * presence is what lets an owner configured with a numeric id be matched
+     * *provably* instead of by comparing that id against a login name.
+     */
+    readonly authorNumericUid?: string;
+    /** Which surface produced the author fields above (v0.2.23). */
+    readonly authorSource?: IdentitySource;
     /** Display order within the floor; floors use 0. */
     readonly order: number;
     readonly content: string;

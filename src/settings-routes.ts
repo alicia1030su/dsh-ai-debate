@@ -83,6 +83,7 @@ const MAX_JSON_BODY_BYTES = 64 * 1024
 const EDITABLE_FIELDS = new Set([
   'enabled',
   'ownerUserId',
+  'ownerHandle',
   'ownerUserName',
   'aiAccountName',
   'aiAccountUserId',
@@ -995,6 +996,7 @@ function publicConfig(config: ResolvedConfig): Record<string, unknown> {
   return {
     enabled: config.enabled,
     ownerUserId: config.ownerUserId,
+    ownerHandle: config.ownerHandle,
     ownerUserName: config.ownerUserName,
     aiAccountName: config.aiAccountName,
     aiAccountUserId: config.aiAccountUserId,

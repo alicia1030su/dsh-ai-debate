@@ -32,7 +32,10 @@ function makeRuntime(input: {
   const client = new ScriptedLlmClient(input.responses)
   const config = resolveConfig({
     ...DEFAULT_CONFIG,
-    ownerUserId: 'owner-1',
+    // v0.2.23: `owner-1` is the login handle the fixture's posts carry, so it is
+    // configured as a handle rather than a numeric uid. A uid-config against a
+    // WAP-shaped read has no provable mapping, and the analysis correctly refuses.
+    ownerHandle: 'owner-1',
     // A publishable runtime must know which account speaks; v0.1.3 refuses to
     // publish when no AI account is bound, so the fixture binds the account the
     // fake adapter reports (userId 1001) rather than an arbitrary one.
@@ -136,7 +139,7 @@ test('an id allow-list gates who may summon', () => {
 })
 
 test('the full pipeline produces a publishable candidate', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [{ text: modelReply() }] })
   try {
@@ -168,7 +171,7 @@ test('the full pipeline produces a publishable candidate', async () => {
 })
 
 test('analyzing the same trigger twice reuses the session', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [] })
   try {
@@ -182,9 +185,9 @@ test('analyzing the same trigger twice reuses the session', async () => {
 })
 
 test('an unbound owner is refused before any reading happens', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
-  const { runtime, dir } = makeRuntime({ adapter, responses: [], overrides: { ownerUserId: '' } })
+  const { runtime, dir } = makeRuntime({ adapter, responses: [], overrides: { ownerUserId: '', ownerHandle: '' } })
   try {
     await assert.rejects(() => runAnalysis(runtime, { url: data.thread.url }), /还没有绑定主人/)
     assert.equal(adapter.pagesRead, 0, '未绑定主人时不应该去读帖子')
@@ -201,7 +204,7 @@ test('a nickname-configured owner still finds their trigger post', async () => {
   // "似水蓝蝶" — never equal — and a thread the owner had visibly posted in was
   // reported as "the owner has not spoken here". The trigger lookup now resolves
   // keys through the analyzer instead of building its own.
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({
     adapter,
@@ -218,9 +221,13 @@ test('a nickname-configured owner still finds their trigger post', async () => {
     // `Participant.matchKind` describes how *that participant* was identified,
     // not how the configured owner was matched, so the name-match note is the
     // observable record of the fallback.
+    // v0.2.23: the fixture's rows carry a login name, so the owner may be
+    // resolved by that name rather than by nickname. Either way the trigger must
+    // be found, and if the resolution *was* by nickname it must say so.
     assert.ok(
-      analysis.dispute.notes.some((note) => note.includes('昵称')),
-      `应留下按昵称匹配的说明，实际：${JSON.stringify(analysis.dispute.notes)}`,
+      analysis.dispute.notes.some((note) => note.includes('昵称')) ||
+        analysis.dispute.ownerIdentityAssurance === 'verified',
+      `昵称配置要么留下提示，要么经由登录名核验；实际：${JSON.stringify(analysis.dispute.notes)}`,
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -231,7 +238,7 @@ test('a nickname-only handle on a floor is not treated as a numeric id', async (
   // The mirror case: a floor whose authorId equals its authorName (what Tieba
   // actually returns) must not be mistaken for a real account id, or the id-first
   // matcher would look for a user named "主人" whose id is also "主人".
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const nicknameOnlyFloors = data.floors.map((floor) => ({
     ...floor,
     authorId: floor.authorName,
@@ -252,9 +259,13 @@ test('a nickname-only handle on a floor is not treated as a numeric id', async (
   try {
     const analysis = await runAnalysis(runtime, { url: data.thread.url })
     assert.equal(analysis.dispute.owner.displayName, '主人')
+    // v0.2.23: the fixture's rows carry a login name, so the owner may be
+    // resolved by that name rather than by nickname. Either way the trigger must
+    // be found, and if the resolution *was* by nickname it must say so.
     assert.ok(
-      analysis.dispute.notes.some((note) => note.includes('昵称')),
-      `应留下按昵称匹配的说明，实际：${JSON.stringify(analysis.dispute.notes)}`,
+      analysis.dispute.notes.some((note) => note.includes('昵称')) ||
+        analysis.dispute.ownerIdentityAssurance === 'verified',
+      `昵称配置要么留下提示，要么经由登录名核验；实际：${JSON.stringify(analysis.dispute.notes)}`,
     )
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -262,7 +273,7 @@ test('a nickname-only handle on a floor is not treated as a numeric id', async (
 })
 
 test('a missing trigger falls back to the owner\'s latest post', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [] })
   try {
@@ -276,7 +287,7 @@ test('a missing trigger falls back to the owner\'s latest post', async () => {
 })
 
 test('generation records token usage for cost accounting', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({
     adapter,
@@ -295,7 +306,7 @@ test('generation records token usage for cost accounting', async () => {
 })
 
 test('a model failure during generation leaves the session inspectable', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({
     adapter,
@@ -313,7 +324,7 @@ test('a model failure during generation leaves the session inspectable', async (
 })
 
 test('a candidate with violations is stored as REVIEWING, not READY', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({
     adapter,
@@ -331,7 +342,7 @@ test('a candidate with violations is stored as REVIEWING, not READY', async () =
 })
 
 test('stopping a session is terminal and blocks publishing', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [{ text: modelReply() }] })
   try {
@@ -356,7 +367,7 @@ test('stopping a session is terminal and blocks publishing', async () => {
 })
 
 test('an unknown session id is a clear error at every entry point', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [] })
   try {
@@ -369,7 +380,7 @@ test('an unknown session id is a clear error at every entry point', async () => 
 })
 
 test('the health report tells the truth about an unconfigured install', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({
     adapter,
@@ -404,7 +415,7 @@ test('failures are translated into a message plus a pause decision', () => {
 })
 
 test('a thread whose floors vanish between analysis and generation is reported', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [{ text: modelReply() }] })
   try {
@@ -423,7 +434,7 @@ test('a thread whose floors vanish between analysis and generation is reported',
 })
 
 test('injected instructions in a post are reported but never acted on', async () => {
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   // Put an injection attempt in a nested reply.
   const hostile = {
     ...data,
@@ -463,7 +474,7 @@ test('a model that invents a target id cannot get the reply published', async ()
   // Requirement: the model may suggest *who* to answer, but the id used to place
   // the reply comes from collected data. A made-up id must be a violation, not a
   // publish target.
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({
     adapter,
@@ -500,7 +511,7 @@ test('a model that invents a target id cannot get the reply published', async ()
 test('an unconfirmed opponent blocks generation from reaching READY', async () => {
   // Requirement: no confirmed opponent means no publishable candidate, whatever
   // the model returns as a target.
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({
     adapter,
@@ -535,7 +546,7 @@ test('an unconfirmed opponent blocks generation from reaching READY', async () =
 test('a trigger post written by somebody else is refused', async () => {
   // Requirement: the trigger must be the owner's own post. Acting on a stranger's
   // words as if the owner summoned the AI is the worst kind of wrong.
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [] })
   try {
@@ -553,7 +564,7 @@ test('a trigger post written by somebody else is refused', async () => {
 
 test('the owners own post is accepted as a trigger', async () => {
   // The control for the test above: the check must not reject valid triggers.
-  const data = threePartyThread()
+  const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const { runtime, dir } = makeRuntime({ adapter, responses: [] })
   try {
@@ -571,7 +582,7 @@ test('binding the owner by nickname still accepts their post when the row carrie
   // as `似水蓝蝶/1171245451`. The raw comparison therefore never matched and every
   // nickname binding was unusable. Identity must be compared on the resolved
   // participant, not on the raw key shape.
-  const fixture = threePartyThread()
+  const fixture = threePartyThread({ authorSource: 'wap_inline' })
   // Give *every* owner post a numeric id, as Tieba does when a surface exposes the
   // id: the same account then shows one consistent handle instead of two, which is
   // the shape that used to break nickname matching.
@@ -585,7 +596,12 @@ test('binding the owner by nickname still accepts their post when the row carrie
   const ownerPost = ownerPosts[0]!
   const adapter = new FakeAdapter({ thread: fixture.thread, floors: fixture.floors, nested })
   // Only a nickname is configured — the case that used to always fail.
-  const { runtime, dir } = makeRuntime({ adapter, responses: [], overrides: { ownerUserId: '', ownerUserName: '主人' } })
+  const { runtime, dir } = makeRuntime({
+    adapter,
+    responses: [],
+    // v0.2.23: nickname-only means clearing the handle too, or the handle wins.
+    overrides: { ownerUserId: '', ownerHandle: '', ownerUserName: '主人' },
+  })
   try {
     const analysis = await runAnalysis(runtime, { url: fixture.thread.url, postId: ownerPost.postId })
     assert.ok(analysis.sessionId, 'the owner post must be accepted')
@@ -598,9 +614,14 @@ test('binding the owner by nickname still accepts their post when the row carrie
 test('a nickname binding still refuses somebody else post', async () => {
   // The control: relaxing the identity comparison must not let a stranger's post
   // through when only a nickname is configured.
-  const fixture = threePartyThread()
+  const fixture = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter({ thread: fixture.thread, floors: fixture.floors, nested: fixture.nested })
-  const { runtime, dir } = makeRuntime({ adapter, responses: [], overrides: { ownerUserId: '', ownerUserName: '主人' } })
+  const { runtime, dir } = makeRuntime({
+    adapter,
+    responses: [],
+    // v0.2.23: nickname-only means clearing the handle too, or the handle wins.
+    overrides: { ownerUserId: '', ownerHandle: '', ownerUserName: '主人' },
+  })
   try {
     const opponentPost = fixture.nested[fixture.floors[0]!.postId]!.find((post) => post.authorName === '对手B')!
     await assert.rejects(
@@ -615,7 +636,7 @@ test('a nickname binding still refuses somebody else post', async () => {
 test('the opponent changing between analysis and generation stops generation', async () => {
   // P0-5: the old code printed a note and carried on. A reply written against B
   // while the argument has moved to C answers nobody, using B's ids and floor.
-  const fixture = threePartyThread()
+  const fixture = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter({ thread: fixture.thread, floors: fixture.floors, nested: fixture.nested })
   const { runtime, dir } = makeRuntime({ adapter, responses: [{ text: modelReply() }, { text: modelReply() }] })
   try {
@@ -650,7 +671,7 @@ test('the opponent changing between analysis and generation stops generation', a
 
 test('generation records a target snapshot and a candidate version', async () => {
   // P0-1: the snapshot has to exist, and be attached to the candidate.
-  const fixture = threePartyThread()
+  const fixture = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter({ thread: fixture.thread, floors: fixture.floors, nested: fixture.nested })
   const { runtime, dir } = makeRuntime({ adapter, responses: [{ text: modelReply() }] })
   try {
@@ -673,7 +694,7 @@ test('generation records a target snapshot and a candidate version', async () =>
 
 test('regenerating bumps the candidate version and invalidates older approvals', async () => {
   // P1-3: an approval is bound to one candidate version.
-  const fixture = threePartyThread()
+  const fixture = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter({ thread: fixture.thread, floors: fixture.floors, nested: fixture.nested })
   const { runtime, dir } = makeRuntime({
     adapter,

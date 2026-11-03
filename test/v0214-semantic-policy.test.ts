@@ -39,6 +39,9 @@ function attempt(overrides: Partial<PublishAttempt> = {}): PublishAttempt {
     threadPublishes: 0,
     humanApproved: false,
     securityDecision: 'allow',
+    // v0.2.23: this file tests the policy matrix, not identity. The owner is
+    // declared verified so the identity gate does not answer for other gates.
+    ownerIdentityAssurance: 'verified' as const,
     now: 1_000_000,
     ...overrides,
   }

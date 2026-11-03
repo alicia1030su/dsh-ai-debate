@@ -81,6 +81,32 @@ export interface PublishAttempt {
      */
     readonly securityDecision?: 'allow' | 'review' | 'block';
     /**
+     * A proven cross-source authorship conflict affecting this publish (v0.2.23).
+     *
+     * Publishing is the one irreversible action, so it needs the strictest form of
+     * the conflict rule: when the target's author cannot be established, there is
+     * no way to know whose voice this reply continues. An approval cannot cure it —
+     * the owner approved *a body*, not a disputed authorship — so this check sits
+     * **before** the approval gate.
+     */
+    readonly identityConflict?: {
+        readonly postId: string;
+        readonly summary: string;
+    };
+    /**
+     * How the owner's identity was established when this candidate was generated
+     * (v0.2.23).
+     *
+     * `unverified` blocks the send. It is not a judgement about the text — it is
+     * the admission that we cannot say whose voice this reply continues. A human
+     * approval authorises a body of text; it cannot certify an authorship that the
+     * data never established.
+     *
+     * `undefined` (a candidate from before this field existed) is treated as
+     * unverified: "we never checked" is not "it is fine".
+     */
+    readonly ownerIdentityAssurance?: 'verified' | 'unverified';
+    /**
      * Whether the debate analysis itself is settled (v0.2.14 §6.4).
      *
      * ## Why this is separate from `securityDecision`

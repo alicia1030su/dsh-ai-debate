@@ -25,7 +25,40 @@ export type OwnerMatchKind = 'id' | 'name'
 export interface Participant {
   /** Display name; also the merge key for identity across mixed handles. */
   readonly key: string
+  /**
+   * Numeric platform account id, **only** when a surface stated one (v0.2.23).
+   *
+   * Before v0.2.23 this field held the login name (`un`), because Tieba's WAP
+   * page is the only surface most reads use and it exposes nothing numeric. That
+   * made `participant.userId === owner.userId` a comparison between a handle and
+   * a uid: always false, and — worse — it made `anyIdsExposed` true, so the
+   * owner check took the "the id is wrong" branch and never said "this surface
+   * cannot prove ids at all".
+   */
   readonly userId?: string
+  /** Login name (`un` / `username`), the strongest identity a WAP read offers. */
+  readonly handle?: string
+  /**
+   * A pre-v0.2.23 account string whose namespace was never recorded (v0.2.23).
+   *
+   * On Tieba, v0.2.22 documented `authorId` as the `un` login name, so this is
+   * read as a handle for display purposes. It is kept in its own field because a
+   * historical record cannot prove it was a handle any more than it can prove it
+   * was a uid — and an owner match that relies on it must say so rather than
+   * present itself as a uid match.
+   */
+  readonly legacyAccountId?: string
+  /**
+   * True when at least one of this participant's records declared which surface it
+   * came from (v0.2.23).
+   *
+   * A participant built entirely from legacy rows can be *displayed* and
+   * *analysed*, but cannot be called verified: we never learned what kind of
+   * account string those rows held. Without this flag, a legacy row whose
+   * `authorId` happened to equal a configured handle would have resolved as
+   * `verified` — the exact up-grade rule 2 of the compatibility contract forbids.
+   */
+  readonly hasDeclaredSource?: boolean
   readonly displayName: string
   /** How the key was derived, so the UI can explain a name-based match. */
   readonly matchKind: OwnerMatchKind
@@ -105,6 +138,18 @@ export interface Dispute {
   readonly needsConfirmation: boolean
   /** Human-readable reasons for `needsConfirmation`, or for the choice made. */
   readonly notes: readonly string[]
+  /**
+   * How strongly the owner's identity was established (v0.2.23).
+   *
+   * - `verified` — a numeric uid matched, or a login handle matched under a
+   *   surface that states one.
+   * - `unverified` — the owner was resolved (for reading) from a legacy record or
+   *   a nickname. The analysis is useful; a publish is not authorised by it.
+   *
+   * Kept separate from `notes` because prose cannot be enforced. The publish gate
+   * reads this field; a note would only be read by a human who happened to look.
+   */
+  readonly ownerIdentityAssurance: 'verified' | 'unverified'
 }
 
 /** The trigger that started this task. */
@@ -136,6 +181,15 @@ export interface OwnerIdentity {
   readonly platform?: PlatformId
   /** Stable platform id; preferred. */
   readonly userId?: string
+  /**
+   * Login name (`un`) as published by the platform (v0.2.23).
+   *
+   * This is the only owner field that can match a WAP floor: that surface
+   * publishes `un` and no numeric uid. It is matched against `authorId`, which
+   * v0.2.23 defines as the handle — never against a numeric uid, and never
+   * merged with `userName`, because a login name is not a nickname.
+   */
+  readonly handle?: string
   /** Display name; used only when no id is configured or matched. */
   readonly userName?: string
 }
@@ -197,8 +251,45 @@ export function analyzeDispute(
   const nameByHandle = buildHandleDirectory(timeline)
   const keyOf = (entry: TimelineEntry): string => resolveKey(entry, nameByHandle)
 
+  // ## Cross-source authorship conflict (v0.2.23)
+  //
+  // Two surfaces described at least one post id with identities that cannot both
+  // be true. There is no correct owner to resolve: if the conflicting post is the
+  // trigger, or belongs to the candidate owner, then "who the owner is here" is
+  // exactly the question the data just refused to answer.
+  //
+  // This runs before anything is attributed, and it refuses rather than picking a
+  // side. The alternative — keeping the first copy, as v0.2.22 did — makes the
+  // plugin argue on behalf of whoever happened to answer first.
+  const conflicts = collected.identityConflicts ?? []
+  if (conflicts.length > 0) {
+    const triggerConflict = conflicts.find((entry) => entry.postId === trigger.postId)
+    if (triggerConflict !== undefined) {
+      throw new Error(
+        `无法确认这条发言的作者：${triggerConflict.summary} ` +
+          '触发回复本身存在身份冲突，插件不会替你选择其中一个作者。',
+      )
+    }
+    const affected = new Set(
+      conflicts.flatMap((entry) => {
+        const ids = [entry.postId]
+        return ids
+      }),
+    )
+    const ownerTouchesConflict = timeline.some((entry) => affected.has(entry.postId))
+    if (ownerTouchesConflict) {
+      const sample = conflicts[0] as (typeof conflicts)[number]
+      throw new Error(
+        `本次读取存在 ${conflicts.length} 处作者身份冲突，无法确认主人身份。` +
+          `例如：${sample.summary} ` +
+          '在冲突解决之前，插件不会给出主人的立场，也不会生成可发表的候选。',
+      )
+    }
+  }
+
   const participants = indexParticipants(timeline, nameByHandle)
-  const ownerKey = resolveOwnerKey(participants, effectiveOwner, notes)
+  const resolvedOwner = resolveOwnerKey(participants, effectiveOwner, notes)
+  const ownerKey = resolvedOwner.key
   const ownerParticipant = participants.get(ownerKey)
   if (!ownerParticipant) {
     throw new Error(
@@ -262,6 +353,7 @@ export function analyzeDispute(
     bystanders,
     needsConfirmation: opponentPick.ambiguous,
     notes,
+    ownerIdentityAssurance: resolvedOwner.assurance,
   }
 }
 
@@ -356,11 +448,49 @@ function indexParticipants(
     const distinctHandles = handlesByKey.get(name)?.size ?? 0
 
     const existing = byKey.get(name)
+    /**
+     * Whether this record predates the identity split, and what that means.
+     *
+     * v0.2.23 rule, revised after review: the discriminator is the **platform
+     * contract**, not whether the string happens to be all digits. A digit test
+     * was wrong in both directions — Tieba's `un` can be `1254480024` (so a
+     * numeric-looking handle would be mis-promoted to a uid), and a non-numeric
+     * Tieba handle was being trusted as a stable account id (so an unverified
+     * record could still authorise a publish).
+     *
+     * - **Tieba**: `authorId` is documented as `un`, a login name. A record that
+     *   does not say which surface produced it is `legacy_unknown`: still
+     *   readable and still analysed, but it may not grant a stable-identity
+     *   permission.
+     * - **Other platforms** (Weibo et al.): their projection puts the platform's
+     *   own account id in `authorId` under a stated contract. Those keep the old
+     *   behaviour; refusing them would orphan every historical Weibo session for
+     *   no safety gain.
+     */
+    const legacyShape = entry.authorSource === undefined
+    const legacyIsTieba = legacyShape && entry.platform !== undefined && entry.platform === 'tieba'
+    const legacyAccountId = legacyIsTieba ? entry.authorId : undefined
+    const numericForThisEntry = legacyShape
+      ? entry.platform !== undefined && entry.platform === 'tieba'
+        ? undefined
+        : entry.authorId
+      : entry.authorNumericUid
+    // A legacy Tieba `authorId` IS an `un`, so it still counts as a handle for
+    // display and duplicate-name detection — it is documented as one. What it
+    // must not do is satisfy a *numeric uid* match, which `numericForThisEntry`
+    // above already prevents.
+    const handleForThisEntry = handle
     if (existing) {
       byKey.set(name, {
         ...existing,
-        userId: existing.userId ?? handle,
-        matchKind: existing.userId ?? handle ? 'id' : 'name',
+        // v0.2.23: a real uid only comes from `authorNumericUid`; the handle stays
+        // in its own field. Merging them is what made an owner configured with a
+        // numeric id unmatchable against a WAP read.
+        userId: existing.userId ?? numericForThisEntry,
+        handle: existing.handle ?? handleForThisEntry,
+        legacyAccountId: existing.legacyAccountId ?? legacyAccountId,
+        hasDeclaredSource: existing.hasDeclaredSource === true || !legacyShape,
+        matchKind: existing.userId ?? numericForThisEntry ?? existing.handle ?? handleForThisEntry ? 'id' : 'name',
         postCount: existing.postCount + 1,
         lastPostId: entry.postId,
         lastSpokeIndex: index,
@@ -370,9 +500,12 @@ function indexParticipants(
     }
     byKey.set(name, {
       key: name,
-      userId: handle,
+      userId: numericForThisEntry,
+      handle: handleForThisEntry,
+      legacyAccountId,
+      hasDeclaredSource: !legacyShape,
       displayName: name,
-      matchKind: handle ? 'id' : 'name',
+      matchKind: numericForThisEntry ?? handleForThisEntry ? 'id' : 'name',
       postCount: 1,
       lastPostId: entry.postId,
       lastSpokeIndex: index,
@@ -457,9 +590,8 @@ function resolveOwnerKey(
   participants: ReadonlyMap<string, Participant>,
   owner: OwnerIdentity,
   notes: string[],
-): string {
-  if (owner.userId) {
-    // Cross-platform refusal comes first, before any id comparison.
+): { readonly key: string; readonly assurance: 'verified' | 'unverified' } {
+  if (owner.userId) {    // Cross-platform refusal comes first, before any id comparison.
     //
     // A user id is scoped to one platform: Tieba's `user_id` and Weibo's `uid`
     // are both 9–10 digit decimals in unrelated namespaces, so `===` alone would
@@ -476,11 +608,66 @@ function resolveOwnerKey(
     }
 
     for (const participant of participants.values()) {
-      if (participant.userId === owner.userId) return participant.key
+      if (participant.userId === owner.userId) {
+        return { key: participant.key, assurance: 'verified' }
+      }
+    }
+
+    // v0.2.23: a handle is the next-strongest proof and must be tried before the
+    // "the id is wrong" verdict. It is a lot stronger than a nickname: the owner
+    // cannot rename it, and it is what the WAP surface actually publishes. Not
+    // trying it is why a configured numeric uid could never match anything.
+    if (owner.handle !== undefined && owner.handle !== '') {
+      for (const participant of participants.values()) {
+        if (participant.handle !== owner.handle) continue
+        // A handle match is proof only when some surface actually declared this
+        // row's provenance. All-legacy rows may equal the configured handle by
+        // coincidence, and promoting that would grant a stable-identity permission
+        // to data that never carried one.
+        if (participant.hasDeclaredSource === true) {
+          return { key: participant.key, assurance: 'verified' }
+        }
+        notes.push(
+          `登录名「${owner.handle}」匹配到一条旧格式记录（没有记录标识来源）：` +
+            '身份未核验，只用于读取，不能据此发表。',
+        )
+        return { key: participant.key, assurance: 'unverified' }
+      }
+    }
+
+    // ## Pre-v0.2.23 records (rule: legacy_unknown)
+    //
+    // A historical record has an `authorId` whose namespace was never written
+    // down. If its text equals the configured id we *can* resolve the participant
+    // for reading — otherwise every old session becomes unusable — but the match
+    // proves nothing about the id namespace, so it is recorded as unverified and
+    // flagged in `notes` for every downstream decision.
+    //
+    // The rule is platform-scoped, not shape-scoped. A legacy Tieba `authorId` is
+    // an `un`, which may be all digits or a name; either way it is not proof of a
+    // numeric account id, so the match is allowed **for reading only** and is
+    // recorded as unverified. Legacy records from other platforms never reach
+    // here — their `authorId` is their contract's account id and already matched
+    // `participant.userId` above.
+    const legacyMatch = [...participants.values()].find(
+      (participant) =>
+        participant.legacyAccountId !== undefined &&
+        participant.legacyAccountId === owner.userId,
+    )
+    if (legacyMatch !== undefined) {
+      notes.push(
+        `主人是通过一条旧格式记录匹配的（账号字段「${legacyMatch.legacyAccountId}」，` +
+          '写入时没有记录标识类型）：身份未核验，只用于读取，不能据此发表。',
+      )
+      return { key: legacyMatch.key, assurance: 'unverified' }
     }
 
     // The id did not match. Whether a nickname fallback is even conceivable
     // depends on whether the platform exposed ids at all.
+    //
+    // v0.2.23: `anyIdsExposed` now means *numeric* ids. It used to be true as
+    // soon as a WAP read produced a `un`, so the branch below claimed "the post
+    // has this id, but not yours" on a surface that has no ids at all.
     const anyIdsExposed = [...participants.values()].some((participant) => participant.userId)
     if (anyIdsExposed) {
       const nameMatch = owner.userName ? participants.get(owner.userName) : undefined
@@ -498,12 +685,32 @@ function resolveOwnerKey(
       throw new Error(
         `配置了主人 ID ${owner.userId}，但本次读取到的发言没有暴露任何数字用户 ID，` +
           `无法确认昵称「${owner.userName}」是否就是该 ID 对应的账号。` +
-          '请用 debate_analyze_reply 指定主人自己那条回复的 postId，或在配置里改为仅使用昵称。',
+          '请用 debate_analyze_reply 指定主人自己那条回复的 postId，或在配置里填写可核验的贴吧登录名（un）。' +
+          '（仅填昵称可以用于只读分析，但不足以授权发表。）',
       )
     }
     throw new Error(
       `配置的主人用户 ID ${owner.userId} 在本次对话中没有出现（发言里没有暴露 ID）。` +
         '请核对 ownerUserId，或确认该主人是否在本帖发过言。',
+    )
+  }
+
+  if (owner.handle !== undefined && owner.handle !== '') {
+    for (const participant of participants.values()) {
+      if (participant.handle !== owner.handle) continue
+      if (participant.hasDeclaredSource === true) {
+        return { key: participant.key, assurance: 'verified' }
+      }
+      notes.push(
+        `登录名「${owner.handle}」匹配到一条旧格式记录（没有记录标识来源）：` +
+          '身份未核验，只用于读取，不能据此发表。',
+      )
+      return { key: participant.key, assurance: 'unverified' }
+    }
+    throw new Error(
+      `帖子里没有登录名「${owner.handle}」的发言：` +
+        '请确认这是贴吧的登录名（un，个人主页 URL 里的 un=），而不是昵称；' +
+        '或确认该主人是否在本帖发过言。',
     )
   }
 
@@ -518,7 +725,7 @@ function resolveOwnerKey(
         )
       }
       notes.push(`主人是通过昵称「${owner.userName}」匹配的，建议改为配置稳定的用户 ID`)
-      return match.key
+      return { key: match.key, assurance: 'unverified' }
     }
     throw new Error(
       `在帖子里没有找到主人（昵称 ${owner.userName}）的发言：` +
@@ -526,7 +733,7 @@ function resolveOwnerKey(
     )
   }
 
-  throw new Error('没有配置主人身份：请先设置主人用户 ID（或昵称）')
+  throw new Error('没有配置主人身份：请先设置主人的数字 ID、贴吧登录名（un）或昵称')
 }
 
 /** The outcome of opponent selection. */

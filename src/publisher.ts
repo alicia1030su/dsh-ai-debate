@@ -628,6 +628,22 @@ async function sendOnce(
     // this is the only thing that can allow a send; in `limited_auto` an approved
     // candidate spends the owner's authorisation rather than an automatic slot.
     humanApproved: approval.ok,
+    // ## An authorship conflict the owner cannot approve away (v0.2.23)
+    //
+    // Read from the session, where the analysis recorded it. The publish path must
+    // not re-derive it: it has no access to `collected`, and recomputing identity
+    // from a stale session would be its own source of error.
+    // v0.2.23: the owner's assurance travels with the session. A candidate built
+    // from an unverified owner cannot be sent even with a valid approval.
+    ownerIdentityAssurance: session.ownerIdentityAssurance,
+    ...(session.identityConflicts === undefined || session.identityConflicts.length === 0
+      ? {}
+      : {
+          identityConflict: {
+            postId: session.identityConflicts[0]!.postId,
+            summary: session.identityConflicts.map((entry) => entry.summary).join('；'),
+          },
+        }),
     // The verdict, so the policy matrix can be enforced in one place instead of
     // being re-derived by every caller.
     securityDecision: gate.assessment.decision,

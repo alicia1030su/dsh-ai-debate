@@ -173,7 +173,14 @@ export function guardOutput(input: OutputGuardInput): {
     {
       ...(inputAssessment !== undefined ? { input: inputAssessment } : {}),
       stance,
-      ownerIdentityValid: input.owner.accountId !== undefined || input.owner.displayName !== undefined,
+      // v0.2.23: a login name is a verified platform binding too. Checking only
+      // `accountId || displayName` made a handle-only profile look unbound, so a
+      // perfectly valid owner was blocked by the security gate instead of the
+      // identity gate — the right refusal for the wrong reason.
+      ownerIdentityValid:
+        input.owner.accountId !== undefined ||
+        input.owner.handle !== undefined ||
+        input.owner.displayName !== undefined,
       targetIdentityValid,
       evidenceIntegrityValid: evidence.valid,
       secretLeakRisk: secret.leak,

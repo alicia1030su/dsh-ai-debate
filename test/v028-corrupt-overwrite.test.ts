@@ -84,6 +84,7 @@ test('复现：已初始化的文件被删掉，再次写入不得当成首次�
           threadId: '1',
           triggerPostId: '1',
           ownerKey: 'o',
+          ownerIdentityAssurance: 'verified' as const,
           sessionId: 's1',
           publishState: 'confirmed',
           firstSeenAt: new Date().toISOString(),

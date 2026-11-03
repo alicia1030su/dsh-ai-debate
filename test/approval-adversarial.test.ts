@@ -56,8 +56,11 @@ function tempStore(): { store: DebateStore; dir: string } {
   return { store: new DebateStore({ dir }), dir }
 }
 
-const BOUND_ACCOUNT = () => ({ aiAccountUserId: '1001', aiAccountName: 'ai-account' })
-const OTHER_ACCOUNT = () => ({ aiAccountUserId: '2002', aiAccountName: 'other-account' })
+// A deliberately minimal config stub: the publisher only reads the account fields
+// it is testing. `as never` keeps it from having to enumerate every settings key,
+// including the ones v0.2.23 added (`ownerHandle`).
+const BOUND_ACCOUNT = () => ({ aiAccountUserId: '1001', aiAccountName: 'ai-account' }) as never
+const OTHER_ACCOUNT = () => ({ aiAccountUserId: '2002', aiAccountName: 'other-account' }) as never
 
 /**
  * A READY session whose candidate carries an assessment of the requested verdict.
@@ -87,6 +90,7 @@ function sessionWith(input: {
     threadTitle: fixture.thread.title,
     forumName: '测试吧',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',

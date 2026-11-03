@@ -147,6 +147,29 @@ export interface PublishAttempt {
    */
   readonly securityDecision?: 'allow' | 'review' | 'block'
   /**
+   * A proven cross-source authorship conflict affecting this publish (v0.2.23).
+   *
+   * Publishing is the one irreversible action, so it needs the strictest form of
+   * the conflict rule: when the target's author cannot be established, there is
+   * no way to know whose voice this reply continues. An approval cannot cure it —
+   * the owner approved *a body*, not a disputed authorship — so this check sits
+   * **before** the approval gate.
+   */
+  readonly identityConflict?: { readonly postId: string; readonly summary: string }
+  /**
+   * How the owner's identity was established when this candidate was generated
+   * (v0.2.23).
+   *
+   * `unverified` blocks the send. It is not a judgement about the text — it is
+   * the admission that we cannot say whose voice this reply continues. A human
+   * approval authorises a body of text; it cannot certify an authorship that the
+   * data never established.
+   *
+   * `undefined` (a candidate from before this field existed) is treated as
+   * unverified: "we never checked" is not "it is fine".
+   */
+  readonly ownerIdentityAssurance?: 'verified' | 'unverified'
+  /**
    * Whether the debate analysis itself is settled (v0.2.14 §6.4).
    *
    * ## Why this is separate from `securityDecision`
@@ -236,6 +259,42 @@ export function checkPublishPolicy(
 ): PolicyDecision {
   const reasons: string[] = []
   const verdict = attempt.securityDecision ?? 'review'
+
+  // ## An unresolved authorship conflict outranks every other permission
+  //
+  // Placed first on purpose. `security_blocked` and `approval_required` are both
+  // about *what is being said*; this one is about *whose post it is*, and no
+  // approval can answer it. A human approved a body of text; they did not, and
+  // could not, certify that the author we attributed it to is the real one.
+  if (attempt.identityConflict !== undefined) {
+    return {
+      allowed: false,
+      code: 'identity_conflict',
+      reason:
+        `这条回复的作者身份存在冲突，无法确认它属于哪个账号：${attempt.identityConflict.summary} ` +
+        '人工批准只能授权「这段文字」，不能证明「这个作者」，所以批准也不能放行。',
+    }
+  }
+
+  // ## An unverified owner is a hard stop, not a warning (v0.2.23)
+  //
+  // Placed here, with the conflict check, because both answer the same question:
+  // *whose post is this?* A reply generated from a legacy record or a nickname
+  // match may read perfectly well and still be addressed to the wrong person.
+  //
+  // `undefined` is included deliberately. A candidate written before this field
+  // existed carries no evidence either way, and the safe reading of silence is
+  // "not verified".
+  if (attempt.ownerIdentityAssurance !== 'verified') {
+    return {
+      allowed: false,
+      code: 'owner_identity_unverified',
+      reason:
+        '主人的身份没有被可靠核验（本次是从旧格式记录或昵称推断出来的），因此不能发表。' +
+        '只读分析仍然可用；要发表，请在配置里填写可核验的贴吧登录名（un），' +
+        '或改用能返回数字 UID 的数据源。',
+    }
+  }
 
   if (verdict === 'block') {
     return {

@@ -64,6 +64,7 @@ function readySession(): StoredSession {
     threadTitle: fixture.thread.title,
     forumName: '测试吧',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',

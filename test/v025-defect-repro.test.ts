@@ -44,7 +44,7 @@ import { FakeAdapter, threePartyThread } from './helpers.ts'
 /** An AI account binding that satisfies the identity gate. */
 const BOUND_ACCOUNT = () => ({ aiAccountUserId: '1001', aiAccountName: 'ai-account' })
 
-const FIXTURE = threePartyThread()
+const FIXTURE = threePartyThread({ authorSource: 'wap_inline' })
 const OPPONENT_POST_ID = 'n5'
 /**
  * The fixture's opponent user id.
@@ -123,6 +123,7 @@ function sessionWithVerdict(
     threadTitle: '测试帖',
     forumName: '测试吧',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',
@@ -238,6 +239,11 @@ test('复现 1c：策略现在会读取安全判定（修复前它读不到）',
       humanApproved: false,
       // Deliberately omitted: a caller that forgets the verdict has not proven the
       // candidate is clean, so it is read as `review` rather than `allow`.
+      //
+      // v0.2.23 keeps this test focused on the security verdict by declaring the
+      // owner verified; otherwise the identity gate answers first and the assertion
+      // would be testing a different refusal.
+      ownerIdentityAssurance: 'verified' as const,
       now: Date.now(),
     },
   )

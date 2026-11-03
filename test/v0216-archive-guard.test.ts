@@ -10,7 +10,7 @@
  */
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -40,7 +40,20 @@ function runGuard(cwd, extraArgs = [], extraEnv = {}) {
  * 「规则文本齐全、但归档不存在」这一真实组合下的行为。
  */
 function makeRepoWithoutArchive() {
-  const temp = mkdtempSync(join(tmpdir(), 'dsh-guard-'))
+  /**
+   * `mkdtemp` under the **system** temp directory put the repo's parent at
+   * `%TEMP%`, where any earlier run of `source-zip.mjs` may have left a
+   * `dsh-ai-debate-source-<version>.zip`. The guard looks in the parent first, so
+   * a stray file there silently turned "no archive" into "found an archive" and
+   * the precondition assertion failed.
+   *
+   * v0.2.23 wraps one extra level: the repo's parent is a directory this test
+   * owns and empties, so the precondition holds on a machine with any history.
+   * Nothing outside the sandbox is read or removed.
+   */
+  const sandbox = mkdtempSync(join(tmpdir(), 'dsh-guard-sandbox-'))
+  const temp = join(sandbox, 'repo')
+  mkdirSync(temp)
   for (const entry of ['package.json', 'pnpm-lock.yaml', '.gitignore']) {
     const source = join(ROOT, entry)
     if (existsSync(source)) cpSync(source, join(temp, entry))
@@ -49,15 +62,16 @@ function makeRepoWithoutArchive() {
     const source = join(ROOT, entry)
     if (existsSync(source)) cpSync(source, join(temp, entry), { recursive: true })
   }
-  // 归档放在 root 的上一级；临时目录的上一级不该有同名文件。
+  // The archive is written beside the project, so `temp`'s parent is `sandbox` —
+  // a directory that only this test has ever written to.
   const version = JSON.parse(readFileSync(join(temp, 'package.json'), 'utf8')).version
-  const archive = join(temp, '..', `dsh-ai-debate-source-${version}.zip`)
-  return { temp, archive }
+  const archive = join(sandbox, `dsh-ai-debate-source-${version}.zip`)
+  return { temp, archive, sandbox }
 }
 
 test('守卫：没有源码包且未指定 --require-archive 时跳过归档检查并通过', (t) => {
-  const { temp, archive } = makeRepoWithoutArchive()
-  t.after(() => rmSync(temp, { recursive: true, force: true }))
+  const { temp, archive, sandbox } = makeRepoWithoutArchive()
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }))
   assert.equal(existsSync(archive), false, '前置条件：临时仓库的上一级不该有源码包')
 
   // 关键一条：`CI` 必须被设置着。旧实现正是在这种情况下一头撞死。
@@ -68,8 +82,8 @@ test('守卫：没有源码包且未指定 --require-archive 时跳过归档检�
 })
 
 test('守卫：指定 --require-archive 但源码包不存在时必须失败', (t) => {
-  const { temp, archive } = makeRepoWithoutArchive()
-  t.after(() => rmSync(temp, { recursive: true, force: true }))
+  const { temp, archive, sandbox } = makeRepoWithoutArchive()
+  t.after(() => rmSync(sandbox, { recursive: true, force: true }))
   assert.equal(existsSync(archive), false)
 
   const result = runGuard(temp, ['--require-archive'])

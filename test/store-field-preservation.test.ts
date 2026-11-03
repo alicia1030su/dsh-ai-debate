@@ -219,6 +219,7 @@ test('a pruned write keeps approvals even while sessions expire', async () => {
           threadTitle: 't',
           forumName: 'f',
           ownerKey: 'o',
+          ownerIdentityAssurance: 'verified' as const,
           ownerName: '主人',
           opponentKey: 'b',
           opponentName: '对手',

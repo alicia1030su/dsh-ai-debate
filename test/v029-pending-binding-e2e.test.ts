@@ -101,6 +101,7 @@ function session(overrides: { text?: string; version?: number; fingerprint?: str
     threadTitle: '端到端帖子',
     forumName: '测试吧',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',

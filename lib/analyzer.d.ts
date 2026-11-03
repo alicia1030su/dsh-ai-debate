@@ -21,7 +21,40 @@ export type OwnerMatchKind = 'id' | 'name';
 export interface Participant {
     /** Display name; also the merge key for identity across mixed handles. */
     readonly key: string;
+    /**
+     * Numeric platform account id, **only** when a surface stated one (v0.2.23).
+     *
+     * Before v0.2.23 this field held the login name (`un`), because Tieba's WAP
+     * page is the only surface most reads use and it exposes nothing numeric. That
+     * made `participant.userId === owner.userId` a comparison between a handle and
+     * a uid: always false, and — worse — it made `anyIdsExposed` true, so the
+     * owner check took the "the id is wrong" branch and never said "this surface
+     * cannot prove ids at all".
+     */
     readonly userId?: string;
+    /** Login name (`un` / `username`), the strongest identity a WAP read offers. */
+    readonly handle?: string;
+    /**
+     * A pre-v0.2.23 account string whose namespace was never recorded (v0.2.23).
+     *
+     * On Tieba, v0.2.22 documented `authorId` as the `un` login name, so this is
+     * read as a handle for display purposes. It is kept in its own field because a
+     * historical record cannot prove it was a handle any more than it can prove it
+     * was a uid — and an owner match that relies on it must say so rather than
+     * present itself as a uid match.
+     */
+    readonly legacyAccountId?: string;
+    /**
+     * True when at least one of this participant's records declared which surface it
+     * came from (v0.2.23).
+     *
+     * A participant built entirely from legacy rows can be *displayed* and
+     * *analysed*, but cannot be called verified: we never learned what kind of
+     * account string those rows held. Without this flag, a legacy row whose
+     * `authorId` happened to equal a configured handle would have resolved as
+     * `verified` — the exact up-grade rule 2 of the compatibility contract forbids.
+     */
+    readonly hasDeclaredSource?: boolean;
     readonly displayName: string;
     /** How the key was derived, so the UI can explain a name-based match. */
     readonly matchKind: OwnerMatchKind;
@@ -98,6 +131,18 @@ export interface Dispute {
     readonly needsConfirmation: boolean;
     /** Human-readable reasons for `needsConfirmation`, or for the choice made. */
     readonly notes: readonly string[];
+    /**
+     * How strongly the owner's identity was established (v0.2.23).
+     *
+     * - `verified` — a numeric uid matched, or a login handle matched under a
+     *   surface that states one.
+     * - `unverified` — the owner was resolved (for reading) from a legacy record or
+     *   a nickname. The analysis is useful; a publish is not authorised by it.
+     *
+     * Kept separate from `notes` because prose cannot be enforced. The publish gate
+     * reads this field; a note would only be read by a human who happened to look.
+     */
+    readonly ownerIdentityAssurance: 'verified' | 'unverified';
 }
 /** The trigger that started this task. */
 export interface TriggerRef {
@@ -127,6 +172,15 @@ export interface OwnerIdentity {
     readonly platform?: PlatformId;
     /** Stable platform id; preferred. */
     readonly userId?: string;
+    /**
+     * Login name (`un`) as published by the platform (v0.2.23).
+     *
+     * This is the only owner field that can match a WAP floor: that surface
+     * publishes `un` and no numeric uid. It is matched against `authorId`, which
+     * v0.2.23 defines as the handle — never against a numeric uid, and never
+     * merged with `userName`, because a login name is not a nickname.
+     */
+    readonly handle?: string;
     /** Display name; used only when no id is configured or matched. */
     readonly userName?: string;
 }

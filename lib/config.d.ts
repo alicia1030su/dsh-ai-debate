@@ -11,9 +11,37 @@ import z from '@deepseek-ai/schemastery';
 export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     /** Master switch. */
     enabled: z<boolean, boolean, "volatile-defined">;
-    /** The owner's stable Tieba user id. Preferred over the name. */
+    /**
+     * The owner's **numeric** Tieba account id.
+     *
+     * v0.2.23 keeps the field name so existing profiles keep working, but changes
+     * what it is compared against: `authorNumericUid` only. It is no longer
+     * compared against `authorId`, because on the WAP surface `authorId` holds a
+     * login name — and `348099763 === "银狐_玉耀"` can never be true.
+     *
+     * A profile that only sets this, reading a thread that exposes no numeric uid,
+     * is now told exactly that instead of being told the owner never posted.
+     */
     ownerUserId: z<string, string, "volatile-defined">;
-    /** The owner's Tieba username, used only when no id is configured. */
+    /**
+     * The owner's **login name** (`un`), introduced in v0.2.23.
+     *
+     * This is the field that actually works against a WAP read: the WAP page
+     * publishes `un` and nothing numeric. It is separate from `ownerUserName`
+     * because a login name is not a nickname — it is the account's own name that
+     * the owner cannot change, whereas a nickname can be set to anything by
+     * anyone.
+     *
+     * Leave empty if you do not know it; the plugin will refuse to guess rather
+     * than fall back to a nickname.
+     */
+    ownerHandle: z<string, string, "volatile-defined">;
+    /**
+     * The owner's Tieba username, used only when neither an id nor a handle is set.
+     *
+     * A nickname. It can be duplicated and changed, so a match on it is recorded
+     * as `display_name_match_only` and never treated as proof of identity.
+     */
     ownerUserName: z<string, string, "volatile-defined">;
     /** The AI account's display name, for the summon hint. */
     aiAccountName: z<string, string, "volatile-defined">;
@@ -138,9 +166,37 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
 }>>, Schemastery.ObjectT<NoInfer<{
     /** Master switch. */
     enabled: z<boolean, boolean, "volatile-defined">;
-    /** The owner's stable Tieba user id. Preferred over the name. */
+    /**
+     * The owner's **numeric** Tieba account id.
+     *
+     * v0.2.23 keeps the field name so existing profiles keep working, but changes
+     * what it is compared against: `authorNumericUid` only. It is no longer
+     * compared against `authorId`, because on the WAP surface `authorId` holds a
+     * login name — and `348099763 === "银狐_玉耀"` can never be true.
+     *
+     * A profile that only sets this, reading a thread that exposes no numeric uid,
+     * is now told exactly that instead of being told the owner never posted.
+     */
     ownerUserId: z<string, string, "volatile-defined">;
-    /** The owner's Tieba username, used only when no id is configured. */
+    /**
+     * The owner's **login name** (`un`), introduced in v0.2.23.
+     *
+     * This is the field that actually works against a WAP read: the WAP page
+     * publishes `un` and nothing numeric. It is separate from `ownerUserName`
+     * because a login name is not a nickname — it is the account's own name that
+     * the owner cannot change, whereas a nickname can be set to anything by
+     * anyone.
+     *
+     * Leave empty if you do not know it; the plugin will refuse to guess rather
+     * than fall back to a nickname.
+     */
+    ownerHandle: z<string, string, "volatile-defined">;
+    /**
+     * The owner's Tieba username, used only when neither an id nor a handle is set.
+     *
+     * A nickname. It can be duplicated and changed, so a match on it is recorded
+     * as `display_name_match_only` and never treated as proof of identity.
+     */
     ownerUserName: z<string, string, "volatile-defined">;
     /** The AI account's display name, for the summon hint. */
     aiAccountName: z<string, string, "volatile-defined">;
@@ -267,6 +323,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
 export declare const DEFAULT_CONFIG: {
     enabled: boolean;
     ownerUserId: string;
+    ownerHandle: string;
     ownerUserName: string;
     aiAccountName: string;
     aiAccountUserId: string;

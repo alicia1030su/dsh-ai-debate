@@ -17,12 +17,21 @@
 import {
   PlatformError,
   type Floor,
+  type IdentitySource,
   type NestedReply,
   type PlatformAdapter,
+  type PlatformId,
   type ReplyContext,
   type Thread,
   type ThreadRef,
 } from './types.js'
+import {
+  assuranceOf,
+  conflictBetween,
+  type AuthorIdentity,
+  type IdentityAssurance,
+  type IdentityConflictReport,
+} from './identity.js'
 
 /** How much of a thread to collect. */
 export interface CollectOptions {
@@ -122,6 +131,16 @@ export interface CollectedThread {
 
   /** True when any floor's nested replies were read incompletely. */
   readonly nestedIncomplete?: boolean
+  /**
+   * Proven cross-source authorship disagreements found while collecting
+   * (v0.2.23).
+   *
+   * A non-empty list means at least one post id was described by two surfaces
+   * with identities that cannot both be true. Owner resolution and publishing
+   * must refuse while this is non-empty for the affected post — see
+   * `analyzer.resolveOwnerKey` and `safety.checkPublishPolicy`.
+   */
+  readonly identityConflicts?: readonly IdentityConflictReport[]
   /** Non-fatal problems, phrased for a human. */
   readonly issues: readonly string[]
 }
@@ -305,6 +324,17 @@ export async function walkFloors(
                 : '上一页明确表示还有更多内容') +
             '：已读取的部分保留，但这不是完整结果。',
         )
+      } else {
+        // v0.2.23: a failure with no evidence of more pages is still a failure,
+        // and the reason must survive. v0.2.22 left `issues` empty here, so the
+        // only thing a caller could report was "no floors" — which the tool
+        // turned into "the post may be deleted or require login", even when the
+        // platform had answered with a security-verification page.
+        issues = appendIssue(
+          issues,
+          `第 ${page} 页读取失败（${failed}）：没有读到任何内容，` +
+            '这不是「读完了」，是「没有开始」。',
+        )
       }
       break
     }
@@ -474,9 +504,26 @@ export async function walkNested(
   ref: ThreadRef,
   floor: Floor,
   options: { maxPages?: number; signal?: AbortSignal } = {},
-): Promise<{ replies: readonly NestedReply[]; complete: boolean; error?: string; degraded?: boolean }> {
+): Promise<{
+  replies: readonly NestedReply[]
+  complete: boolean
+  error?: string
+  degraded?: boolean
+  conflicts?: readonly IdentityConflictReport[]
+  assurance?: ReadonlyMap<string, IdentityAssurance>
+}> {
   const maxPages = options.maxPages ?? 10
   const seen = new Map<string, NestedReply>()
+  /**
+   * The first sighting of each post id, kept so a later sighting can be compared
+   * against it instead of being discarded.
+   *
+   * v0.2.22 dropped the duplicate here with `if (!seen.has(...))`. That is the
+   * one place where a cross-source disagreement could have been noticed, and it
+   * was exactly the place that threw it away.
+   */
+  const firstSurface = new Map<string, NestedReply>()
+  const conflicts: IdentityConflictReport[] = []
   let page = 1
   let error: string | undefined
   let degraded = false
@@ -492,9 +539,30 @@ export async function walkNested(
     if (result.incomplete) degraded = true
     let added = 0
     for (const reply of result.replies) {
-      if (!seen.has(reply.postId)) {
+      const previous = firstSurface.get(reply.postId)
+      if (previous === undefined) {
         seen.set(reply.postId, reply)
+        firstSurface.set(reply.postId, reply)
         added += 1
+        continue
+      }
+      const conflict = conflictBetween({
+        platform: reply.platform,
+        postId: reply.postId,
+        first: identityOfReply(previous),
+        second: identityOfReply(reply),
+      })
+      if (conflict !== undefined) {
+        seen.set(reply.postId, {
+          ...previous,
+          identityConflict: {
+            code: 'identity_conflict',
+            summary: conflict.summary,
+            firstSource: previous.authorSource ?? 'platform_contract',
+            secondSource: reply.authorSource ?? 'platform_contract',
+          },
+        })
+        if (!conflicts.some((entry) => entry.postId === reply.postId)) conflicts.push(conflict)
       }
     }
     if (!result.hasMore || added === 0) break
@@ -503,13 +571,72 @@ export async function walkNested(
 
   const replies = [...seen.values()]
   const declared = floor.nestedCount
+  /**
+   * Per-post assurance, so callers can tell "checked and agreed" from "only one
+   * surface spoke" (v0.2.23).
+   *
+   * Without this, an empty `conflicts` list reads as "authorship is fine", which
+   * is the misreading this map exists to prevent: on Tieba a normal read consults
+   * exactly one surface, so nothing was cross-checked at all.
+   */
+  const assurance = new Map<string, IdentityAssurance>()
+  for (const [postId, reply] of firstSurface) {
+    const sources = new Set<IdentitySource>()
+    sources.add(reply.authorSource ?? 'platform_contract')
+    const later = replies.find((entry) => entry.postId === postId)
+    if (later?.authorSource !== undefined) sources.add(later.authorSource)
+    assurance.set(
+      postId,
+      assuranceOf({
+        ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+        ...(reply.authorId === undefined ? {} : { handle: reply.authorId }),
+        sources: [...sources],
+        conflicted: conflicts.some((entry) => entry.postId === postId),
+      }),
+    )
+  }
+
   return {
     replies,
     // A page that declares itself incomplete (a degraded source) is never a
-    // complete read, even if the counts happen to line up.
-    complete: error === undefined && !degraded && (declared === undefined || replies.length >= declared),
+    // complete read, even if the counts happen to line up. Neither is a read
+    // containing an unresolved authorship conflict: we cannot claim to have
+    // understood a floor we cannot attribute.
+    complete:
+      error === undefined &&
+      !degraded &&
+      conflicts.length === 0 &&
+      (declared === undefined || replies.length >= declared),
     error,
     degraded,
+    ...(conflicts.length === 0 ? {} : { conflicts }),
+    ...(assurance.size === 0 ? {} : { assurance }),
+  }
+}
+
+/**
+ * Project a nested reply onto the identity fields the comparison needs.
+ *
+ * A record with no `authorSource` predates v0.2.23 and is returned as a legacy
+ * identity: its `authorId` is deliberately **not** promoted to a handle, because
+ * we know it was some account string but not which namespace it belonged to.
+ * That makes it compare as `unknown_legacy_record` rather than accidentally
+ * matching a handle today.
+ */
+function identityOfReply(reply: NestedReply): AuthorIdentity {
+  const legacy = reply.authorSource === undefined
+  // A value already declared as the numeric uid must not also be read as a
+  // handle: one string cannot belong to two namespaces at once.
+  const duplicated = reply.authorNumericUid !== undefined && reply.authorId === reply.authorNumericUid
+  return {
+    platform: reply.platform,
+    ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+    ...(reply.authorNumericUidKind === undefined
+      ? {}
+      : { numericUidKind: reply.authorNumericUidKind }),
+    ...(legacy || reply.authorId === undefined || duplicated ? {} : { handle: reply.authorId }),
+    ...(reply.authorName === undefined ? {} : { displayName: reply.authorName }),
+    source: reply.authorSource ?? 'platform_contract',
   }
 }
 
@@ -601,6 +728,8 @@ export async function collectThread(
   let nestedDone = 0
 
   let nestedIncomplete = false
+  /** Proven cross-source disagreements, accumulated across every floor. */
+  const identityConflicts: IdentityConflictReport[] = []
   for (const floor of floors) {
     const targetIndex = nestedTargets.indexOf(floor)
     const shouldFetch = nestedLimit > 0 && targetIndex >= 0 && targetIndex < nestedLimit
@@ -621,6 +750,14 @@ export async function collectThread(
       total: Math.min(nestedTargets.length, nestedLimit),
     })
     const nested = await walkNested(adapter, ref, floor, { signal: options.signal })
+    // v0.2.23: a proven authorship disagreement makes the whole read untrustworthy
+    // for owner purposes. Collected here, reported upward, never resolved here.
+    if (nested.conflicts !== undefined) {
+      for (const conflict of nested.conflicts) {
+        identityConflicts.push(conflict)
+        issues.push(conflict.summary)
+      }
+    }
     if (nested.error) {
       nestedIncomplete = true
       issues.push(`${floorLabel(floor.floorNumber, floor.postId)} 楼中楼读取失败：${nested.error}`)
@@ -661,6 +798,7 @@ export async function collectThread(
     stopReason: all.stopReason,
     truncated: all.truncated,
     nestedIncomplete,
+    ...(identityConflicts.length === 0 ? {} : { identityConflicts }),
     issues,
   }
 }
@@ -758,6 +896,14 @@ export interface TimelineEntry {
   readonly kind: 'floor' | 'nested'
   readonly postId: string
   /**
+   * Which platform this entry came from (v0.2.23).
+   *
+   * Needed by owner resolution: the meaning of a legacy `authorId` is a property
+   * of the platform's contract (Tieba: a login name; Weibo: a stable account id),
+   * not of the string's shape.
+   */
+  readonly platform: PlatformId
+  /**
    * The floor this entry belongs to, by the floor post's stable id.
    *
    * v0.2.1: this is the grouping key. It used to be `floorNumber`, which forced
@@ -771,6 +917,16 @@ export interface TimelineEntry {
   readonly floorNumber?: number
   readonly authorId?: string
   readonly authorName?: string
+  /**
+   * Numeric account id, when a surface stated one as a number (v0.2.23).
+   *
+   * Absent for WAP-floor and WAP-inline rows, which carry no uid at all. Its
+   * presence is what lets an owner configured with a numeric id be matched
+   * *provably* instead of by comparing that id against a login name.
+   */
+  readonly authorNumericUid?: string
+  /** Which surface produced the author fields above (v0.2.23). */
+  readonly authorSource?: IdentitySource
   /** Display order within the floor; floors use 0. */
   readonly order: number
   readonly content: string
@@ -786,10 +942,13 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
     out.push({
       kind: 'floor',
       postId: entry.floor.postId,
+      platform: entry.floor.platform,
       floorPostId: entry.floor.postId,
       floorNumber: entry.floor.floorNumber,
       authorId: entry.floor.authorId,
       authorName: entry.floor.authorName,
+      ...(entry.floor.authorNumericUid === undefined ? {} : { authorNumericUid: entry.floor.authorNumericUid }),
+      ...(entry.floor.authorSource === undefined ? {} : { authorSource: entry.floor.authorSource }),
       order: 0,
       content: entry.floor.content,
       createdAt: entry.floor.createdAt,
@@ -798,10 +957,13 @@ export function buildTimeline(collected: CollectedThread): readonly TimelineEntr
       out.push({
         kind: 'nested',
         postId: reply.postId,
+        platform: reply.platform,
         floorPostId: entry.floor.postId,
         floorNumber: entry.floor.floorNumber,
         authorId: reply.authorId,
         authorName: reply.authorName,
+        ...(reply.authorNumericUid === undefined ? {} : { authorNumericUid: reply.authorNumericUid }),
+        ...(reply.authorSource === undefined ? {} : { authorSource: reply.authorSource }),
         order: index + 1,
         content: reply.content,
         createdAt: reply.createdAt,
@@ -846,6 +1008,22 @@ export function floorOf(
 /** Throw a normalized error when a thread could not be read at all. */
 export function assertCollected(collected: CollectedThread): void {
   if (collected.floors.length === 0) {
-    throw new PlatformError('没有读取到任何楼层，该帖子可能已删除或需要登录', 'not_found')
+    // v0.2.23: carry the walk's own explanation instead of replacing it with a
+    // guess. "可能已删除或需要登录" was wrong for the most common real failure —
+    // an anti-bot page — and sent the owner looking for a deleted thread while
+    // the fix was to open a browser and clear the verification.
+    //
+    // The code is `not_found` only when the walk actually said the content is
+    // gone; a verification page or a transport error keeps its own code so the
+    // tool layer can word it correctly.
+    const reason = collected.issues[0]
+    const challenge = collected.issues.some((issue) => /安全验证|人机验证|验证码/.test(issue))
+    const gone = collected.stopReason === 'deleted_or_unavailable' && !challenge
+    throw new PlatformError(
+      reason === undefined
+        ? '没有读取到任何楼层，该帖子可能已删除或需要登录'
+        : `没有读取到任何楼层：${reason}`,
+      challenge ? 'captcha' : gone ? 'not_found' : 'unknown',
+    )
   }
 }

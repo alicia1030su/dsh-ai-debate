@@ -18,6 +18,7 @@
  */
 import { type AuthState, type Floor, type Mention, type NestedPage, type NestedReply, type PlatformAdapter, type PlatformCapabilities, type PublishOutcome, type PublishTarget, type ReplyContext, type ReplyPage, type Thread, type ThreadRef, type UserProfile } from '../../types.js';
 import { type ParsedFloor } from './parse.js';
+import { type IdentityConflictReport } from '../../identity.js';
 /** Options for the adapter; every one has a working default. */
 export interface TiebaAdapterOptions {
     /** Cookie header value copied from a logged-in browser, if the user has one. */
@@ -236,6 +237,7 @@ export declare class TiebaAdapter implements PlatformAdapter {
         complete: boolean;
         error?: string;
         degraded?: boolean;
+        conflicts?: readonly IdentityConflictReport[];
     }>;
     /** Resolve the forum id for a thread, caching the lookup. */
     private resolveForumId;

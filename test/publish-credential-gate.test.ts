@@ -45,6 +45,7 @@ function readySession(): Record<string, unknown> {
     threadTitle: '测试帖',
     forumName: '测试吧',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',

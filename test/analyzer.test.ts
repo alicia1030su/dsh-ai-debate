@@ -243,11 +243,13 @@ test('an absent owner is a clear error, not a silent empty analysis', () => {
     [makeFloor({ floorNumber: 1, postId: '1000', authorId: 'z', authorName: '别人', content: '发言', nestedCount: 0 })],
     {},
   )
-  // The message names what was configured and states that nickname fallback is
-  // deliberately refused — that is the P0-3 contract, so assert on it.
+  // The P0-3 contract is that a configured id which matches nothing is an error,
+  // never a silent nickname fallback. The exact sentence differs by branch, so the
+  // assertion pins the contract — names the configured id, refuses — rather than
+  // one branch's wording.
   assert.throws(
     () => analyzeDispute(data, { userId: 'nobody' }, { postId: '1000' }),
-    /配置的主人用户 ID 是 nobody.*不会退回去按昵称匹配/s,
+    /nobody.*(不会退回去按昵称匹配|没有这个 ID|没有暴露 ID)/s,
   )
 })
 
@@ -261,7 +263,12 @@ test('a configured owner id never degrades to a matching nickname', () => {
       makeFloor({
         floorNumber: 1,
         postId: '1200',
+        // v0.2.23: the platform stated a numeric uid, so it is declared as one.
+        // The bare-`authorId` form this fixture used to carry is now read as a
+        // login name, which is the whole point of the split.
         authorId: '12345',
+        authorNumericUid: '12345',
+        authorSource: 'total_comment',
         authorName: 'Alice',
         content: '这个方案不行',
         nestedCount: 0,
@@ -284,6 +291,8 @@ test('a matching owner id is still accepted when a nickname is also configured',
         floorNumber: 1,
         postId: '1300',
         authorId: '12345',
+        authorNumericUid: '12345',
+        authorSource: 'total_comment',
         authorName: 'Alice',
         content: '我不同意这个做法',
         nestedCount: 0,
@@ -307,7 +316,9 @@ test('a nickname match is refused when ids exist but the configured id is absent
   )
   assert.throws(
     () => analyzeDispute(data, { userId: 'ccc', userName: '同名' }, { postId: '1400' }),
-    /配置的主人用户 ID 是 ccc/,
+    // Contract: the configured id is named and the analysis refuses. Two branches
+    // can produce this (id-wrong vs ids-not-exposed), and both are correct refusals.
+    /ccc.*(ID|id)/s,
   )
 })
 

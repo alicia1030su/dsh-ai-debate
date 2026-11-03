@@ -103,6 +103,7 @@ function session(overrides: Partial<StoredSession> = {}): StoredSession {
     threadTitle: '讨论',
     forumName: '测试吧',
     ownerKey: 'owner-1',
+    ownerIdentityAssurance: 'verified' as const,
     ownerName: '主人',
     opponentKey: 'opp-1',
     opponentName: '对手B',

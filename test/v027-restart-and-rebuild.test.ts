@@ -35,6 +35,7 @@ function sessionOn(platform: string, id: string) {
     threadTitle: '帖子',
     forumName: '版块',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
     disputeFloorPostId: 'n1',
     disputeFloorNumber: 1,
     triggerPostId: 'n2',

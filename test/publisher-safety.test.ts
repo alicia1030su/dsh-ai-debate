@@ -109,6 +109,7 @@ function readySession(input: {
     threadTitle: '测试帖',
     forumName: '测试吧',
     ownerKey: 'o',
+    ownerIdentityAssurance: 'verified' as const,
     ownerName: '主人',
     opponentKey: 'b',
     opponentName: '对手B',
@@ -576,6 +577,9 @@ test('the limited-auto policy enforces its caps and cooldown', () => {
     humanApproved: true,
     securityDecision: 'allow' as const,
     semanticSettled: true,
+    // v0.2.23: a policy-only fixture still has to declare that the owner was
+    // verified, or the identity gate refuses before the caps are ever consulted.
+    ownerIdentityAssurance: 'verified' as const,
     now: 1_000_000,
   }
   assert.equal(checkPublishPolicy(policy, base).allowed, true)
@@ -1491,6 +1495,7 @@ test('a corrupt dedupe record is rejected', async () => {
           platform: 'tieba',
           threadId: 't',
           ownerKey: 'o',
+          ownerIdentityAssurance: 'verified' as const,
           triggerPostId: 'p',
           sessionId: 's',
           publishState: 'maybe-sent',
@@ -1748,6 +1753,7 @@ test('expired sessions are pruned but their publish records survive', async () =
           platform: 'tieba',
           threadId: '900000000000',
           ownerKey: 'o',
+          ownerIdentityAssurance: 'verified' as const,
           triggerPostId: 'p-old',
           sessionId: 's-old',
           firstSeenAt: old,
@@ -1783,6 +1789,7 @@ test('an unresolved pending publish record is never aged out', async () => {
           platform: 'tieba',
           threadId: 't',
           ownerKey: 'o',
+          ownerIdentityAssurance: 'verified' as const,
           triggerPostId: 'p',
           sessionId: 's-gone',
           firstSeenAt: ancient,
