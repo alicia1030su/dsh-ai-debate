@@ -95,8 +95,16 @@ export interface AuthorIdentity {
    * timestamp, so one account legitimately yields several values over time.
    */
   readonly portrait?: string
-  /** Which surface produced these fields. */
-  readonly source: IdentitySource
+  /**
+   * Which surface produced these fields, when the row said so.
+   *
+   * Optional since v0.2.23 patch 7. It used to be required, and the collector filled
+   * the gap with the name `platform_contract` — which turned "unknown origin" into a
+   * named surface that could then count as an independent source for corroboration.
+   * Requiring a value only works if the caller can always supply a *true* one; it
+   * cannot, so the field now admits that it does not know.
+   */
+  readonly source?: IdentitySource
 }
 
 /**
@@ -348,8 +356,16 @@ export type IdentityAssurance = 'identity_verified' | 'identity_unknown' | 'iden
  * "not comparable" distinguishable from "agreed".
  */
 export interface IdentityObservation {
-  /** The surface that produced this observation. */
-  readonly source: IdentitySource
+  /**
+   * The surface that produced this observation, when it said so.
+   *
+   * `undefined` means **unknown provenance** — the row carried no `authorSource`.
+   * Earlier the collector renamed exactly that case to `platform_contract`, which
+   * made an unknown origin look like a named, independent surface and let two such
+   * rows (or one such row plus a real one) claim cross-verification. Absence is now
+   * represented by absence.
+   */
+  readonly source?: IdentitySource
   /** The numeric uid, when this surface stated one. */
   readonly numericUid?: string
   /** Which namespace that number belongs to, when stated. */
@@ -445,7 +461,58 @@ function verdictFrom(input: {
  * Two rows from the same surface are one source. `platform_contract` is what a row
  * that did not say gets, so two such rows corroborate nothing.
  */
-export type CorroborationVerdict = 'corroborated' | 'contested' | 'incomparable' | 'single_source'
+/**
+ * Which physical response an observation came from.
+ *
+ * ## Why a sourceId is not enough
+ *
+ * `wap_floor` and `wap_inline` are two parsers over **one HTTP response**: the floor
+ * list and the inline nested replies are both read out of the same WAP HTML. Counting
+ * them as two sources turned a single page fetch into "two independent surfaces
+ * agree" — which is what `corroborated` is supposed to mean, and did not.
+ *
+ * The grouping below is by *where the bytes came from*, not by which function read
+ * them:
+ *
+ * | sourceId | physical origin |
+ * | --- | --- |
+ * | `wap_floor`, `wap_inline` | `wap` — one page |
+ * | `comment_page` | `comment` — its own request |
+ * | `total_comment` | `total_comment` — its own request |
+ * | `platform_contract` / unknown | `unknown` — never counts as a source |
+ */
+export function physicalOriginOf(source: IdentitySource | undefined): string {
+  switch (source) {
+    case 'wap_floor':
+    case 'wap_inline':
+      return 'wap'
+    case 'comment_page':
+      return 'comment'
+    case 'total_comment':
+      return 'total_comment'
+    // `platform_contract` was a fabricated name for "the row did not say". It must
+    // not group with anything real, so it gets its own bucket that never corroborates.
+    case 'platform_contract':
+      return 'unknown'
+    default:
+      return 'unknown'
+  }
+}
+
+export type CorroborationVerdict =
+  | 'corroborated'
+  | 'contested'
+  | 'incomparable'
+  | 'single_source'
+  /**
+   * One physical source contradicted itself about the same entity.
+   *
+   * Distinct from both neighbours on purpose: `contested` would assert that two
+   * accounts are different people, which nobody compared; `single_source` would read
+   * as "we only looked once", hiding a data-quality problem that the reader may need
+   * to act on.
+   */
+  | 'inconsistent'
 
 /** Why a verdict came out the way it did, in words the caller can show. */
 export interface CorroborationReason {
@@ -459,6 +526,7 @@ export interface CorroborationReason {
     | 'not_enough_sources'
     | 'no_comparable_identifier'
     | 'reported_conflict'
+    | 'self_contradictory'
   readonly detail: string
 }
 
@@ -495,79 +563,86 @@ export function corroborationOf(sighting: IdentitySightings): CorroborationVerdi
 
   const observations = sighting.observations ?? []
 
-  // What each distinct source supplied, grouped by source. Repeated rows from the
-  // same surface collapse into one entry: one source is one source regardless of how
-  // many times it answered.
-  const handlesBySource = new Map<IdentitySource, Set<string>>()
-  const uidsBySource = new Map<IdentitySource, Set<string>>()
-  for (const entry of observations) {
-    if (entry.handle !== undefined && entry.handle !== '') {
-      const set = handlesBySource.get(entry.source) ?? new Set<string>()
-      set.add(entry.handle)
-      handlesBySource.set(entry.source, set)
-    }
-    if (entry.numericUid !== undefined && entry.numericUid !== '' && entry.namespace !== undefined) {
-      const set = uidsBySource.get(entry.source) ?? new Set<string>()
-      set.add(`${entry.namespace}:${entry.numericUid}`)
-      uidsBySource.set(entry.source, set)
-    }
-  }
-
-  // "One source" is about how many surfaces spoke at all, not how many spoke per
-  // kind of identifier. Two surfaces that each named a different kind of identifier
-  // are still two surfaces — they simply could not be compared, which is the
-  // `incomparable` verdict below rather than "only one source".
-  const distinctSources = new Set(observations.map((entry) => entry.source))
-  if (distinctSources.size < 2) return 'single_source'
-
-  // ## Disagreement, compared only within a kind and a namespace
+  // ## Group by physical origin, not by parser
   //
-  // A handle and a uid are different kinds of identifier; so are ids from two
-  // namespaces. Comparing across them is what produced the false conflicts.
-  for (const values of handlesBySource.values()) {
-    if (values.size > 1) return 'contested'
+  // `wap_floor` and `wap_inline` read the same HTTP response, so they are one origin.
+  // Rows with no declared source have origin `undefined` and are kept in their own
+  // bucket: an unknown origin cannot stand in as a second independent surface.
+  const byOrigin = new Map<string, { handles: Set<string>; uids: Set<string> }>()
+  for (const entry of observations) {
+    const origin = entry.source === undefined ? undefined : physicalOriginOf(entry.source)
+    // Unknown provenance still participates in *self*-contradiction detection below,
+    // but never counts as an independent origin for agreement.
+    const key = origin === undefined || origin === 'unknown' ? '__unknown__' : origin
+    const bucket = byOrigin.get(key) ?? { handles: new Set<string>(), uids: new Set<string>() }
+    if (entry.handle !== undefined && entry.handle !== '') bucket.handles.add(entry.handle)
+    if (entry.numericUid !== undefined && entry.numericUid !== '' && entry.namespace !== undefined) {
+      bucket.uids.add(`${entry.namespace}:${entry.numericUid}`)
+    }
+    byOrigin.set(key, bucket)
   }
-  const allHandleValues = new Set<string>()
-  for (const values of handlesBySource.values()) for (const value of values) allHandleValues.add(value)
-  if (allHandleValues.size > 1) return 'contested'
 
-  // Uids only conflict when the namespace is the *same* and the number differs.
-  const uidsByNamespace = new Map<string, Set<string>>()
-  for (const value of uidsBySource.values()) {
-    for (const tagged of value) {
+  // ## A single origin contradicting itself about one entity
+  //
+  // This is not a conflict between two people — nobody compared two surfaces. It is
+  // a data-quality problem, and reporting it as `single_source` would hide it behind
+  // a phrase that means "we only looked once".
+  for (const bucket of byOrigin.values()) {
+    if (bucket.handles.size > 1) return 'inconsistent'
+    const byNamespace = new Map<string, Set<string>>()
+    for (const tagged of bucket.uids) {
       const at = tagged.indexOf(':')
-      const namespace = tagged.slice(0, at)
-      const number = tagged.slice(at + 1)
-      const set = uidsByNamespace.get(namespace) ?? new Set<string>()
-      set.add(number)
-      uidsByNamespace.set(namespace, set)
+      const set = byNamespace.get(tagged.slice(0, at)) ?? new Set<string>()
+      set.add(tagged.slice(at + 1))
+      byNamespace.set(tagged.slice(0, at), set)
+    }
+    for (const values of byNamespace.values()) if (values.size > 1) return 'inconsistent'
+  }
+
+  const knownOrigins = [...byOrigin.keys()].filter((key) => key !== '__unknown__')
+
+  // ## Agreement across genuinely different origins
+  const allHandles = new Set<string>()
+  for (const key of knownOrigins) for (const value of byOrigin.get(key)!.handles) allHandles.add(value)
+  if (allHandles.size > 1) return 'contested'
+
+  const uidsByNamespace = new Map<string, Set<string>>()
+  for (const key of knownOrigins) {
+    for (const tagged of byOrigin.get(key)!.uids) {
+      const at = tagged.indexOf(':')
+      const set = uidsByNamespace.get(tagged.slice(0, at)) ?? new Set<string>()
+      set.add(tagged.slice(at + 1))
+      uidsByNamespace.set(tagged.slice(0, at), set)
     }
   }
-  for (const values of uidsByNamespace.values()) {
-    if (values.size > 1) return 'contested'
-  }
+  for (const values of uidsByNamespace.values()) if (values.size > 1) return 'contested'
 
-  // ## Agreement, counted per source
-  const handleSourcesAgreeing =
-    allHandleValues.size === 1
-      ? [...handlesBySource.values()].filter((values) => values.has([...allHandleValues][0]!)).length
-      : 0
-  if (handleSourcesAgreeing >= 2) return 'corroborated'
-
-  for (const [namespace, values] of uidsByNamespace) {
-    if (values.size !== 1) continue
-    const only = `${namespace}:${[...values][0]}`
-    const agreeing = [...uidsBySource.values()].filter((tagged) => tagged.size === 1 && tagged.has(only)).length
-    if (agreeing >= 2) return 'corroborated'
+  if (knownOrigins.length >= 2) {
+    if (allHandles.size === 1) {
+      const agreeing = knownOrigins.filter((key) => byOrigin.get(key)!.handles.has([...allHandles][0]!))
+      if (agreeing.length >= 2) return 'corroborated'
+    }
+    for (const [namespace, values] of uidsByNamespace) {
+      if (values.size !== 1) continue
+      const only = `${namespace}:${[...values][0]}`
+      const agreeing = knownOrigins.filter((key) => {
+        const bucket = byOrigin.get(key)!
+        return bucket.uids.size === 1 && bucket.uids.has(only)
+      })
+      if (agreeing.length >= 2) return 'corroborated'
+    }
   }
 
   // ## Nothing could be compared
-  //
-  // Two surfaces spoke, but they named different kinds of identifier, or the same
-  // number in two namespaces. That is neither agreement nor disagreement.
-  const kindsPresent = (handlesBySource.size > 0 ? 1 : 0) + (uidsBySource.size > 0 ? 1 : 0)
-  const namespacesPresent = uidsByNamespace.size
-  if (kindsPresent >= 2 || namespacesPresent >= 2) return 'incomparable'
+  const kindsPresent = new Set<string>()
+  for (const key of knownOrigins) {
+    const bucket = byOrigin.get(key)!
+    if (bucket.handles.size > 0) kindsPresent.add('handle')
+    if (bucket.uids.size > 0) kindsPresent.add('uid')
+  }
+  if (knownOrigins.length >= 2 && (kindsPresent.size >= 2 || uidsByNamespace.size >= 2)) {
+    return 'incomparable'
+  }
 
   return 'single_source'
 }
@@ -581,6 +656,14 @@ export function corroborationOf(sighting: IdentitySightings): CorroborationVerdi
 export function corroborationReason(sighting: IdentitySightings): CorroborationReason {
   const verdict = corroborationOf(sighting)
   const observations = sighting.observations ?? []
+  if (verdict === 'inconsistent') {
+    return {
+      code: 'self_contradictory',
+      detail:
+        '同一个来源自相矛盾：对同一条发言给出了两个不同的账号标识，' +
+        '这更像是数据质量问题（解析歧义或页面结构变化），而不是两个人在争执。建议重新读取该楼层后再判断。',
+    }
+  }
   if (verdict === 'contested') {
     if (sighting.conflicted) {
       return { code: 'reported_conflict', detail: '读取过程中已经确认两个来源指向不同账号。' }
@@ -621,7 +704,11 @@ export function corroborationReason(sighting: IdentitySightings): CorroborationR
       detail: '两个来源提供的标识类型不同（一个数字 ID、一个登录名），无法相互比较。',
     }
   }
-  const distinct = new Set(observations.map((entry) => entry.source))
+  const distinct = new Set(
+    observations
+      .map((entry) => entry.source)
+      .filter((value): value is IdentitySource => value !== undefined),
+  )
   if (distinct.size < 2) {
     return { code: 'not_enough_sources', detail: '只有一个来源，谈不上交叉验证。' }
   }

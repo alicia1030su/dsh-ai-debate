@@ -141,17 +141,28 @@ test('P0 复现：同一 user_id 数字应当正常匹配', () => {
   assert.equal(dispute.ownerIdentityEvidence.namespace, 'user_id', '证据必须记录实际观察到的命名空间')
 })
 
-test('P0 复现：同一 tieba_uid 数字应当正常匹配', () => {
+test('tieba_uid 无法匹配：当前适配器不产出这个命名空间', () => {
+  // v0.2.23 patch 7. This case used to assert a successful `tieba_uid` match — but it
+  // could only pass by injecting `authorNumericUidKind: 'tieba_uid'` in the fixture,
+  // a shape no adapter ever produces. Proving an unreachable path "works" against
+  // data the platform cannot return is exactly the kind of evidence this release is
+  // trying to stop relying on.
+  //
+  // The namespace logic itself is still correct and still tested below through the
+  // `user_id` cases; what changes is that choosing an unreachable namespace now says
+  // so instead of failing as though the id were merely absent.
   const data = collected([
     replyWithUid({ postId: 'r1', uid: '12345', kind: 'tieba_uid', display: '小明', content: '我的看法。' }),
   ])
-  const dispute = analyzeDispute(
-    data,
-    { userId: '12345', userIdNamespace: 'tieba_uid', platform: 'tieba' },
-    { postId: 'r1' },
+  assert.throws(
+    () =>
+      analyzeDispute(
+        data,
+        { userId: '12345', userIdNamespace: 'tieba_uid', platform: 'tieba' },
+        { postId: 'r1' },
+      ),
+    /tieba_uid|尚不提供/,
   )
-  assert.equal(dispute.ownerIdentityAssurance, 'verified')
-  assert.equal(dispute.ownerIdentityEvidence.namespace, 'tieba_uid')
 })
 
 test('P0 复现：主人没写命名空间 —— 不得据此核验', () => {

@@ -136,7 +136,18 @@ export interface TotalCommentEntry {
 export interface InlineComment {
     readonly commentId: string;
     readonly postId: string;
+    /**
+     * The login name, when this surface published one (v0.2.23 patch 7).
+     *
+     * `totalComment` publishes `user_id` — a numeric account id — and **not** a `un`.
+     * v0.2.22 put that number here, which made it indistinguishable from a login name
+     * and let a `handle: "12345"` configuration match a row whose 12345 was a uid.
+     * This surface therefore leaves `authorId` undefined and uses
+     * {@link authorNumericUid} instead.
+     */
     readonly authorId?: string;
+    /** The numeric account id, in the `user_id` namespace. */
+    readonly authorNumericUid?: string;
     readonly authorName?: string;
     readonly content: string;
     readonly createdAt?: string;

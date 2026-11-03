@@ -567,14 +567,17 @@ export class TiebaAdapter implements PlatformAdapter {
       platform: 'tieba',
       postId: inline.commentId,
       parentPostId: floor.postId,
-      // v0.2.23: `totalComment` is the **only** Tieba surface that states a
-      // numeric account id, so it must say so. v0.2.22 put that number into
-      // `authorId`, where it was indistinguishable from a login name — the exact
-      // namespace confusion this release removes.
-      authorId: inline.authorId,
-      ...(inline.authorId === undefined || !/^\d+$/.test(inline.authorId)
+      // v0.2.23 patch 7: `totalComment` is the **only** Tieba surface that states a
+      // numeric account id, and it states nothing else about the account's name.
+      //
+      // Earlier this copied the number into `authorId` as well, where it became
+      // indistinguishable from a login name — so a `handle: "12345"` configuration
+      // matched a row whose 12345 was a uid. The number now stays in exactly one
+      // namespace, and `authorId` is left to surfaces that actually publish a `un`.
+      ...(inline.authorId === undefined ? {} : { authorId: inline.authorId }),
+      ...(inline.authorNumericUid === undefined
         ? {}
-        : { authorNumericUid: inline.authorId, authorNumericUidKind: 'user_id' as const }),
+        : { authorNumericUid: inline.authorNumericUid, authorNumericUidKind: 'user_id' as const }),
       authorName: inline.authorName,
       authorSource: 'total_comment',
       content: inline.content,

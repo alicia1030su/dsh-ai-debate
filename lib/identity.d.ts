@@ -90,8 +90,16 @@ export interface AuthorIdentity {
      * timestamp, so one account legitimately yields several values over time.
      */
     readonly portrait?: string;
-    /** Which surface produced these fields. */
-    readonly source: IdentitySource;
+    /**
+     * Which surface produced these fields, when the row said so.
+     *
+     * Optional since v0.2.23 patch 7. It used to be required, and the collector filled
+     * the gap with the name `platform_contract` — which turned "unknown origin" into a
+     * named surface that could then count as an independent source for corroboration.
+     * Requiring a value only works if the caller can always supply a *true* one; it
+     * cannot, so the field now admits that it does not know.
+     */
+    readonly source?: IdentitySource;
 }
 /**
  * The outcome of comparing two identities.
@@ -245,8 +253,16 @@ export type IdentityAssurance = 'identity_verified' | 'identity_unknown' | 'iden
  * "not comparable" distinguishable from "agreed".
  */
 export interface IdentityObservation {
-    /** The surface that produced this observation. */
-    readonly source: IdentitySource;
+    /**
+     * The surface that produced this observation, when it said so.
+     *
+     * `undefined` means **unknown provenance** — the row carried no `authorSource`.
+     * Earlier the collector renamed exactly that case to `platform_contract`, which
+     * made an unknown origin look like a named, independent surface and let two such
+     * rows (or one such row plus a real one) claim cross-verification. Absence is now
+     * represented by absence.
+     */
+    readonly source?: IdentitySource;
     /** The numeric uid, when this surface stated one. */
     readonly numericUid?: string;
     /** Which namespace that number belongs to, when stated. */
@@ -299,10 +315,40 @@ export declare function assuranceOf(sighting: IdentitySightings): IdentityAssura
  * Two rows from the same surface are one source. `platform_contract` is what a row
  * that did not say gets, so two such rows corroborate nothing.
  */
-export type CorroborationVerdict = 'corroborated' | 'contested' | 'incomparable' | 'single_source';
+/**
+ * Which physical response an observation came from.
+ *
+ * ## Why a sourceId is not enough
+ *
+ * `wap_floor` and `wap_inline` are two parsers over **one HTTP response**: the floor
+ * list and the inline nested replies are both read out of the same WAP HTML. Counting
+ * them as two sources turned a single page fetch into "two independent surfaces
+ * agree" — which is what `corroborated` is supposed to mean, and did not.
+ *
+ * The grouping below is by *where the bytes came from*, not by which function read
+ * them:
+ *
+ * | sourceId | physical origin |
+ * | --- | --- |
+ * | `wap_floor`, `wap_inline` | `wap` — one page |
+ * | `comment_page` | `comment` — its own request |
+ * | `total_comment` | `total_comment` — its own request |
+ * | `platform_contract` / unknown | `unknown` — never counts as a source |
+ */
+export declare function physicalOriginOf(source: IdentitySource | undefined): string;
+export type CorroborationVerdict = 'corroborated' | 'contested' | 'incomparable' | 'single_source'
+/**
+ * One physical source contradicted itself about the same entity.
+ *
+ * Distinct from both neighbours on purpose: `contested` would assert that two
+ * accounts are different people, which nobody compared; `single_source` would read
+ * as "we only looked once", hiding a data-quality problem that the reader may need
+ * to act on.
+ */
+ | 'inconsistent';
 /** Why a verdict came out the way it did, in words the caller can show. */
 export interface CorroborationReason {
-    readonly code: 'agreed_handle' | 'agreed_uid' | 'disagreed_handle' | 'disagreed_uid' | 'namespace_mismatch' | 'identifier_kind_mismatch' | 'not_enough_sources' | 'no_comparable_identifier' | 'reported_conflict';
+    readonly code: 'agreed_handle' | 'agreed_uid' | 'disagreed_handle' | 'disagreed_uid' | 'namespace_mismatch' | 'identifier_kind_mismatch' | 'not_enough_sources' | 'no_comparable_identifier' | 'reported_conflict' | 'self_contradictory';
     readonly detail: string;
 }
 /**

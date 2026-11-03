@@ -32,6 +32,7 @@ import {
   corroborationReason,
   type CorroborationReason,
   type CorroborationVerdict,
+  type IdentityObservation,
   type AuthorIdentity,
   type IdentityAssurance,
   type IdentityConflictReport,
@@ -135,6 +136,17 @@ export interface CollectedThread {
    * disagree with the first.
    */
   readonly corroborationReasons?: ReadonlyMap<string, CorroborationReason>
+  /**
+   * Every identity sighting per post id, including ones whose comment was
+   * de-duplicated away (v0.2.23 patch 8).
+   *
+   * Exposed so a caller can audit *why* a verdict came out the way it did, and so
+   * the fact that two surfaces spoke about one comment survives anywhere the raw
+   * collection is inspected.
+   */
+  readonly identityObservations?: ReadonlyMap<string, readonly IdentityObservation[]>
+  /** Post ids whose distinct sightings exceeded the retention cap. */
+  readonly observationOverflow?: readonly string[]
   /** Floors the platform declares but that were not readable (usually deleted). */
   readonly missingCount?: number
   /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -518,6 +530,15 @@ export async function walkFloors(
   }
 }
 
+/**
+ * Distinct identity sightings kept per comment before the cap applies.
+ *
+ * Bounded because a hostile or broken page could otherwise enumerate handles for one
+ * post id indefinitely. Reachable combinations in practice are three origins times a
+ * handful of values, so this is far above normal and low enough to stay small.
+ */
+const MAX_OBSERVATIONS_PER_POST = 8
+
 /** Walk every page of nested replies under one floor. */
 export async function walkNested(
   adapter: PlatformAdapter,
@@ -535,6 +556,10 @@ export async function walkNested(
   corroboration?: ReadonlyMap<string, CorroborationVerdict>
   /** The reason behind each verdict, for user-facing text. */
   corroborationReasons?: ReadonlyMap<string, CorroborationReason>
+  /** Every retained identity sighting, per post id. */
+  identityObservations?: ReadonlyMap<string, IdentityObservation[]>
+  /** Post ids that hit the retention cap. */
+  observationOverflow?: string[]
 }> {
   const maxPages = options.maxPages ?? 10
   const seen = new Map<string, NestedReply>()
@@ -547,6 +572,26 @@ export async function walkNested(
    * was exactly the place that threw it away.
    */
   const firstSurface = new Map<string, NestedReply>()
+  /**
+   * Every identity sighting, kept per post id (v0.2.23 patch 8).
+   *
+   * ## Why this is separate from `seen`
+   *
+   * `seen` de-duplicates comments by post id, which is right for counting, for
+   * candidate generation and for publishing. But the corroboration verdict used to be
+   * computed from that same de-duplicated list, so `replies.filter(postId === x)`
+   * always returned a single row — one observation per post, forever. `corroborated`,
+   * `incomparable` and `inconsistent` were unreachable through the production path
+   * even though each had passing unit tests.
+   *
+   * This map is written *before* a duplicate is discarded, so the second sighting of
+   * a comment survives for identity analysis while the comment itself is still
+   * counted once.
+   */
+  const identityObservations = new Map<string, IdentityObservation[]>()
+  /** Post ids whose distinct observations exceeded the cap. Never silent. */
+  const observationOverflow = new Set<string>()
+  const record = makeRecorder(identityObservations, observationOverflow)
   /**
    * True when the walk stopped while the platform still claimed more replies.
    *
@@ -570,6 +615,9 @@ export async function walkNested(
     if (result.incomplete) degraded = true
     let added = 0
     for (const reply of result.replies) {
+      // Recorded for *both* the first sighting and every later one, before the
+      // duplicate is discarded below.
+      record(reply)
       const previous = firstSurface.get(reply.postId)
       if (previous === undefined) {
         seen.set(reply.postId, reply)
@@ -589,8 +637,10 @@ export async function walkNested(
           identityConflict: {
             code: 'identity_conflict',
             summary: conflict.summary,
-            firstSource: previous.authorSource ?? 'platform_contract',
-            secondSource: reply.authorSource ?? 'platform_contract',
+            // Not `platform_contract`: an undeclared source is *unknown*, and naming
+            // it makes a reader think a surface was consulted.
+            firstSource: previous.authorSource ?? 'unknown',
+            secondSource: reply.authorSource ?? 'unknown',
           },
         })
         if (!conflicts.some((entry) => entry.postId === reply.postId)) conflicts.push(conflict)
@@ -635,16 +685,19 @@ export async function walkNested(
     // Every sighting of this post id, not just the first and one later one: the
     // earlier code looked at two entries, so a third surface could never contribute
     // to (or contradict) the verdict.
-    const sightingsForPost = replies.filter((entry) => entry.postId === postId)
-    const observations = sightingsForPost.map((entry) => ({
-      source: (entry.authorSource ?? 'platform_contract') as IdentitySource,
-      ...(entry.authorNumericUid === undefined ? {} : { numericUid: entry.authorNumericUid }),
-      ...(entry.authorNumericUidKind === undefined
-        ? {}
-        : { namespace: entry.authorNumericUidKind }),
-      ...(entry.authorId === undefined ? {} : { handle: entry.authorId }),
-    }))
-    const sources = new Set(observations.map((entry) => entry.source))
+    // From the retained observations, not from `replies`: that list is de-duplicated
+    // by post id, so filtering it always produced exactly one row and made every
+    // verdict but `single_source` unreachable.
+    // Already in observation shape, and already provenance-honest: an undeclared
+    // source stays absent so it cannot pose as an independent surface.
+    const observations = identityObservations.get(postId) ?? []
+    // Only declared origins. An undeclared row contributes nothing to the source
+    // list, which is what makes "two sources" mean two real surfaces.
+    const sources = new Set(
+      observations
+        .map((entry) => entry.source)
+        .filter((value): value is IdentitySource => value !== undefined),
+    )
     const conflicted = conflicts.some((entry) => entry.postId === postId)
     const sighting = {
       ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
@@ -676,6 +729,8 @@ export async function walkNested(
     ...(assurance.size === 0 ? {} : { assurance }),
     ...(corroboration.size === 0 ? {} : { corroboration }),
     ...(corroborationReasons.size === 0 ? {} : { corroborationReasons }),
+    ...(identityObservations.size === 0 ? {} : { identityObservations }),
+    ...(observationOverflow.size === 0 ? {} : { observationOverflow: [...observationOverflow] }),
   }
 }
 
@@ -701,7 +756,56 @@ function identityOfReply(reply: NestedReply): AuthorIdentity {
       : { numericUidKind: reply.authorNumericUidKind }),
     ...(legacy || reply.authorId === undefined || duplicated ? {} : { handle: reply.authorId }),
     ...(reply.authorName === undefined ? {} : { displayName: reply.authorName }),
-    source: reply.authorSource ?? 'platform_contract',
+    // Absent, not renamed: an unknown origin must not present itself as a surface.
+    ...(reply.authorSource === undefined ? {} : { source: reply.authorSource }),
+  }
+}
+
+/**
+ * Add one sighting, ignoring exact repeats and flagging any overflow.
+ *
+ * Two rules, both deliberate:
+ *
+ * - an **identical** sighting is dropped. The same surface answering twice is one
+ *   piece of evidence, and keeping both would let a retry look like corroboration.
+ * - a cap, but **not silent**: once exceeded, the post id is recorded in
+ *   `observationOverflow` and surfaced in the corroboration reason. Dropping a
+ *   conflicting sighting quietly is the one thing this must not do, because that is
+ *   exactly how a real disagreement disappears.
+ */
+function makeRecorder(
+  store: Map<string, IdentityObservation[]>,
+  overflow: Set<string>,
+): (reply: NestedReply) => void {
+  return (reply) => {
+    const observation = observationOf(reply)
+    const existing = store.get(reply.postId) ?? []
+    const key = (entry: IdentityObservation): string =>
+      `${entry.source ?? ''}|${entry.handle ?? ''}|${entry.numericUid ?? ''}|${entry.namespace ?? ''}`
+    if (existing.some((entry) => key(entry) === key(observation))) return
+    if (existing.length >= MAX_OBSERVATIONS_PER_POST) {
+      overflow.add(reply.postId)
+      return
+    }
+    existing.push(observation)
+    store.set(reply.postId, existing)
+  }
+}
+
+/**
+ * What one sighting says about the author, in the shape corroboration consumes.
+ *
+ * Kept separate from {@link identityOfReply} because that one deliberately hides a
+ * legacy row's `authorId` (it cannot prove it was a handle). Corroboration needs the
+ * raw value to notice that two sightings disagree, and the row is still `__unknown__`
+ * provenance so it never counts as an independent source.
+ */
+function observationOf(reply: NestedReply): IdentityObservation {
+  return {
+    ...(reply.authorSource === undefined ? {} : { source: reply.authorSource }),
+    ...(reply.authorId === undefined ? {} : { handle: reply.authorId }),
+    ...(reply.authorNumericUid === undefined ? {} : { numericUid: reply.authorNumericUid }),
+    ...(reply.authorNumericUidKind === undefined ? {} : { namespace: reply.authorNumericUidKind }),
   }
 }
 
@@ -806,6 +910,8 @@ export async function collectThread(
   const corroboration = new Map<string, CorroborationVerdict>()
   /** Why each verdict came out that way, so callers can explain it without re-deriving. */
   const corroborationReasons = new Map<string, CorroborationReason>()
+  const identityObservations = new Map<string, IdentityObservation[]>()
+  const observationOverflow = new Set<string>()
   for (const floor of floors) {
     const targetIndex = nestedTargets.indexOf(floor)
     const shouldFetch = nestedLimit > 0 && targetIndex >= 0 && targetIndex < nestedLimit
@@ -845,6 +951,14 @@ export async function collectThread(
       for (const [postId, reason] of nested.corroborationReasons) {
         corroborationReasons.set(postId, reason)
       }
+    }
+    if (nested.identityObservations !== undefined) {
+      for (const [postId, sightings] of nested.identityObservations) {
+        identityObservations.set(postId, [...sightings])
+      }
+    }
+    if (nested.observationOverflow !== undefined) {
+      for (const postId of nested.observationOverflow) observationOverflow.add(postId)
     }
     if (nested.error) {
       nestedIncomplete = true
@@ -889,6 +1003,8 @@ export async function collectThread(
     ...(identityConflicts.length === 0 ? {} : { identityConflicts }),
     ...(corroboration.size === 0 ? {} : { corroboration }),
     ...(corroborationReasons.size === 0 ? {} : { corroborationReasons }),
+    ...(identityObservations.size === 0 ? {} : { identityObservations }),
+    ...(observationOverflow.size === 0 ? {} : { observationOverflow: [...observationOverflow] }),
     issues,
   }
 }

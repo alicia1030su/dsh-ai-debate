@@ -104,8 +104,15 @@ export interface AuthorFields {
   readonly identityConflict?: {
     readonly code: 'identity_conflict'
     readonly summary: string
-    readonly firstSource: IdentitySource
-    readonly secondSource: IdentitySource
+    /**
+     * Which surface supplied each side of the disagreement.
+     *
+     * `'unknown'` when the row never declared one. It is deliberately not folded into
+     * a pretend source name: a reader who sees a surface name will believe a surface
+     * was consulted.
+     */
+    readonly firstSource: IdentitySource | 'unknown'
+    readonly secondSource: IdentitySource | 'unknown'
   }
 }
 

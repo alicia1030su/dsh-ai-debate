@@ -470,6 +470,12 @@ function isAccountHandle(
   source?: IdentitySource,
 ): handle is string {
   if (handle === undefined || handle === '') return false
+  // `totalComment` publishes `user_id` and has no `un` to publish. A value from that
+  // surface is therefore never a login name, whatever it looks like — including when
+  // it reaches us through a session written by an older build that put the uid into
+  // `authorId`. This is the second half of the P0-1 fix: the adapter stops producing
+  // the confusion, and the analyzer refuses it if it arrives anyway.
+  if (source === 'total_comment') return false
   // Known provenance: the contract already said what this field is.
   if (source !== undefined) return true
   // Unknown provenance (a legacy row): the best available guess, kept unchanged so
@@ -798,6 +804,25 @@ function resolveOwnerKey(
           : undefined))
       : undefined
 
+    // ## A namespace nothing can produce
+    //
+    // `tieba_uid` is offered as a choice, but no adapter ever emits it: the only
+    // place a namespace is assigned is the `totalComment` projection, and it always
+    // says `user_id`. Choosing `tieba_uid` therefore cannot match anything, ever.
+    //
+    // Saying "the thread has no post by this ID" would send the user hunting for a
+    // wrong value. Naming the real reason is the only actionable answer, and it is
+    // deliberately *not* silently rewritten to `user_id` — that would quietly match a
+    // different identifier than the one they configured.
+    if (numericOwnerId && ownerNamespace === 'tieba_uid') {
+      throw new Error(
+        `主人身份配置的是 tieba_uid，但当前数据源尚不提供这个命名空间：` +
+          '只有总回复接口会返回数字 ID，而它返回的是 user_id，不是 tieba_uid。' +
+          '数字相同不代表同一个账号，因此不会把它当成 user_id 使用。' +
+          '请改用 user_id（可从回复页或总回复接口获得），或改用贴吧登录名（un）。',
+      )
+    }
+
     if (numericOwnerId && ownerNamespace === undefined) {
       throw new Error(
         `主人身份配置了数字 ID ${owner.userId}，但没有说明它属于哪个命名空间。` +
@@ -883,14 +908,18 @@ function resolveOwnerKey(
         // coincidence, and promoting that would grant a stable-identity permission
         // to data that never carried one.
         if (participant.hasDeclaredSource === true) {
+          const evidence: OwnerIdentityEvidence = {
+            kind: 'handle',
+            value: owner.handle,
+            ...(participant.source === undefined ? {} : { source: participant.source }),
+          }
+          // Read the verdict off the evidence rather than asserting it, for the same
+          // reason as the uid branch: a hardcoded `verified` here could disagree with
+          // what the gate computes from the very same record.
           return {
             key: participant.key,
-            assurance: 'verified',
-            evidence: {
-              kind: 'handle',
-              value: owner.handle,
-              ...(participant.source === undefined ? {} : { source: participant.source }),
-            },
+            assurance: assuranceFromEvidence(evidence) === 'identity_verified' ? 'verified' : 'unverified',
+            evidence,
           }
         }
         notes.push(
@@ -976,14 +1005,15 @@ function resolveOwnerKey(
     for (const participant of participants.values()) {
       if (participant.handle !== owner.handle) continue
       if (participant.hasDeclaredSource === true) {
+        const evidence: OwnerIdentityEvidence = {
+          kind: 'handle',
+          value: owner.handle,
+          ...(participant.source === undefined ? {} : { source: participant.source }),
+        }
         return {
           key: participant.key,
-          assurance: 'verified',
-          evidence: {
-            kind: 'handle',
-            value: owner.handle,
-            ...(participant.source === undefined ? {} : { source: participant.source }),
-          },
+          assurance: assuranceFromEvidence(evidence) === 'identity_verified' ? 'verified' : 'unverified',
+          evidence,
         }
       }
       notes.push(

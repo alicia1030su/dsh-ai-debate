@@ -135,13 +135,22 @@ test('the reply author is never mistaken for the reply target', () => {
   }
 })
 
-test('totalComment exposes numeric user ids that the HTML does not', () => {
+test('totalComment exposes numeric user ids — in the uid field, not as a login name', () => {
+  // v0.2.23 patch 7 tightened this. The surface does publish numeric account ids, and
+  // that is still asserted — but they must arrive in `authorNumericUid`, because a
+  // number in `authorId` is read as a login name and can satisfy a `handle: "12345"`
+  // configuration for a row whose 12345 is actually a uid.
   const parsed = parseTotalComment(fixture('total-comment.json'))
   assert.ok(parsed.entries.length > 0)
-  const withIds = parsed.entries
+  const withUids = parsed.entries
     .flatMap((entry) => entry.inline)
-    .filter((inline) => inline.authorId && /^\d+$/.test(inline.authorId))
-  assert.ok(withIds.length > 0, 'totalComment 应该提供数字 user_id')
+    .filter((inline) => inline.authorNumericUid !== undefined && /^\d+$/.test(inline.authorNumericUid))
+  assert.ok(withUids.length > 0, 'totalComment 仍应提供数字 user_id')
+
+  const asHandles = parsed.entries
+    .flatMap((entry) => entry.inline)
+    .filter((inline) => inline.authorId !== undefined)
+  assert.equal(asHandles.length, 0, '这个来源不发布 un，因此不得产生 authorId')
   assert.ok(parsed.userNames.size > 0, '应该解析出用户名映射')
 })
 
@@ -149,8 +158,9 @@ test('totalComment maps numeric ids onto display names', () => {
   const parsed = parseTotalComment(fixture('total-comment.json'))
   for (const entry of parsed.entries) {
     for (const inline of entry.inline) {
-      if (inline.authorId && parsed.userNames.has(inline.authorId)) {
-        assert.equal(inline.authorName, parsed.userNames.get(inline.authorId))
+      // The name map is keyed by user_id, so the lookup now uses the uid field.
+      if (inline.authorNumericUid && parsed.userNames.has(inline.authorNumericUid)) {
+        assert.equal(inline.authorName, parsed.userNames.get(inline.authorNumericUid))
       }
     }
   }

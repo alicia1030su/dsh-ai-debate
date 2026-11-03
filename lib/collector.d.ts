@@ -14,7 +14,7 @@
  * and call it done".
  */
 import { type Floor, type IdentitySource, type NestedReply, type PlatformAdapter, type PlatformId, type ReplyContext, type Thread, type ThreadRef } from './types.js';
-import { type CorroborationReason, type CorroborationVerdict, type IdentityAssurance, type IdentityConflictReport } from './identity.js';
+import { type CorroborationReason, type CorroborationVerdict, type IdentityObservation, type IdentityAssurance, type IdentityConflictReport } from './identity.js';
 /** How much of a thread to collect. */
 export interface CollectOptions {
     /** Hard cap on floor pages walked. */
@@ -110,6 +110,17 @@ export interface CollectedThread {
      * disagree with the first.
      */
     readonly corroborationReasons?: ReadonlyMap<string, CorroborationReason>;
+    /**
+     * Every identity sighting per post id, including ones whose comment was
+     * de-duplicated away (v0.2.23 patch 8).
+     *
+     * Exposed so a caller can audit *why* a verdict came out the way it did, and so
+     * the fact that two surfaces spoke about one comment survives anywhere the raw
+     * collection is inspected.
+     */
+    readonly identityObservations?: ReadonlyMap<string, readonly IdentityObservation[]>;
+    /** Post ids whose distinct sightings exceeded the retention cap. */
+    readonly observationOverflow?: readonly string[];
     /** Floors the platform declares but that were not readable (usually deleted). */
     readonly missingCount?: number;
     /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -254,6 +265,10 @@ export declare function walkNested(adapter: PlatformAdapter, ref: ThreadRef, flo
     corroboration?: ReadonlyMap<string, CorroborationVerdict>;
     /** The reason behind each verdict, for user-facing text. */
     corroborationReasons?: ReadonlyMap<string, CorroborationReason>;
+    /** Every retained identity sighting, per post id. */
+    identityObservations?: ReadonlyMap<string, IdentityObservation[]>;
+    /** Post ids that hit the retention cap. */
+    observationOverflow?: string[];
 }>;
 /**
  * Collect a thread: metadata, every floor page, then nested replies for the
