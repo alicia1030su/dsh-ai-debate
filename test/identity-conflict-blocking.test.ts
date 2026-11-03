@@ -266,9 +266,13 @@ test('旧记录（无 authorSource）：可读，但必须是 unverified', () =>
     issues: [],
   }
 
+  // Configured as a *handle*, which is what this value is: the row's `authorId` is a
+  // `un` that happens to be all digits. Putting it in `ownerUserId` would claim it was
+  // a numeric uid, and v0.2.23 patch 4 refuses a numeric uid with no namespace — a
+  // different (also correct) refusal that would mask what this test is about.
   const dispute = analyzeDispute(
     collected,
-    { userId: '1254480024', platform: 'tieba' },
+    { handle: '1254480024', platform: 'tieba' },
     { postId: 'r1' },
   )
   assert.equal(dispute.ownerIdentityAssurance, 'unverified', '旧记录只能得出「未核验」')

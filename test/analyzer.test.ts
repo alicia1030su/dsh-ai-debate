@@ -270,6 +270,9 @@ test('a configured owner id never degrades to a matching nickname', () => {
         // login name, which is the whole point of the split.
         authorId: '12345',
         authorNumericUid: '12345',
+        // `total_comment` reports `tieba_uid`; a real adapter declares which space
+        // produced the number, so the fixture must too or it tests an impossible row.
+        authorNumericUidKind: 'tieba_uid',
         authorSource: 'total_comment',
         authorName: 'Alice',
         content: '这个方案不行',
@@ -279,8 +282,16 @@ test('a configured owner id never degrades to a matching nickname', () => {
     {},
   )
   assert.throws(
-    () => analyzeDispute(data, { userId: '99999', userName: 'Alice' }, { postId: '1200' }),
-    /配置的主人用户 ID 是 99999.*不会退回去按昵称匹配/s,
+    // v0.2.23 patch 4: a numeric id must state its namespace, so these fixtures say
+    // `user_id` explicitly. Without it the refusal fires on the missing namespace
+    // instead of on the id mismatch, and the test would pass for the wrong reason.
+    () =>
+      analyzeDispute(
+        data,
+        { userId: '99999', userIdNamespace: 'tieba_uid', platform: 'tieba', userName: 'Alice' },
+        { postId: '1200' },
+      ),
+    /99999.*(没有这个 ID|不会退回去按昵称匹配)/s,
   )
 })
 
@@ -294,6 +305,7 @@ test('a matching owner id is still accepted when a nickname is also configured',
         postId: '1300',
         authorId: '12345',
         authorNumericUid: '12345',
+        authorNumericUidKind: 'tieba_uid',
         authorSource: 'total_comment',
         authorName: 'Alice',
         content: '我不同意这个做法',
@@ -302,7 +314,11 @@ test('a matching owner id is still accepted when a nickname is also configured',
     ],
     {},
   )
-  const dispute = analyzeDispute(data, { userId: '12345', userName: 'Alice' }, { postId: '1300' })
+  const dispute = analyzeDispute(
+    data,
+    { userId: '12345', userIdNamespace: 'tieba_uid', platform: 'tieba', userName: 'Alice' },
+    { postId: '1300' },
+  )
   assert.equal(dispute.owner.userId, '12345')
 })
 

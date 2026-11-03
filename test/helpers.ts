@@ -105,6 +105,16 @@ export function makeFloor(input: {
    * because a bare numeric `authorId` is now read as a login name.
    */
   authorNumericUid?: string
+  /**
+   * Which numeric namespace the uid came from (v0.2.23 patch 4).
+   *
+   * A uid without this cannot be placed, so a fixture that means "this row carried a
+   * `tieba_uid`" must say so. Omitting it made the row untestable against an owner
+   * configured in either namespace — and silently made namespace tests pass for the
+   * wrong reason. `total_comment` reports `tieba_uid`; `comment_page` reports
+   * `user_id`.
+   */
+  authorNumericUidKind?: 'user_id' | 'tieba_uid'
   authorSource?: Floor['authorSource']
 }): Floor {
   return {
@@ -114,6 +124,9 @@ export function makeFloor(input: {
     authorId: input.authorId,
     authorName: input.authorName,
     ...(input.authorNumericUid === undefined ? {} : { authorNumericUid: input.authorNumericUid }),
+    ...(input.authorNumericUidKind === undefined
+      ? {}
+      : { authorNumericUidKind: input.authorNumericUidKind }),
     ...(input.authorSource === undefined ? {} : { authorSource: input.authorSource }),
     content: input.content,
     createdAt: input.createdAt ?? '2024-1-1',

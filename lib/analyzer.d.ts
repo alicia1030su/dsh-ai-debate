@@ -46,6 +46,18 @@ export interface Participant {
      */
     readonly legacyAccountId?: string;
     /**
+     * Which namespace the numeric uid belongs to, as *observed* (v0.2.23 patch 4).
+     *
+     * This must come from the record that carried the number, never from the owner's
+     * configuration. Deriving it from the config is what let a `tieba_uid: 12345`
+     * owner match a `user_id: 12345` post: the numbers were equal, the namespaces were
+     * not, and the evidence then recorded the *configured* namespace — producing a
+     * record that looked consistent with a match that never happened.
+     */
+    readonly userIdNamespace?: 'user_id' | 'tieba_uid';
+    /** The platform the numeric uid was read from, for the same reason. */
+    readonly platform?: string;
+    /**
      * Which surface this participant's records came from (v0.2.23).
      *
      * Carried onto the evidence so a handle match can say *where* the login name was

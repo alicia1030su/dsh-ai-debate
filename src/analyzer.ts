@@ -50,6 +50,18 @@ export interface Participant {
    */
   readonly legacyAccountId?: string
   /**
+   * Which namespace the numeric uid belongs to, as *observed* (v0.2.23 patch 4).
+   *
+   * This must come from the record that carried the number, never from the owner's
+   * configuration. Deriving it from the config is what let a `tieba_uid: 12345`
+   * owner match a `user_id: 12345` post: the numbers were equal, the namespaces were
+   * not, and the evidence then recorded the *configured* namespace — producing a
+   * record that looked consistent with a match that never happened.
+   */
+  readonly userIdNamespace?: 'user_id' | 'tieba_uid'
+  /** The platform the numeric uid was read from, for the same reason. */
+  readonly platform?: string
+  /**
    * Which surface this participant's records came from (v0.2.23).
    *
    * Carried onto the evidence so a handle match can say *where* the login name was
@@ -524,6 +536,12 @@ function indexParticipants(
         // in its own field. Merging them is what made an owner configured with a
         // numeric id unmatchable against a WAP read.
         userId: existing.userId ?? numericForThisEntry,
+        // Kept from the first record that stated it. A later row cannot re-label an
+        // identifier it did not produce; if it disagrees, its own key differs and it
+        // is a separate participant already.
+        ...(existing.userIdNamespace === undefined && entry.authorNumericUidNamespace !== undefined
+          ? { userIdNamespace: entry.authorNumericUidNamespace }
+          : {}),
         handle: existing.handle ?? handleForThisEntry,
         legacyAccountId: existing.legacyAccountId ?? legacyAccountId,
         hasDeclaredSource: existing.hasDeclaredSource === true || !legacyShape,
@@ -541,6 +559,10 @@ function indexParticipants(
     byKey.set(name, {
       key: name,
       userId: numericForThisEntry,
+      ...(entry.authorNumericUidNamespace === undefined
+        ? {}
+        : { userIdNamespace: entry.authorNumericUidNamespace }),
+      platform: entry.platform,
       handle: handleForThisEntry,
       legacyAccountId,
       hasDeclaredSource: !legacyShape,
@@ -704,25 +726,71 @@ function resolveOwnerKey(
       )
     }
 
+    /**
+     * What the owner's configuration claims, resolved once.
+     *
+     * Tieba has two numeric namespaces and requires an explicit choice. Every other
+     * platform has exactly one, and there the platform *is* the namespace. When the
+     * caller named neither, there is nothing to compare against and the comparison
+     * below refuses rather than assuming.
+     */
+    // ## Only a *numeric* id has a namespace
+    //
+    // `ownerUserId` historically carried whatever the user pasted, and on Tieba that
+    // was frequently a login name (`un`). A login name has no numeric namespace; it
+    // is compared as a handle below, exactly as before. Requiring a namespace for it
+    // would refuse every historical configuration for no safety gain — and would
+    // "fix" the namespace bug by breaking the feature.
+    //
+    // A numeric id is the case this patch is about: it is meaningless without knowing
+    // which of Tieba's two numeric spaces produced it.
+    const numericOwnerId = /^\d+$/.test(owner.userId.trim())
+    const ownerNamespace = numericOwnerId
+      ? (owner.userIdNamespace ??
+        (owner.platform !== undefined && owner.platform !== 'tieba'
+          ? (`platform:${owner.platform}` as const)
+          : undefined))
+      : undefined
+
+    if (numericOwnerId && ownerNamespace === undefined) {
+      throw new Error(
+        `主人身份配置了数字 ID ${owner.userId}，但没有说明它属于哪个命名空间。` +
+          '贴吧同时提供 user_id 与 tieba_uid 两套互不相关的数字 ID，' +
+          '数字相同不代表同一个人，因此无法确认哪条发言属于主人。' +
+          '请在配置里指定命名空间后重试。',
+      )
+    }
+
     for (const participant of participants.values()) {
-      if (participant.userId === owner.userId) {
+      // Three things must agree for a *numeric* id, and the namespace is observed —
+      // never taken from the configuration. Comparing the number alone is the bug this
+      // loop fixes: the same digits in two namespaces are two different accounts.
+      //
+      // A non-numeric `ownerUserId` is a login name, so it matches `participant.handle`
+      // (the `un` field) and needs no namespace.
+      const sameValue = numericOwnerId
+        ? participant.userId === owner.userId
+        : participant.handle === owner.userId
+      const sameNamespace = numericOwnerId
+        ? participant.userIdNamespace === ownerNamespace
+        : true
+      const samePlatform = participant.platform === undefined || participant.platform === owner.platform
+      if (sameValue && sameNamespace && samePlatform) {
         return {
           key: participant.key,
           assurance: 'verified',
-          // The configured id is a numeric uid and `participant.userId` only ever
-          // holds `authorNumericUid`, so the namespace is the one the config named.
-          evidence: {
-            kind: 'numeric_uid',
-            // Tieba needs an explicit choice because it has two numeric namespaces;
-            // any other platform has exactly one, and that platform is the namespace.
-            ...(owner.userIdNamespace !== undefined
-              ? { namespace: owner.userIdNamespace }
-              : owner.platform !== undefined && owner.platform !== 'tieba'
-                ? { namespace: `platform:${owner.platform}` as const }
-                : {}),
-            value: owner.userId,
-            ...(participant.source === undefined ? {} : { source: participant.source }),
-          },
+          evidence: numericOwnerId
+            ? {
+                kind: 'numeric_uid',
+                ...(ownerNamespace === undefined ? {} : { namespace: ownerNamespace }),
+                value: owner.userId,
+                ...(participant.source === undefined ? {} : { source: participant.source }),
+              }
+            : {
+                kind: 'handle',
+                value: owner.userId,
+                ...(participant.source === undefined ? {} : { source: participant.source }),
+              },
         }
       }
     }
