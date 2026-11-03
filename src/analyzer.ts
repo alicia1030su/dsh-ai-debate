@@ -17,6 +17,7 @@
 import type { NestedReply, PlatformId } from './types.js'
 import type { CollectedThread, TimelineEntry } from './collector.js'
 import { buildTimeline, floorOf } from './collector.js'
+import { assuranceFromEvidence } from './identity.js'
 import type { IdentitySource, OwnerIdentityEvidence } from './identity.js'
 
 /** How the owner was identified. */
@@ -333,15 +334,21 @@ export function analyzeDispute(
   // "cross-checked" distinction existed only in comments. Surfacing it here is what
   // makes it a fact the reader can act on — and what stops a single-source match from
   // being described as verified-by-two-parties.
-  const ownerCorroboration = collected.corroboration?.get(
-    // The owner's identity is only corroborated if the *post* that established it was.
-    // `ownerKey` is the participant key; the post is the first statement by them.
-    timeline.find((entry) => keyOf(entry) === ownerKey)?.postId ?? '',
-  )
+  const ownerPostId = timeline.find((entry) => keyOf(entry) === ownerKey)?.postId ?? ''
+  const ownerCorroboration = collected.corroboration?.get(ownerPostId)
   if (ownerCorroboration === 'corroborated') {
     notes.push('主人身份由两个独立来源相互印证。')
   } else if (ownerCorroboration === 'contested') {
     notes.push('两个来源对主人的身份给出了不同结论，需要人工核对。')
+  } else if (ownerCorroboration === 'incomparable') {
+    // Two surfaces spoke but named different kinds of identifier (or the same number
+    // in two namespaces). Saying "cross-checked" would be false, and saying "they
+    // disagree" would be worse — nobody compared them. The reason comes from the
+    // collector, which is the only place that saw the observations.
+    const detail =
+      collected.corroborationReasons?.get(ownerPostId)?.detail ??
+      '两个来源提供的账号标识无法相互比较。'
+    notes.push(`主人身份未能交叉核对：${detail}`)
   } else if (ownerCorroboration !== undefined && resolvedOwner.assurance === 'verified') {
     notes.push('主人身份来源单一，未经第二个来源印证（这不是错误，只是尚未交叉核对）。')
   }
@@ -815,22 +822,52 @@ function resolveOwnerKey(
         : true
       const samePlatform = participant.platform === undefined || participant.platform === owner.platform
       if (sameValue && sameNamespace && samePlatform) {
-        return {
-          key: participant.key,
-          assurance: 'verified',
-          evidence: numericOwnerId
-            ? {
-                kind: 'numeric_uid',
-                ...(ownerNamespace === undefined ? {} : { namespace: ownerNamespace }),
-                value: owner.userId,
-                ...(participant.source === undefined ? {} : { source: participant.source }),
-              }
-            : {
-                kind: 'handle',
-                value: owner.userId,
-                ...(participant.source === undefined ? {} : { source: participant.source }),
-              },
+        const evidence: OwnerIdentityEvidence = numericOwnerId
+          ? {
+              kind: 'numeric_uid',
+              ...(ownerNamespace === undefined ? {} : { namespace: ownerNamespace }),
+              value: owner.userId,
+              ...(participant.source === undefined ? {} : { source: participant.source }),
+            }
+          : {
+              kind: 'handle',
+              value: owner.userId,
+              ...(participant.source === undefined ? {} : { source: participant.source }),
+            }
+
+        // ## Derive the label, never assert it
+        //
+        // This branch used to return `assurance: 'verified'` unconditionally while
+        // building evidence that may carry no source at all (a legacy row has none).
+        // The page then claimed "verified" and the publish gate — recomputing from
+        // that same evidence — refused. Two answers, one session.
+        //
+        // Reading the verdict off the evidence makes that disagreement impossible.
+        // A legacy match still resolves a participant, so read-only analysis keeps
+        // working; only the *claim* drops to `unverified`.
+        const assurance =
+          assuranceFromEvidence(evidence) === 'identity_verified' ? 'verified' : 'unverified'
+
+        // ## Refuse to pick between two configurations that disagree
+        //
+        // `ownerUserId` and `ownerHandle` may both be set. When they name different
+        // accounts, the old code returned whichever the id branch reached first and
+        // never mentioned the other — silently arguing as one person while the user
+        // had configured two.
+        if (owner.handle !== undefined && owner.handle !== '' && !numericOwnerId) {
+          const handleParticipant = [...participants.values()].find(
+            (entry) => entry.handle === owner.handle,
+          )
+          if (handleParticipant !== undefined && handleParticipant.key !== participant.key) {
+            throw new Error(
+              `配置里同时填了用户 ID「${owner.userId}」和登录名「${owner.handle}」，` +
+                '但帖子里它们分别指向两个不同的账号。' +
+                '无法确定哪一个是主人，也不会替你选一个。请只保留正确的那一项后重试。',
+            )
+          }
         }
+
+        return { key: participant.key, assurance, evidence }
       }
     }
 

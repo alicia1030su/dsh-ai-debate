@@ -29,6 +29,9 @@ import {
   assuranceOf,
   conflictBetween,
   corroborationOf,
+  corroborationReason,
+  type CorroborationReason,
+  type CorroborationVerdict,
   type AuthorIdentity,
   type IdentityAssurance,
   type IdentityConflictReport,
@@ -123,7 +126,15 @@ export interface CollectedThread {
    * says "is this enough to act on", corroboration says "was it checked twice".
    * Merging them is how a single-source match ends up described as cross-verified.
    */
-  readonly corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>
+  readonly corroboration?: ReadonlyMap<string, CorroborationVerdict>
+  /**
+   * Why each corroboration verdict came out that way.
+   *
+   * Carried alongside rather than recomputed by the consumer: the collector is the
+   * only place that saw the per-surface observations, and a second derivation could
+   * disagree with the first.
+   */
+  readonly corroborationReasons?: ReadonlyMap<string, CorroborationReason>
   /** Floors the platform declares but that were not readable (usually deleted). */
   readonly missingCount?: number
   /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -521,7 +532,9 @@ export async function walkNested(
   conflicts?: readonly IdentityConflictReport[]
   assurance?: ReadonlyMap<string, IdentityAssurance>
   /** How well each post's identity was corroborated (v0.2.23 patch 5). */
-  corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>
+  corroboration?: ReadonlyMap<string, CorroborationVerdict>
+  /** The reason behind each verdict, for user-facing text. */
+  corroborationReasons?: ReadonlyMap<string, CorroborationReason>
 }> {
   const maxPages = options.maxPages ?? 10
   const seen = new Map<string, NestedReply>()
@@ -616,7 +629,8 @@ export async function walkNested(
    * "two surfaces were consulted" and "two surfaces agreed" are different claims,
    * and only the second may be shown to the user as cross-checked.
    */
-  const corroboration = new Map<string, 'corroborated' | 'contested' | 'single_source'>()
+  const corroboration = new Map<string, CorroborationVerdict>()
+  const corroborationReasons = new Map<string, CorroborationReason>()
   for (const [postId, reply] of firstSurface) {
     // Every sighting of this post id, not just the first and one later one: the
     // earlier code looked at two entries, so a third surface could never contribute
@@ -641,6 +655,7 @@ export async function walkNested(
     }
     assurance.set(postId, assuranceOf(sighting))
     corroboration.set(postId, corroborationOf(sighting))
+    corroborationReasons.set(postId, corroborationReason(sighting))
   }
 
   return {
@@ -660,6 +675,7 @@ export async function walkNested(
     ...(conflicts.length === 0 ? {} : { conflicts }),
     ...(assurance.size === 0 ? {} : { assurance }),
     ...(corroboration.size === 0 ? {} : { corroboration }),
+    ...(corroborationReasons.size === 0 ? {} : { corroborationReasons }),
   }
 }
 
@@ -787,7 +803,9 @@ export async function collectThread(
    * unique across floors, so a later floor cannot silently overwrite an earlier
    * verdict with a different one.
    */
-  const corroboration = new Map<string, 'corroborated' | 'contested' | 'single_source'>()
+  const corroboration = new Map<string, CorroborationVerdict>()
+  /** Why each verdict came out that way, so callers can explain it without re-deriving. */
+  const corroborationReasons = new Map<string, CorroborationReason>()
   for (const floor of floors) {
     const targetIndex = nestedTargets.indexOf(floor)
     const shouldFetch = nestedLimit > 0 && targetIndex >= 0 && targetIndex < nestedLimit
@@ -821,6 +839,11 @@ export async function collectThread(
     if (nested.corroboration !== undefined) {
       for (const [postId, verdict] of nested.corroboration) {
         corroboration.set(postId, verdict)
+      }
+    }
+    if (nested.corroborationReasons !== undefined) {
+      for (const [postId, reason] of nested.corroborationReasons) {
+        corroborationReasons.set(postId, reason)
       }
     }
     if (nested.error) {
@@ -865,6 +888,7 @@ export async function collectThread(
     nestedIncomplete,
     ...(identityConflicts.length === 0 ? {} : { identityConflicts }),
     ...(corroboration.size === 0 ? {} : { corroboration }),
+    ...(corroborationReasons.size === 0 ? {} : { corroborationReasons }),
     issues,
   }
 }

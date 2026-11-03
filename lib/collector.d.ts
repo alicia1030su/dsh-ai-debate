@@ -14,7 +14,7 @@
  * and call it done".
  */
 import { type Floor, type IdentitySource, type NestedReply, type PlatformAdapter, type PlatformId, type ReplyContext, type Thread, type ThreadRef } from './types.js';
-import { type IdentityAssurance, type IdentityConflictReport } from './identity.js';
+import { type CorroborationReason, type CorroborationVerdict, type IdentityAssurance, type IdentityConflictReport } from './identity.js';
 /** How much of a thread to collect. */
 export interface CollectOptions {
     /** Hard cap on floor pages walked. */
@@ -101,7 +101,15 @@ export interface CollectedThread {
      * says "is this enough to act on", corroboration says "was it checked twice".
      * Merging them is how a single-source match ends up described as cross-verified.
      */
-    readonly corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>;
+    readonly corroboration?: ReadonlyMap<string, CorroborationVerdict>;
+    /**
+     * Why each corroboration verdict came out that way.
+     *
+     * Carried alongside rather than recomputed by the consumer: the collector is the
+     * only place that saw the per-surface observations, and a second derivation could
+     * disagree with the first.
+     */
+    readonly corroborationReasons?: ReadonlyMap<string, CorroborationReason>;
     /** Floors the platform declares but that were not readable (usually deleted). */
     readonly missingCount?: number;
     /** Why the floor walk stopped, so callers can distinguish causes. */
@@ -243,7 +251,9 @@ export declare function walkNested(adapter: PlatformAdapter, ref: ThreadRef, flo
     conflicts?: readonly IdentityConflictReport[];
     assurance?: ReadonlyMap<string, IdentityAssurance>;
     /** How well each post's identity was corroborated (v0.2.23 patch 5). */
-    corroboration?: ReadonlyMap<string, 'corroborated' | 'contested' | 'single_source'>;
+    corroboration?: ReadonlyMap<string, CorroborationVerdict>;
+    /** The reason behind each verdict, for user-facing text. */
+    corroborationReasons?: ReadonlyMap<string, CorroborationReason>;
 }>;
 /**
  * Collect a thread: metadata, every floor page, then nested replies for the

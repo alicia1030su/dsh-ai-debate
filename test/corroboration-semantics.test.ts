@@ -122,14 +122,17 @@ test('sightings.conflicted=true → contested，无论观测如何', () => {
 
 // ── not comparable is not agreement ───────────────────────────────────────
 
-test('两个来源，一个是 UID 一个是登录名 → 无法比较，single_source', () => {
+test('两个来源，一个是 UID 一个是登录名 → incomparable', () => {
+  // v0.2.23 patch 6 gave "not comparable" its own verdict. Reporting it as
+  // `single_source` understated it: two surfaces did speak, they just had no common
+  // field — and that difference matters to whoever has to decide what to do next.
   const result = corroborationOf(
     sightings({
       sources: ['wap_floor', 'comment_page'],
       observations: [uidObs('comment_page', '12345', 'user_id'), handleObs('wap_floor', 'silver_fox')],
     }),
   )
-  assert.equal(result, 'single_source', '没有共同字段就无法证明一致')
+  assert.equal(result, 'incomparable', '没有共同字段：既不印证，也不冲突')
 })
 
 test('两个来源，都只有同一个昵称 → single_source', () => {

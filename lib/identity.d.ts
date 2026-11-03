@@ -299,7 +299,46 @@ export declare function assuranceOf(sighting: IdentitySightings): IdentityAssura
  * Two rows from the same surface are one source. `platform_contract` is what a row
  * that did not say gets, so two such rows corroborate nothing.
  */
-export declare function corroborationOf(sighting: IdentitySightings): 'corroborated' | 'contested' | 'single_source';
+export type CorroborationVerdict = 'corroborated' | 'contested' | 'incomparable' | 'single_source';
+/** Why a verdict came out the way it did, in words the caller can show. */
+export interface CorroborationReason {
+    readonly code: 'agreed_handle' | 'agreed_uid' | 'disagreed_handle' | 'disagreed_uid' | 'namespace_mismatch' | 'identifier_kind_mismatch' | 'not_enough_sources' | 'no_comparable_identifier' | 'reported_conflict';
+    readonly detail: string;
+}
+/**
+ * Whether the identity was confirmed by more than one *independent* surface.
+ *
+ * ## Why this is not a count
+ *
+ * The previous implementation asked `handleEchoes >= 2`, where the echoes were
+ * observation *rows*. One surface can emit several rows for a single post id — the
+ * collector records every sighting — so a single source answering twice, plus a
+ * second source that knew only a nickname, satisfied the test. The product then
+ * claimed cross-verification that had never happened.
+ *
+ * Agreement is now counted per **distinct source**, and each source is asked what it
+ * actually supplied. A source that contributed no comparable identifier contributes
+ * nothing, however many rows it sent.
+ *
+ * ## Why incomparable is its own verdict
+ *
+ * `user_id: 12345` and `tieba_uid: 12345` are unrelated namespaces; the digits match
+ * by coincidence. Comparing them produced `contested` — an accusation that two
+ * accounts are different people, based on a comparison that never happened. The
+ * honest answer is `incomparable`, and callers can explain it with
+ * {@link corroborationReason}.
+ *
+ * Order of precedence: an explicit conflict wins, then disagreement, then agreement,
+ * then incomparability, then "not enough sources".
+ */
+export declare function corroborationOf(sighting: IdentitySightings): CorroborationVerdict;
+/**
+ * Explain a verdict, so a caller can tell the reader *why* nothing was checked.
+ *
+ * A status with no reason is only marginally better than a wrong status: the reader
+ * still cannot decide what to do next.
+ */
+export declare function corroborationReason(sighting: IdentitySightings): CorroborationReason;
 /** Whether an assurance level may be used for an automatic owner decision. */
 export declare function allowsAutomaticIdentityDecision(assurance: IdentityAssurance): boolean;
 /** A short, honest phrase for each level, suitable for a UI badge or a log. */

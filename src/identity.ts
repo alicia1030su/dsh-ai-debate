@@ -445,48 +445,206 @@ function verdictFrom(input: {
  * Two rows from the same surface are one source. `platform_contract` is what a row
  * that did not say gets, so two such rows corroborate nothing.
  */
-export function corroborationOf(
-  sighting: IdentitySightings,
-): 'corroborated' | 'contested' | 'single_source' {
-  // A conflict outranks everything: the caller saw two surfaces prove different
-  // accounts, and no amount of agreement on other fields undoes that.
+export type CorroborationVerdict = 'corroborated' | 'contested' | 'incomparable' | 'single_source'
+
+/** Why a verdict came out the way it did, in words the caller can show. */
+export interface CorroborationReason {
+  readonly code:
+    | 'agreed_handle'
+    | 'agreed_uid'
+    | 'disagreed_handle'
+    | 'disagreed_uid'
+    | 'namespace_mismatch'
+    | 'identifier_kind_mismatch'
+    | 'not_enough_sources'
+    | 'no_comparable_identifier'
+    | 'reported_conflict'
+  readonly detail: string
+}
+
+/**
+ * Whether the identity was confirmed by more than one *independent* surface.
+ *
+ * ## Why this is not a count
+ *
+ * The previous implementation asked `handleEchoes >= 2`, where the echoes were
+ * observation *rows*. One surface can emit several rows for a single post id — the
+ * collector records every sighting — so a single source answering twice, plus a
+ * second source that knew only a nickname, satisfied the test. The product then
+ * claimed cross-verification that had never happened.
+ *
+ * Agreement is now counted per **distinct source**, and each source is asked what it
+ * actually supplied. A source that contributed no comparable identifier contributes
+ * nothing, however many rows it sent.
+ *
+ * ## Why incomparable is its own verdict
+ *
+ * `user_id: 12345` and `tieba_uid: 12345` are unrelated namespaces; the digits match
+ * by coincidence. Comparing them produced `contested` — an accusation that two
+ * accounts are different people, based on a comparison that never happened. The
+ * honest answer is `incomparable`, and callers can explain it with
+ * {@link corroborationReason}.
+ *
+ * Order of precedence: an explicit conflict wins, then disagreement, then agreement,
+ * then incomparability, then "not enough sources".
+ */
+export function corroborationOf(sighting: IdentitySightings): CorroborationVerdict {
+  // The caller saw two surfaces prove different accounts. Nothing on other fields
+  // can undo that.
   if (sighting.conflicted) return 'contested'
 
   const observations = sighting.observations ?? []
-  // Distinct surfaces, not distinct rows: one surface answering twice is one source.
-  const sources = new Set(observations.map((entry) => entry.source))
-  if (sources.size < 2) return 'single_source'
 
-  // Compare only within a namespace. A uid and a handle name different kinds of
-  // thing, so "they disagree" would be as wrong as "they agree" — neither was
-  // compared. `undefined` here means genuinely incomparable, not equal.
-  const handles = new Set<string>()
-  const uids = new Set<string>()
+  // What each distinct source supplied, grouped by source. Repeated rows from the
+  // same surface collapse into one entry: one source is one source regardless of how
+  // many times it answered.
+  const handlesBySource = new Map<IdentitySource, Set<string>>()
+  const uidsBySource = new Map<IdentitySource, Set<string>>()
   for (const entry of observations) {
-    if (entry.handle !== undefined && entry.handle !== '') handles.add(entry.handle)
+    if (entry.handle !== undefined && entry.handle !== '') {
+      const set = handlesBySource.get(entry.source) ?? new Set<string>()
+      set.add(entry.handle)
+      handlesBySource.set(entry.source, set)
+    }
     if (entry.numericUid !== undefined && entry.numericUid !== '' && entry.namespace !== undefined) {
-      uids.add(`${entry.namespace}:${entry.numericUid}`)
+      const set = uidsBySource.get(entry.source) ?? new Set<string>()
+      set.add(`${entry.namespace}:${entry.numericUid}`)
+      uidsBySource.set(entry.source, set)
     }
   }
 
-  if (handles.size > 1) return 'contested'
-  if (uids.size > 1) return 'contested'
+  // "One source" is about how many surfaces spoke at all, not how many spoke per
+  // kind of identifier. Two surfaces that each named a different kind of identifier
+  // are still two surfaces — they simply could not be compared, which is the
+  // `incomparable` verdict below rather than "only one source".
+  const distinctSources = new Set(observations.map((entry) => entry.source))
+  if (distinctSources.size < 2) return 'single_source'
 
-  // Corroboration needs one identifier that two sources both stated and agreed on.
-  // Agreement on a handle plus agreement on a uid, each from a single source, is not
-  // corroboration of either.
-  const handleEchoes = observations.filter(
-    (entry) => handles.size === 1 && entry.handle === [...handles][0],
-  ).length
-  const uidEchoes = observations.filter(
-    (entry) =>
-      uids.size === 1 &&
-      entry.numericUid !== undefined &&
-      `${entry.namespace}:${entry.numericUid}` === [...uids][0],
-  ).length
-  const agreedByTwo = handleEchoes >= 2 || uidEchoes >= 2
+  // ## Disagreement, compared only within a kind and a namespace
+  //
+  // A handle and a uid are different kinds of identifier; so are ids from two
+  // namespaces. Comparing across them is what produced the false conflicts.
+  for (const values of handlesBySource.values()) {
+    if (values.size > 1) return 'contested'
+  }
+  const allHandleValues = new Set<string>()
+  for (const values of handlesBySource.values()) for (const value of values) allHandleValues.add(value)
+  if (allHandleValues.size > 1) return 'contested'
 
-  return agreedByTwo ? 'corroborated' : 'single_source'
+  // Uids only conflict when the namespace is the *same* and the number differs.
+  const uidsByNamespace = new Map<string, Set<string>>()
+  for (const value of uidsBySource.values()) {
+    for (const tagged of value) {
+      const at = tagged.indexOf(':')
+      const namespace = tagged.slice(0, at)
+      const number = tagged.slice(at + 1)
+      const set = uidsByNamespace.get(namespace) ?? new Set<string>()
+      set.add(number)
+      uidsByNamespace.set(namespace, set)
+    }
+  }
+  for (const values of uidsByNamespace.values()) {
+    if (values.size > 1) return 'contested'
+  }
+
+  // ## Agreement, counted per source
+  const handleSourcesAgreeing =
+    allHandleValues.size === 1
+      ? [...handlesBySource.values()].filter((values) => values.has([...allHandleValues][0]!)).length
+      : 0
+  if (handleSourcesAgreeing >= 2) return 'corroborated'
+
+  for (const [namespace, values] of uidsByNamespace) {
+    if (values.size !== 1) continue
+    const only = `${namespace}:${[...values][0]}`
+    const agreeing = [...uidsBySource.values()].filter((tagged) => tagged.size === 1 && tagged.has(only)).length
+    if (agreeing >= 2) return 'corroborated'
+  }
+
+  // ## Nothing could be compared
+  //
+  // Two surfaces spoke, but they named different kinds of identifier, or the same
+  // number in two namespaces. That is neither agreement nor disagreement.
+  const kindsPresent = (handlesBySource.size > 0 ? 1 : 0) + (uidsBySource.size > 0 ? 1 : 0)
+  const namespacesPresent = uidsByNamespace.size
+  if (kindsPresent >= 2 || namespacesPresent >= 2) return 'incomparable'
+
+  return 'single_source'
+}
+
+/**
+ * Explain a verdict, so a caller can tell the reader *why* nothing was checked.
+ *
+ * A status with no reason is only marginally better than a wrong status: the reader
+ * still cannot decide what to do next.
+ */
+export function corroborationReason(sighting: IdentitySightings): CorroborationReason {
+  const verdict = corroborationOf(sighting)
+  const observations = sighting.observations ?? []
+  if (verdict === 'contested') {
+    if (sighting.conflicted) {
+      return { code: 'reported_conflict', detail: '读取过程中已经确认两个来源指向不同账号。' }
+    }
+    // Name the kind that actually disagreed. Reporting a uid disagreement as a
+    // handle one sends the reader looking at the wrong field.
+    const handles = new Set(
+      observations.map((entry) => entry.handle).filter((v): v is string => v !== undefined && v !== ''),
+    )
+    if (handles.size > 1) {
+      return { code: 'disagreed_handle', detail: '两个来源给出了不同的登录名。' }
+    }
+    return { code: 'disagreed_uid', detail: '同一命名空间下，两个来源给出了不同的数字 ID。' }
+  }
+  if (verdict === 'corroborated') {
+    const hasHandle = (sighting.observations ?? []).some((entry) => entry.handle !== undefined)
+    return hasHandle
+      ? { code: 'agreed_handle', detail: '两个独立来源给出了相同的登录名。' }
+      : { code: 'agreed_uid', detail: '两个独立来源在同一命名空间下给出了相同的数字 ID。' }
+  }
+  if (verdict === 'incomparable') {
+    const observations = sighting.observations ?? []
+    const namespaces = new Set(
+      observations
+        .map((entry) => entry.namespace)
+        .filter((value): value is NumericUidNamespace => value !== undefined),
+    )
+    if (namespaces.size > 1) {
+      return {
+        code: 'namespace_mismatch',
+        detail:
+          `两个来源给出的数字分别属于不同的命名空间（${[...namespaces].join(' / ')}），` +
+          '数字相同只是巧合，无法相互比较。',
+      }
+    }
+    return {
+      code: 'identifier_kind_mismatch',
+      detail: '两个来源提供的标识类型不同（一个数字 ID、一个登录名），无法相互比较。',
+    }
+  }
+  const distinct = new Set(observations.map((entry) => entry.source))
+  if (distinct.size < 2) {
+    return { code: 'not_enough_sources', detail: '只有一个来源，谈不上交叉验证。' }
+  }
+  // Two sources spoke but only one of them named an account. Saying "neither did"
+  // would be inaccurate, and inaccuracy here is what makes people stop reading.
+  const withIdentifier = new Set(
+    observations
+      .filter(
+        (entry) =>
+          (entry.handle !== undefined && entry.handle !== '') ||
+          (entry.numericUid !== undefined && entry.numericUid !== ''),
+      )
+      .map((entry) => entry.source),
+  )
+  return withIdentifier.size < 2
+    ? {
+        code: 'no_comparable_identifier',
+        detail:
+          withIdentifier.size === 0
+            ? '两个来源都没有提供账号标识，只有昵称。'
+            : '只有其中一个来源提供了账号标识，另一个只给了昵称，无法相互印证。',
+      }
+    : { code: 'no_comparable_identifier', detail: '两个来源提供的标识无法相互比较。' }
 }
 
 /** Whether an assurance level may be used for an automatic owner decision. */
