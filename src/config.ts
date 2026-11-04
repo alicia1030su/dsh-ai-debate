@@ -143,6 +143,16 @@ export const Config = z.object({
   /** Per-request timeout. */
   llmTimeoutMs: z.number().min(1000).max(600000).default(120000).volatile(),
   /**
+   * Extra attempts after a *transient* model failure (v0.2.27).
+   *
+   * Default 0, matching the transport's own default, because a generation is not free and
+   * a timeout may mean the provider is still working. When set, only failures that provably
+   * did not take effect are retried — connection errors, timeouts, 429 and 5xx. A rejected
+   * key, an exhausted quota, an over-long context and an explicit cancellation are never
+   * retried: repeating them produces the same answer and spends the budget twice.
+   */
+  llmRetries: z.number().min(0).max(4).default(0).volatile(),
+  /**
    * Sampling temperature.
    *
    * Low by default: this task is precision, not creativity. Raise it only if the
@@ -241,6 +251,7 @@ export const DEFAULT_CONFIG = {
   llmApiKey: '',
   llmModel: '',
   llmTimeoutMs: 120000,
+  llmRetries: 0,
   llmTemperature: 0.4,
   llmMaxOutputTokens: 0,
   authProbeThreadId: '',
@@ -337,6 +348,7 @@ export function resolveConfig(input: unknown): ResolvedConfig {
     llmApiKey: readString(raw.llmApiKey, '').trim(),
     llmModel: readString(raw.llmModel, '').trim(),
     llmTimeoutMs: readNumber(raw.llmTimeoutMs, DEFAULT_CONFIG.llmTimeoutMs),
+    llmRetries: clampNumber(readNumber(raw.llmRetries, DEFAULT_CONFIG.llmRetries), 0, 4, DEFAULT_CONFIG.llmRetries),
     llmTemperature: clampNumber(
       readNumber(raw.llmTemperature, DEFAULT_CONFIG.llmTemperature),
       0,

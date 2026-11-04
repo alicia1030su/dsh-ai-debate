@@ -270,6 +270,9 @@ export function buildLlm(config: ResolvedConfig): LlmClient {
     apiKey: config.llmApiKey,
     model: config.llmModel,
     timeoutMs: config.llmTimeoutMs,
+    // Bounded retry, and only for failures that provably did not take effect. The
+    // classification lives in the transport; this just passes the budget through.
+    maxRetries: config.llmRetries ?? 0,
   })
 }
 
