@@ -195,6 +195,17 @@ export interface WorkbenchState {
         readonly candidates: number;
     };
     /**
+     * The session this view describes (v0.2.26).
+     *
+     * The client has always posted `wb.sessionId` back with 「用这条」,
+     * 「生成候选」 and the publish button, and the view never carried it — so the button's
+     * `disabled` test (`wb.sessionId === undefined`) was permanently true. The control
+     * rendered as enabled, took the click, and did nothing. That is why the whole second
+     * half of the workbench was unreachable in a browser while the server routes worked
+     * fine when called directly.
+     */
+    readonly sessionId?: string;
+    /**
      * The comments this session actually read, so the owner can pick the one to answer
      * (v0.2.24).
      *
@@ -318,27 +329,6 @@ export declare function deriveWorkbenchState(input: WorkbenchInput): WorkbenchSt
  */
 export declare function describeOwnerIdentity(session: StoredSession | undefined): OwnerIdentityView;
 export declare function describeTargetIdentity(candidate: Pick<StoredCandidate, 'targetSnapshot'> | undefined, contentApproved: boolean): TargetIdentityView;
-/**
- * Whether an approval still authorizes the candidate **as it is now**.
- *
- * ## Scope, stated once
- *
- * This function answers exactly one question: **do the bytes still match what the owner
- * approved?** It compares the candidate id, version, text hash and target post id. It
- * deliberately does **not** compare the author of the target, and adding that here would
- * be the wrong fix:
- *
- * - the approval record does not carry an author, so there is nothing to compare against
- *   without inventing a field;
- * - `snapshotStillValid` already does that comparison, against a *fresh platform read*,
- *   inside `publishCandidate`. A second comparison would be a second decider, and the two
- *   could disagree — which is how a UI ends up saying "approved" while the gate refuses.
- *
- * What the workbench needs instead is the honest statement that approval covers content
- * only; see {@link describeTargetIdentity} and `WorkbenchState.approval`.
- *
- * `undefined` approval means "nothing to compare", which is a refusal, not a pass.
- */
 export declare function approvalStillApplies(input: {
     readonly candidate: Pick<StoredCandidate, 'replyId' | 'textHash' | 'candidateVersion' | 'targetPostId' | 'approved'>;
     readonly approval?: {

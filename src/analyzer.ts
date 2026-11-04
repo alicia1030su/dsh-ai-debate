@@ -365,7 +365,40 @@ export function analyzeDispute(
     .map((entry) => toStatement(entry, nameByHandle, keyOf))
 
   const floorTimeline = timeline.filter((entry) => entry.floorPostId === container.floor.postId)
-  const opponentPick = pickOpponent(floorTimeline, ownerKey, target, participants, notes, keyOf)
+
+  // ## When the trigger is somebody else's post (v0.2.26)
+  //
+  // `pickOpponent` answers "who was the owner arguing with *before* this point". That
+  // is the right question when the trigger is the owner's own summons. It is the wrong
+  // question when the owner pointed at a specific comment in the workbench — the whole
+  // meaning of that gesture is "answer *this* one", and the person to answer is the
+  // person who wrote it.
+  //
+  // Running the old rule there did not merely pick a worse opponent: it looked only at
+  // posts *before* the trigger, and when the trigger was the first thing in the floor
+  // there were none left, so generation stopped with 「本次重新分析没有找到对手」.
+  // Selecting a comment was therefore unusable for exactly the case it exists for.
+  //
+  // So: a trigger written by anyone other than the owner names its own author as the
+  // opponent. The summons path is unaffected — `runAnalysis` proves the trigger is the
+  // owner's own post before reaching here, so this branch is unreachable from it.
+  const triggerKey = keyOf(target)
+  const triggerIsOwner = triggerKey === ownerKey
+  const triggerIsAnonymous = triggerKey === '' || triggerKey === '未知'
+  const opponentPick: OpponentPick =
+    triggerIsOwner || triggerIsAnonymous
+      ? pickOpponent(floorTimeline, ownerKey, target, participants, notes, keyOf)
+      : {
+          opponentKey: triggerKey,
+          evidence: evidenceForTriggerAuthor(floorTimeline, ownerKey, triggerKey, target, keyOf),
+          ambiguous: false,
+        }
+  if (!triggerIsOwner && !triggerIsAnonymous) {
+    notes.push(
+      `按选择的目标发言归属：本次要回复的是「${target.authorName ?? triggerKey}」的这条发言，` +
+        '不再按「主人之前回复过谁」推断对手。',
+    )
+  }
 
   const exchange = opponentPick.opponentKey
     ? floorTimeline
@@ -1065,6 +1098,48 @@ function resolveOwnerKey(
   }
 
   throw new Error('没有配置主人身份：请先设置主人的数字 ID、贴吧登录名（un）或昵称')
+}
+
+/**
+ * Evidence for "the opponent is whoever wrote the post the owner picked".
+ *
+ * Not a copy of `pickOpponent`'s scoring, because there is no inference to make here:
+ * the owner pointed at one comment, and its author is the opponent. Reporting
+ * inference-shaped numbers would dress a citation up as a judgement. What is reported
+ * is the interaction between those two speakers in this floor — the same fields the
+ * callsite already displays — with `exchanges` counting the owner's direct replies to
+ * the picked author.
+ */
+function evidenceForTriggerAuthor(
+  floorTimeline: readonly TimelineEntry[],
+  ownerKey: string,
+  opponentKey: string,
+  target: TimelineEntry,
+  keyOf: (entry: TimelineEntry) => string,
+): OpponentEvidence {
+  let ownerRepliesTo = 0
+  let lastSpokeIndex = -1
+  const others = new Set<string>()
+  floorTimeline.forEach((entry, index) => {
+    const key = keyOf(entry)
+    if (key === opponentKey) lastSpokeIndex = index
+    if (key === ownerKey) {
+      // The edge is written as a display name, so it is compared with the picked
+      // post's name. On a floor where two accounts share a nickname this can only
+      // over-count, never mis-attribute who to answer — the answer target is the
+      // selection itself, not this number.
+      if (entry.replyToName !== undefined && entry.replyToName === target.authorName) ownerRepliesTo += 1
+      return
+    }
+    if (key !== opponentKey && key !== '' && key !== '未知') others.add(key)
+  })
+  return {
+    exchanges: ownerRepliesTo,
+    ownerRepliesTo,
+    repliesToOwner: 0,
+    lastSpokeIndex,
+    otherActiveParticipants: [...others],
+  }
 }
 
 /** The outcome of opponent selection. */

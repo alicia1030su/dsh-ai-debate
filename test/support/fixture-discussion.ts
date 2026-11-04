@@ -145,10 +145,22 @@ function dataInfo(parts: {
 
 function renderFloor(floor: FixtureFloor): string {
   const author = floor.authorName ?? '匿名'
+  // ## No `user_id` here, and that is not an omission
+  //
+  // A live WAP floor page carries `{un, is_annoy, pid, floor_num, name_show}` — no
+  // numeric uid anywhere in `data-info`. Verified against a real captured page in
+  // `test/fixtures/wap-page1.html`.
+  //
+  // An earlier version of this fixture added one, and the effect was not cosmetic: the
+  // same person then keyed as `uid:tieba:unstated:500001` on a floor and as
+  // `handle:tieba:owner_un` in a nested reply, because nested pages publish a handle and
+  // no uid. Two keys for one human made the owner look like a stranger in their own
+  // floor, and the first read confidently named the owner as the opponent to argue
+  // with. `numericUid` stays on the data model — `totalComment` is the surface that
+  // publishes it — but it does not go into floor markup, because real pages do not.
   const info = dataInfo({
     ...(floor.authorHandle === undefined ? {} : { handle: floor.authorHandle }),
     name: author,
-    ...(floor.numericUid === undefined ? {} : { uid: floor.numericUid }),
   })
   // `findFloorAnchors` requires exactly this attribute order and spacing.
   return [
@@ -176,6 +188,17 @@ export function wapPageHtml(page = 1): string {
     '<!DOCTYPE HTML><html><head><meta charset="utf-8">',
     `<title>隔离验收帖_贴吧</title>`,
     '</head><body>',
+    // ## The four things the publish path reads from this page
+    //
+    // `parseWapThreadMeta` takes `fid` and `itb_tbs` from the raw HTML, and
+    // `readAuthFromHtml` takes the login banner from `data_editor`. Without them the
+    // publish would stop at "没有拿到贴吧 CSRF token" or "未登录" — which would look
+    // like a passing safety check while proving nothing about the publish path.
+    //
+    // These values describe the *simulated* account this fixture host is logged in as
+    // (`ai_account` / 600001). They are not real credentials and grant nothing.
+    `<script>var itb_tbs: 'deadbeefcafe', fid: "24342155", forum_name: "隔离验收吧";</script>`,
+    `<script>var data_editor: {"can_post":1,"forbid_flag":0,"user":{"uid":600001,"is_login":1,"user_id":600001}}, base_url: "/";</script>`,
     '<div class="th_title">隔离验收帖</div>',
     `<ul class="flist" data-total="${FLOORS.length}">`,
     ...FLOORS.map(renderFloor),

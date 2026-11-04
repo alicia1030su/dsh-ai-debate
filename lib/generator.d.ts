@@ -65,6 +65,13 @@ export interface Violation {
 /** Generation inputs. */
 export interface GenerateOptions {
     readonly dispute: Dispute;
+    /**
+     * The post this reply will actually land on, when the caller knows it.
+     *
+     * Set by the workbench path once the selection has been resolved against a fresh
+     * read. Absent keeps the historical "the opponent's latest post" expectation.
+     */
+    readonly expectedTargetPostId?: string;
     readonly context: CompressedContext;
     readonly persona: PersonaConfig;
     /** Reply ids already published in this session, for duplicate detection. */

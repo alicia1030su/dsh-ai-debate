@@ -101,6 +101,16 @@ export const Config = z.object({
   /** A Tieba cookie header copied from a logged-in browser. Never logged. */
   tiebaCookie: z.string().role('secret').default('').volatile(),
 
+  /**
+   * A thread id used to read the login banner, when no better page is at hand.
+   *
+   * The adapter asks for a page to read `data_editor` from. Verification passes the thread
+   * the owner authorised, so this is only needed for callers that have no thread to name
+   * — but the option existed on the adapter with no way to set it, which made the
+   * "not configured" case the only case. Blank means "not configured".
+   */
+  authProbeThreadId: z.string().default('').volatile(),
+
   // ---- persona -------------------------------------------------------------
   /** Default persona style. */
   personaStyle: z
@@ -233,6 +243,7 @@ export const DEFAULT_CONFIG = {
   llmTimeoutMs: 120000,
   llmTemperature: 0.4,
   llmMaxOutputTokens: 0,
+  authProbeThreadId: '',
   contextPreset: 'small' as const,
   contextTokens: 0,
   interactionMode: 'manual' as const,
@@ -311,6 +322,7 @@ export function resolveConfig(input: unknown): ResolvedConfig {
       : DEFAULT_CONFIG.securityStrictness,
     securityEventLimit: readNumber(raw.securityEventLimit, DEFAULT_CONFIG.securityEventLimit),
     tiebaCookie: readString(raw.tiebaCookie, '').trim(),
+    authProbeThreadId: readString(raw.authProbeThreadId, '').trim(),
     personaStyle: (['tieba_veteran', 'soft_defensive', 'tsundere', 'aloof'] as const).includes(
       style as never,
     )

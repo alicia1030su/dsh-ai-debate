@@ -28,7 +28,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { PICKED_NESTED_POST_ID, THREAD_ID } from '../support/fixture-discussion.ts'
+import { PICKED_NESTED_POST_ID, PICKED_PARENT_POST_ID, THREAD_ID } from '../support/fixture-discussion.ts'
 
 interface StageResult {
   readonly name: string
@@ -47,6 +47,18 @@ const port = Number(process.env.DSH_E2E_CDP_PORT ?? '9226')
 const appPort = Number(process.env.DSH_E2E_APP_PORT ?? '58026')
 const outDir = process.env.DSH_E2E_OUT_DIR ?? 'tmp/gui-e2e'
 const interceptLog = process.env.DSH_E2E_INTERCEPT_LOG ?? ''
+/** Where the simulated platform records what it was asked to publish. */
+const publishLog = process.env.DSH_E2E_PUBLISH_LOG ?? ''
+
+/** Poll until `check` is true, or give up after `timeoutMs`. */
+async function waitFor(check: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await check()) return true
+    await sleep(500)
+  }
+  return false
+}
 
 mkdirSync(outDir, { recursive: true })
 
@@ -318,21 +330,203 @@ try {
   const readQualityShown = bodyText.includes('读取完整度')
   stage('读取完整度显示', readQualityShown ? 'passed' : 'failed', readQualityShown ? '已显示' : '未显示')
 
-  // Pick the nested comment.
-  const pickButtons = await evaluate<number>(`[...document.querySelectorAll('button')].filter(b => (b.textContent||'').trim() === '用这条').length`)
-  stage('「用这条」按钮出现', pickButtons > 0 ? 'passed' : 'failed', `共 ${pickButtons} 个`)
-  if (pickButtons > 0) {
+  // Pick the nested comment the fixture targets.
+  //
+  // The list is ordered floors-then-nested, and the fixture's picked post is the first
+  // nested reply of floor 1. Choosing by index rather than "first button" is what lets
+  // the later assertions name an exact post id: with six rows, "the first 用这条" is a
+  // different comment than the one the publish target is compared against.
+  const pickInfo = await evaluate<{ count: number; index: number }>(`(() => {
+    const rows = [...document.querySelectorAll('li')]
+    const buttons = [...document.querySelectorAll('button')].filter(b => (b.textContent||'').trim() === '用这条')
+    const target = buttons.findIndex((button) => {
+      const row = button.closest('li')
+      return row !== null && (row.textContent || '').includes(${JSON.stringify(PICKED_NESTED_POST_ID)})
+        || (row !== null && (row.textContent || '').includes('成本高一倍'))
+    })
+    void rows
+    return { count: buttons.length, index: target }
+  })()`)
+  stage('「用这条」按钮出现', pickInfo.count > 0 ? 'passed' : 'failed', `共 ${pickInfo.count} 个`)
+  if (pickInfo.count > 0) {
+    const buttonIndex = pickInfo.index >= 0 ? pickInfo.index : 0
     const picked = await evaluate<boolean>(`(() => {
       const buttons = [...document.querySelectorAll('button')].filter(b => (b.textContent||'').trim() === '用这条')
-      if (buttons.length === 0) return false
-      buttons[0].click(); return true
+      const button = buttons[${buttonIndex}]
+      if (!button) return false
+      button.click(); return true
     })()`)
-    stage('点击「用这条」', picked ? 'passed' : 'failed', picked ? '已点击第一条' : '点击失败')
+    stage('点击「用这条」', picked ? 'passed' : 'failed', picked ? `已点击第 ${buttonIndex + 1} 条` : '点击失败')
     await sleep(6000)
     await screenshot('05-after-pick')
   } else {
     stage('点击「用这条」', 'skipped', '没有可点的按钮')
   }
+
+  // ## The workbench must now show which comment is selected, and where the reply lands
+  //
+  // The page labels this line 「目标：」. An earlier version of this check looked for
+  // 「回复目标」, which the UI never renders — the assertion was wrong, not the page.
+  const afterPick = await evaluate<string>(`document.body.innerText`)
+  const targetLine =
+    afterPick.split('\n').find((line) => line.trim().startsWith('目标：')) ?? ''
+  stage(
+    '显示选中的目标',
+    targetLine.includes(PICKED_NESTED_POST_ID) ? 'passed' : 'failed',
+    targetLine === '' ? '页面没有目标行' : targetLine.slice(0, 80),
+  )
+
+  // ── register the publish capability, through the 验收 tab ───────────────────
+  //
+  // The publish path refuses a platform whose `comment.reply` is only declared, never
+  // proven (`capability_not_proven`). That gate is correct and is not bypassed here: the
+  // owner's own verification flow is driven instead — one authorisation, one post, read
+  // back. In this environment the platform is the simulated server, so the post lands
+  // there and the read-back sees it.
+  const verifyTab = await clickByLabel('验收')
+  await sleep(2000)
+  stage('进入验收页', verifyTab ? 'passed' : 'failed', verifyTab ? '已点击页签' : '找不到验收页签')
+
+  async function fillVerifyField(label: string, value: string): Promise<boolean> {
+    const focused = await evaluate<boolean>(`(() => {
+      const labels = [...document.querySelectorAll('label')]
+      const box = labels.find((l) => (l.textContent || '').includes(${JSON.stringify(label)}))
+      if (!box) return false
+      const input = box.querySelector('input')
+      if (!input) return false
+      input.focus()
+      return document.activeElement === input
+    })()`)
+    if (!focused) return false
+    await typeText(value)
+    await sleep(120)
+    return true
+  }
+
+  const verifyText = '隔离验收：这条是端到端测试环境发出的模拟回复。'
+  const filled =
+    (await fillVerifyField('发帖账号 id', '600001')) &&
+    (await fillVerifyField('帖子 id', THREAD_ID)) &&
+    (await fillVerifyField('要回复的楼层 id', PICKED_PARENT_POST_ID)) &&
+    (await fillVerifyField('要回复的那条评论 id', PICKED_NESTED_POST_ID)) &&
+    (await fillVerifyField('授权人', 'e2e')) &&
+    (await fillVerifyField('要发表的正文', verifyText))
+  stage('填写验收表单', filled ? 'passed' : 'failed', filled ? '六项都已填入' : '有字段没找到')
+  await screenshot('05b-verify-form')
+
+  const submitted = await clickByLabel('发表并回读')
+  stage('提交验收', submitted ? 'passed' : 'failed', submitted ? '已点击真实按钮' : '找不到提交按钮')
+  if (submitted) {
+    const verified = await waitFor(async () => {
+      const text = await evaluate<string>(`document.body.innerText`)
+      return text.includes('已发表并回读确认') || text.includes('回读证据不完整') || text.includes('未确认')
+    }, 40_000)
+    stage('验收结果返回', verified ? 'passed' : 'failed', verified ? '页面显示验收结论' : '40 秒内没有结论')
+    await screenshot('05c-verify-result')
+  }
+
+  // Back to the workbench for the rest of the flow.
+  await clickByLabel('工作台')
+  await sleep(2500)
+
+  // ── generate ────────────────────────────────────────────────────────────────
+  const genClicked = await clickByLabel('生成候选')
+  stage('点击「生成候选」', genClicked ? 'passed' : 'failed', genClicked ? '已点击真实按钮' : '按钮不存在或不可点')
+  if (genClicked) {
+    // The model call is local but not instant; wait for the candidate row to appear
+    // rather than for a fixed time, so a slow machine does not fail the run.
+    const generated = await waitFor(async () => {
+      const text = await evaluate<string>(`document.body.innerText`)
+      return text.includes('候选') && /v\d+/.test(text)
+    }, 30_000)
+    stage('候选出现在页面上', generated ? 'passed' : 'failed', generated ? '已渲染候选' : '30 秒内没有候选')
+    await screenshot('06-generated')
+  }
+
+  // ── edit through the textarea ───────────────────────────────────────────────
+  //
+  // Editing is the only way the owner's own words reach the publish path, so it is
+  // typed the way a person types and then saved through the button. The new text is
+  // kept in `editedText` and later compared against what the simulated platform
+  // received — a mismatch there would mean the approval was bound to something else.
+  const EDITED_SUFFIX = '（这句是人工编辑追加的）'
+  const editorReady = await evaluate<boolean>(`(() => {
+    const area = document.querySelector('textarea')
+    if (!area) return false
+    area.focus()
+    return document.activeElement === area
+  })()`)
+  let editedText = ''
+  if (editorReady) {
+    await typeText(EDITED_SUFFIX)
+    await sleep(300)
+    editedText = await evaluate<string>(`(() => { const a = document.querySelector('textarea'); return a ? a.value : '' })()`)
+    const savedEdit = await clickByLabel('保存修改')
+    stage('编辑并保存正文', savedEdit ? 'passed' : 'failed', savedEdit ? `追加 ${EDITED_SUFFIX}` : '找不到保存修改')
+    await sleep(3000)
+    await screenshot('07-edited')
+  } else {
+    stage('编辑并保存正文', 'failed', '找不到正文输入框')
+  }
+
+  // ## Approval must be granted, and the page must reflect it
+  const approveClicked = await clickByLabel('批准这一条')
+  stage('点击「批准这一条」', approveClicked ? 'passed' : 'failed', approveClicked ? '已点击真实按钮' : '批准按钮不存在')
+  if (approveClicked) {
+    const approved = await waitFor(async () => {
+      const text = await evaluate<string>(`document.body.innerText`)
+      return text.includes('已批准')
+    }, 20_000)
+    stage('批准状态出现在页面', approved ? 'passed' : 'failed', approved ? '页面显示已批准' : '20 秒内没有已批准')
+    await screenshot('08-approved')
+  }
+
+  // ## Publish, through the page, exactly once
+  const publishClicked = await clickByLabel('发表这一条（只会发一次）')
+  stage('点击发表', publishClicked ? 'passed' : 'failed', publishClicked ? '已点击真实按钮' : '发表按钮不存在')
+  if (publishClicked) {
+    const published = await waitFor(async () => {
+      const text = await evaluate<string>(`document.body.innerText`)
+      return text.includes('已发表') || text.includes('回读')
+    }, 30_000)
+    stage('发表结果显示', published ? 'passed' : 'failed', published ? '页面显示发表/回读结果' : '30 秒内没有结果')
+    await screenshot('09-published')
+  }
+
+  // ## What the simulated platform actually received
+  const platformLog = publishLog !== '' && existsSync(publishLog)
+    ? (JSON.parse(readFileSync(publishLog, 'utf8')) as {
+        publishes: { seq: number; kind: string; nestedReplyId?: string; floorPostId?: string; content: string }[]
+      })
+    : { publishes: [] }
+  const sent = platformLog.publishes
+  stage('模拟平台收到 1 次发表', sent.length === 1 ? 'passed' : 'failed', `实际 ${sent.length} 次`)
+  if (sent.length > 0) {
+    const first = sent[0]!
+    stage(
+      '发表目标是选中的楼中楼',
+      first.nestedReplyId === PICKED_NESTED_POST_ID ? 'passed' : 'failed',
+      `comment_id=${first.nestedReplyId ?? '（无）'} floor=${first.floorPostId ?? '（无）'}`,
+    )
+    const bodyOk = editedText !== '' && first.content.trim() === editedText.trim()
+    stage(
+      '发表正文与页面上的正文一致',
+      bodyOk ? 'passed' : 'failed',
+      bodyOk ? `一致（${first.content.length} 字）` : `平台收到「${first.content.slice(0, 30)}…」`,
+    )
+  }
+
+  // ## Clicking publish again must not send a second time
+  await clickByLabel('发表这一条（只会发一次）')
+  await sleep(2500)
+  const afterSecond = publishLog !== '' && existsSync(publishLog)
+    ? (JSON.parse(readFileSync(publishLog, 'utf8')) as { publishes: unknown[] }).publishes.length
+    : 0
+  stage(
+    '重复点击不会二次发表',
+    afterSecond === sent.length ? 'passed' : 'failed',
+    `第二次点击后共 ${afterSecond} 次`,
+  )
 
   // What did the server actually do?
   const intercept = interceptLog !== '' && existsSync(interceptLog)

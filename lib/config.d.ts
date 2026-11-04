@@ -89,6 +89,15 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     securityEventLimit: z<number, number, "volatile-defined">;
     /** A Tieba cookie header copied from a logged-in browser. Never logged. */
     tiebaCookie: z<string, string, "volatile-defined">;
+    /**
+     * A thread id used to read the login banner, when no better page is at hand.
+     *
+     * The adapter asks for a page to read `data_editor` from. Verification passes the thread
+     * the owner authorised, so this is only needed for callers that have no thread to name
+     * — but the option existed on the adapter with no way to set it, which made the
+     * "not configured" case the only case. Blank means "not configured".
+     */
+    authProbeThreadId: z<string, string, "volatile-defined">;
     /** Default persona style. */
     personaStyle: z<"tieba_veteran" | "soft_defensive" | "tsundere" | "aloof", "tieba_veteran" | "soft_defensive" | "tsundere" | "aloof", "volatile-defined">;
     /** 1 (mild) to 5 (sharp). */
@@ -244,6 +253,15 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     securityEventLimit: z<number, number, "volatile-defined">;
     /** A Tieba cookie header copied from a logged-in browser. Never logged. */
     tiebaCookie: z<string, string, "volatile-defined">;
+    /**
+     * A thread id used to read the login banner, when no better page is at hand.
+     *
+     * The adapter asks for a page to read `data_editor` from. Verification passes the thread
+     * the owner authorised, so this is only needed for callers that have no thread to name
+     * — but the option existed on the adapter with no way to set it, which made the
+     * "not configured" case the only case. Blank means "not configured".
+     */
+    authProbeThreadId: z<string, string, "volatile-defined">;
     /** Default persona style. */
     personaStyle: z<"tieba_veteran" | "soft_defensive" | "tsundere" | "aloof", "tieba_veteran" | "soft_defensive" | "tsundere" | "aloof", "volatile-defined">;
     /** 1 (mild) to 5 (sharp). */
@@ -345,6 +363,7 @@ export declare const DEFAULT_CONFIG: {
     llmTimeoutMs: number;
     llmTemperature: number;
     llmMaxOutputTokens: number;
+    authProbeThreadId: string;
     contextPreset: "small";
     contextTokens: number;
     interactionMode: "manual";

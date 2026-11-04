@@ -89,6 +89,13 @@ export interface Violation {
 /** Generation inputs. */
 export interface GenerateOptions {
   readonly dispute: Dispute
+  /**
+   * The post this reply will actually land on, when the caller knows it.
+   *
+   * Set by the workbench path once the selection has been resolved against a fresh
+   * read. Absent keeps the historical "the opponent's latest post" expectation.
+   */
+  readonly expectedTargetPostId?: string
   readonly context: CompressedContext
   readonly persona: PersonaConfig
   /** Reply ids already published in this session, for duplicate detection. */
@@ -331,7 +338,19 @@ export function validateDraft(
   // supplied something different, so with no confirmed opponent any non-empty id
   // passed. Now an unconfirmed opponent blocks the draft outright, and a
   // supplied id must be the opponent's verified post — not merely "some id".
-  const expectedTarget = dispute.opponent?.lastPostId
+  // ## Which post the model is supposed to be answering (v0.2.26)
+  //
+  // This used `dispute.opponent.lastPostId` — that person's newest post. Since v0.2.25
+  // the reply lands on the post the owner *picked*, so on a thread where the opponent
+  // spoke more than once these two disagree, and the check then reported
+  // 「模型选择的回复对象是 9200000001，但当前对手的发言是 9100000002」 for a reply that
+  // was aimed exactly where the owner pointed. A candidate carrying a false violation
+  // cannot be published, so picking any comment but the newest made generation useless.
+  //
+  // The expectation now comes from the caller, which is the only place that knows the
+  // resolved publish target. `dispute.opponent.lastPostId` stays as the fallback for
+  // callers that have no selection.
+  const expectedTarget = options.expectedTargetPostId ?? dispute.opponent?.lastPostId
   if (dispute.needsConfirmation || !dispute.opponent) {
     violations.push({
       code: 'no_confirmed_opponent',

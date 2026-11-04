@@ -152,7 +152,21 @@ function capabilityFor(runtime: Runtime, platform: string): { declared: string; 
  * caller (`checkVerification`) already refuses on `undefined`, and a per-route message would be
  * a second place deciding whether publishing may happen.
  */
-async function liveAccountOf(runtime: Runtime, platform: string): Promise<string | undefined> {
+async function liveAccountOf(
+  runtime: Runtime,
+  platform: string,
+  /**
+   * A thread known to be readable, used as the login probe.
+   *
+   * Verification already knows which thread the owner authorised, and asking
+   * `checkAuthentication()` with no argument left the probe list empty — the adapter then
+   * had nothing to read and reported "cannot determine the logged-in account" on every
+   * run, so no capability could ever be verified in a deployment where the adapter has no
+   * default probe thread configured. Passing the authorised thread reuses a page the run
+   * is about to touch anyway.
+   */
+  probeThreadId?: string,
+): Promise<string | undefined> {
   let adapter
   try {
     adapter = runtime.platforms?.adapterFor(platform)
@@ -161,7 +175,10 @@ async function liveAccountOf(runtime: Runtime, platform: string): Promise<string
   }
   if (adapter === undefined) return undefined
   try {
-    const probe = await adapter.checkAuthentication()
+    const probe =
+      probeThreadId === undefined || probeThreadId === ''
+        ? await adapter.checkAuthentication()
+        : await adapter.checkAuthentication(undefined, probeThreadId)
     if (probe.authenticated !== true) return undefined
     if (typeof probe.userId === 'string' && probe.userId.trim() !== '') return probe.userId.trim()
   } catch {
@@ -1154,8 +1171,28 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
       )
       approvals.push(record)
 
+      // ## Mark the candidate too (v0.2.26)
+      //
+      // The approval record alone is not what the page and the gate read: `approved` on the
+      // candidate is checked first by `approvalStillApplies` ("这条候选还没有被批准") and by
+      // the workbench's step derivation. That flag used to be set only *after a successful
+      // publish*, so approving changed nothing visible — the button stayed, the step stayed
+      // at `approve`, and publishing was unreachable from the page. Approving is exactly the
+      // moment the flag becomes true; publishing is what consumes the record.
+      const sessions = data.sessions.map((entry) =>
+        entry.id === session.id
+          ? {
+              ...entry,
+              candidates: entry.candidates.map((row) =>
+                row.replyId === candidate.replyId ? { ...row, approved: true } : row,
+              ),
+              updatedAt: new Date().toISOString(),
+            }
+          : entry,
+      )
+
       return {
-        commit: { ...data, approvals },
+        commit: { ...data, approvals, sessions },
         value: {
           status: 200,
           body: {
@@ -1480,7 +1517,7 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           return stateOf(matrix, capability).state
         },
         configuredAccountId: (id) => configuredAccountOf(effectiveConfig(), id),
-        liveAccountId: async (id) => liveAccountOf(runtimeView, id),
+        liveAccountId: async (id, threadId) => liveAccountOf(runtimeView, id, threadId),
         records: {
           // Refresh before answering: another instance may have claimed or completed a record.
           // The panel is where a human decides whether to spend an authorization, so it must
@@ -1661,6 +1698,15 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
         approvalApplies: freshness.applies,
         capability: capabilityFor(runtimeView, platform),
         ...(lastAttempt === undefined ? {} : { lastAttempt }),
+        // The counts came from nowhere before v0.2.26: `floorCount` / `nestedCount` were
+        // never passed by any production caller, so the page rendered 「楼层 0 条 ·
+        // 楼中楼 0 条」 next to a six-row comment list. Worse than blank — it contradicted
+        // the list right beside it, and a reader would reasonably conclude the read had
+        // failed. They are taken from the same stored read quality that feeds the
+        // completeness line, so the two can never disagree.
+        ...(session.readQuality === undefined
+          ? {}
+          : { floorCount: session.readQuality.floorsRead, nestedCount: session.readQuality.nestedRead }),
         // v0.2.24: the read-quality facts recorded with this session, plus whether the
         // owner's own identity still needs re-checking before anything is sent.
         ...(session.readQuality === undefined
@@ -1715,7 +1761,17 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
               platform,
               targetPostId: candidate.targetPostId,
               publishingAccount,
-              textHash: candidate.textHash,
+              // `hashText`, not `candidate.textHash`.
+              //
+              // Two hashes exist and they are not interchangeable: the stored
+              // `textHash` is `contentHash` — whitespace-normalised and truncated to 32
+              // hex chars — while the approval record binds `hashText`, the full sha256
+              // of the exact bytes. Sending the stored one made `checkExpectation`
+              // compare 32 chars against 64 for every candidate, so it always reported
+              // 「正文内容」 drift and **no approval could ever be granted**. Nothing
+              // caught it because the tests that touch approval construct the
+              // expectation by hand; only a real page→approve round trip shows it.
+              textHash: hashText(candidate.text),
               assessmentFingerprint,
             }
 

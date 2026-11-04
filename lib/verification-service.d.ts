@@ -33,7 +33,15 @@ export interface VerificationServiceDeps {
     /** The account the owner configured as this platform's posting identity. */
     readonly configuredAccountId: (platform: string) => string | undefined;
     /** The live session's account, read fresh each attempt. */
-    readonly liveAccountId: (platform: string) => Promise<string | undefined>;
+    /**
+     * The account the live session belongs to.
+     *
+     * `threadId` is the thread the owner authorised: the adapter needs *some* page to read
+     * the login banner from, and a deployment with no default probe thread otherwise
+     * answers "unknown" on every verification — refusing correctly, but never allowing one
+     * to succeed either.
+     */
+    readonly liveAccountId: (platform: string, threadId?: string) => Promise<string | undefined>;
     /** Durable records. */
     readonly records: VerificationRecordStore;
     /** ISO clock. */

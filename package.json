@@ -58,7 +58,8 @@
     "verify": "node scripts/verify.mjs",
     "pack": "node scripts/pack.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",
-    "test:count": "node scripts/test-count.mjs"
+    "test:count": "node scripts/test-count.mjs",
+    "test:gui:e2e": "node --experimental-transform-types test/gui/e2e-workbench.ts"
   },
   "engines": {
     "node": ">=22.18.0",

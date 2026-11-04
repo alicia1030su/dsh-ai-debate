@@ -39,12 +39,25 @@ test('楼层页能被真实解析器读出全部楼层', () => {
   }
 })
 
-test('数字 user_id 只进 authorNumericUid，不进 authorId', () => {
+test('楼层页只有登录名，没有数字 id —— 真实页面就是这样', () => {
+  // This asserted `authorNumericUid === '500001'` while the fixture was injecting a
+  // `user_id` into `data-info`. A captured live WAP page (`test/fixtures/wap-page1.html`)
+  // carries `{un, is_annoy, pid, floor_num, name_show}` and no numeric uid at all, so the
+  // assertion was encoding a shape the platform does not produce.
+  //
+  // It mattered beyond fidelity: injecting a uid made one person key as `uid:…` on a
+  // floor and as `handle:…` in a nested reply, and the analyzer then treated the owner
+  // as a stranger in their own thread. The numeric id still exists on the data model —
+  // `totalComment` publishes it — it simply does not come from floor markup.
   const floors = parseWapFloors(wapPageHtml(1))
-  const withUid = floors.find((entry) => entry.floor.postId === '9100000001')!
-  assert.equal(withUid.floor.authorNumericUid, '500001', '数字 id 必须单独保存')
-  assert.equal(withUid.floor.authorId, 'owner_un', 'authorId 必须是登录名')
-  assert.equal(withUid.floor.authorSource, 'wap_floor')
+  const first = floors.find((entry) => entry.floor.postId === '9100000001')!
+  assert.equal(first.floor.authorNumericUid, undefined, '楼层页不提供数字 id')
+  assert.equal(first.floor.authorId, 'owner_un', 'authorId 必须是登录名')
+  assert.equal(first.floor.authorSource, 'wap_floor')
+
+  // And the numeric id does arrive from the surface that actually publishes it.
+  const total = JSON.parse(totalCommentJson()) as { data: Record<string, { user_id: number }> }
+  assert.equal(total.data['9100000001']!.user_id, 500001, 'totalComment 才是数字 id 的来源')
 })
 
 test('两个不同账号共用显示昵称，登录名不同', () => {
@@ -52,8 +65,12 @@ test('两个不同账号共用显示昵称，登录名不同', () => {
   const a = floors.find((entry) => entry.floor.postId === '9100000002')!
   const b = floors.find((entry) => entry.floor.postId === '9100000003')!
   assert.equal(a.floor.authorName, b.floor.authorName, '显示昵称相同')
+  // The handle is what distinguishes them, because it is the only account token the
+  // floor page carries. Asserting a numeric difference would have passed on fixture
+  // data that no real page produces.
   assert.notEqual(a.floor.authorId, b.floor.authorId, '登录名必须不同')
-  assert.notEqual(a.floor.authorNumericUid, b.floor.authorNumericUid, '数字 id 也必须不同')
+  assert.equal(a.floor.authorId, 'twin_a')
+  assert.equal(b.floor.authorId, 'twin_b')
 })
 
 test('楼中楼页能被真实解析器读出，且带父楼层', () => {
