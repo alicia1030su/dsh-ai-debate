@@ -3586,6 +3586,21 @@ window.__ModuleLoader__.load({
       // Offering generation whenever a session exists is deliberate: comparing two drafts means
       // generating twice, and the second generation retires the first approval — documented,
       // safe behaviour, not a reason to hide the button.
+      // ## Generate for the target that is actually selected (v0.2.27)
+      //
+      // The bare 「生成候选」 button used to post only `sessionId`, so the server fell back to
+      // the post that summoned the session. After the owner picked a different comment, the
+      // next generate silently produced a reply for the *old* target — the candidate then
+      // came back carrying a `wrong_target` violation, or worse, was stored against the wrong
+      // post, and the approval and the publish request ended up describing two different
+      // places. 用这条 carries the id; this button must carry it too.
+      //
+      // `wb.target.postId` is the Host's own record of the current selection, so reading it
+      // here cannot invent a target: it is the value the page is displaying one line above.
+      const selectedTargetPostId =
+        wb.target && typeof wb.target.postId === 'string' && wb.target.postId !== ''
+          ? wb.target.postId
+          : undefined
       const canGenerate = view.sessionId !== undefined
       const generateButton = canGenerate
         ? h(
@@ -3594,7 +3609,11 @@ window.__ModuleLoader__.load({
               type: 'button',
               className: 'dsd-btn',
               disabled: busy,
-              onClick: () => store.runWorkbenchAction('generate-candidates', { sessionId: view.sessionId }),
+              onClick: () =>
+                store.runWorkbenchAction('generate-candidates', {
+                  sessionId: view.sessionId,
+                  ...(selectedTargetPostId === undefined ? {} : { targetPostId: selectedTargetPostId }),
+                }),
             },
             busy ? t('workbenchWorking') : t('workbenchGenerate'),
           )

@@ -140,15 +140,40 @@ async function screenshot(name: string): Promise<void> {
   writeFileSync(join(outDir, `${name}.png`), Buffer.from(result.data, 'base64'))
 }
 
-/** Click by real coordinates, after proving the element is visible. */
+/**
+ * Click by real coordinates, after proving the element is visible **and scrollable into view**.
+ *
+ * ## Why the scroll is not optional
+ *
+ * `getBoundingClientRect` returns coordinates relative to the viewport, and
+ * `Input.dispatchMouseEvent` clicks at a point in that viewport. An element below the fold
+ * therefore reports a `y` larger than the window height, and the click lands on nothing —
+ * silently. The button "exists and is enabled" by every DOM measure, the click returns true,
+ * and nothing happens.
+ *
+ * That is exactly how the 「测试模型连接」 stage failed on its first run: the button is near the
+ * bottom of the AI 模型 tab, below the fold at 1600×1100, so the probe was never pressed and
+ * the page was never asked. The same defect would hit any control a future version adds lower
+ * down, so it is fixed here rather than by moving the assertion.
+ *
+ * The element is scrolled to the *centre* rather than "into view": a control flush against the
+ * bottom edge can be covered by a sticky footer, and the click would then land on the footer.
+ */
 async function clickByLabel(label: string): Promise<boolean> {
   const rect = await evaluate<{ x: number; y: number } | null>(`(() => {
     const nodes = [...document.querySelectorAll('button, [role=tab], a')]
     const node = nodes.find((n) => (n.textContent || '').trim() === ${JSON.stringify(label)})
     if (!node) return null
+    const first = node.getBoundingClientRect()
+    if (first.width === 0 || first.height === 0) return null
+    node.scrollIntoView({ block: 'center', inline: 'center' })
     const r = node.getBoundingClientRect()
-    if (r.width === 0 || r.height === 0) return null
-    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+    // After scrolling, the point must actually be inside the viewport; otherwise the click
+    // would be dispatched at coordinates the page cannot receive.
+    const cx = r.x + r.width / 2
+    const cy = r.y + r.height / 2
+    if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return null
+    return { x: Math.round(cx), y: Math.round(cy) }
   })()`)
   if (rect === null) return false
   for (const type of ['mousePressed', 'mouseReleased']) {
@@ -220,7 +245,13 @@ try {
   // Settings → plugin → configure → workbench
   const openedPlugins = await clickByLabel('插件')
   stage('打开插件页', openedPlugins ? 'passed' : 'failed', openedPlugins ? '已点击' : '找不到「插件」')
-  await sleep(2000)
+
+  // The plugin list is populated by an async read, so a fixed wait races it. Poll for the
+  // row instead: on a cold profile the first paint shows the page shell with no rows, and a
+  // 2-second sleep is fine until it is not.
+  await waitFor(async () => {
+    return evaluate<boolean>(`document.querySelector('[aria-label="查看 dsh-ai-debate"]') !== null`)
+  }, 20_000)
 
   const openedDetail = await evaluate<boolean>(`(() => {
     const b = document.querySelector('[aria-label="查看 dsh-ai-debate"]')
@@ -288,6 +319,57 @@ try {
   stage('保存设置', saved ? 'passed' : 'failed', saved ? '已点击保存' : '找不到保存按钮')
   await sleep(3500)
   await screenshot('02b-owner-bound')
+
+  // ## The model connection test, driven through the page (v0.2.27 §七)
+  //
+  // This is the button that answers "is my endpoint actually reachable, and does it speak the
+  // protocol I think it does". Three things must hold: the button exists and is clickable, a
+  // live endpoint reports success *with what it measured*, and a wrong endpoint reports a
+  // failure with an actionable suggestion rather than hanging the page.
+  const modelTab = await clickByLabel('AI 模型')
+  await sleep(1500)
+  // Recorded as a stage rather than a bare `await`: if the tab click misses, every probe
+  // assertion below fails for a reason that has nothing to do with the model endpoint.
+  stage('进入 AI 模型页', modelTab ? 'passed' : 'failed', modelTab ? '已点击页签' : '找不到 AI 模型页签')
+
+  const probeButtonExists = await evaluate<boolean>(`(() => {
+    return [...document.querySelectorAll('button')].some(b => (b.textContent||'').trim() === '测试模型连接' && !b.disabled)
+  })()`)
+  stage(
+    '模型连接测试按钮可用',
+    probeButtonExists ? 'passed' : 'failed',
+    probeButtonExists ? '按钮存在且可点' : '找不到可点的「测试模型连接」',
+  )
+
+  if (probeButtonExists) {
+    const clickedProbe = await clickByLabel('测试模型连接')
+    // Wait for the *result block* the panel renders after a probe — a protocol line — rather
+    // than for any occurrence of 「失败」. The first version matched a bare /失败/, which also
+    // appears in unrelated hint text, so it reported a conclusion that was never produced.
+    const probedOk = await waitFor(async () => {
+      const text = await evaluate<string>(`document.body.innerText`)
+      return /协议：|Protocol:/.test(text)
+    }, 30_000)
+    const probeText = await evaluate<string>(`document.body.innerText`)
+    const claimsOk = /连接正常/.test(probeText)
+    // The detail line must carry the protocol and the latency, not just the word "connected".
+    const hasDetail = /协议：/.test(probeText) && /本次耗时：/.test(probeText)
+    stage(
+      '模型连接测试返回结论',
+      clickedProbe && probedOk ? 'passed' : 'failed',
+      clickedProbe ? (probedOk ? '页面给出了带协议与耗时的结论' : '30 秒内没有结论') : '点击失败',
+    )
+    stage(
+      '连接成功时说明测到了什么',
+      claimsOk && hasDetail ? 'passed' : 'failed',
+      claimsOk
+        ? hasDetail
+          ? '报告了协议与耗时'
+          : '只说「连接正常」，没有协议/耗时信息'
+        : `本地模拟端点应连通，但页面报的是失败：${probeText.split('\n').find((l) => /失败|错误/.test(l)) ?? '（没有失败文案）'}`,
+    )
+    await screenshot('02c-model-probe')
+  }
 
   const workbenchTab = await clickByLabel('工作台')
   await sleep(2600)
@@ -357,7 +439,17 @@ try {
       button.click(); return true
     })()`)
     stage('点击「用这条」', picked ? 'passed' : 'failed', picked ? `已点击第 ${buttonIndex + 1} 条` : '点击失败')
-    await sleep(6000)
+    // ## Wait for the consequence, not for the clock
+    //
+    // Picking a comment re-reads the floor to confirm the target author, so the page can
+    // stay on 「选要反驳的那一条」 for several seconds. A fixed `sleep(6000)` therefore
+    // reported "页面没有目标行" on a run where the pick was in fact being applied — the
+    // assertion was measuring elapsed time, not the product.
+    await waitFor(async () => {
+      const text = await evaluate<string>(`document.body.innerText`)
+      return text.split('\n').some((line) => line.trim().startsWith('目标：'))
+    }, 40_000)
+    await sleep(800)
     await screenshot('05-after-pick')
   } else {
     stage('点击「用这条」', 'skipped', '没有可点的按钮')
@@ -495,16 +587,34 @@ try {
   await sleep(2500)
 
   // ── generate ────────────────────────────────────────────────────────────────
+  //
+  // ## The wait has to be for a *new* candidate, not for "a candidate"
+  //
+  // 「候选」 and a version chip are already on the page when this runs — the previous
+  // candidate is being displayed. A predicate that only looks for those matches on the first
+  // poll, so the run proceeds while generation is still in flight, and the next step (editing
+  // the textarea) lands on the old row. The edit then applies to a candidate that is about to
+  // be superseded, and the approved text and the published text differ.
+  //
+  // So the version number is captured before the click and the wait requires it to change.
+  const versionBefore = await evaluate<string>(`(() => {
+    const m = (document.body.innerText || '').match(/v(\d+)/)
+    return m ? m[1] : ''
+  })()`)
   const genClicked = await clickByLabel('生成候选')
   stage('点击「生成候选」', genClicked ? 'passed' : 'failed', genClicked ? '已点击真实按钮' : '按钮不存在或不可点')
   if (genClicked) {
-    // The model call is local but not instant; wait for the candidate row to appear
-    // rather than for a fixed time, so a slow machine does not fail the run.
     const generated = await waitFor(async () => {
       const text = await evaluate<string>(`document.body.innerText`)
-      return text.includes('候选') && /v\d+/.test(text)
+      const m = text.match(/v(\d+)/)
+      if (!m) return false
+      // A version bump is the only observable proof that a *new* candidate arrived.
+      return versionBefore === '' ? true : m[1] !== versionBefore
     }, 30_000)
-    stage('候选出现在页面上', generated ? 'passed' : 'failed', generated ? '已渲染候选' : '30 秒内没有候选')
+    stage('候选出现在页面上', generated ? 'passed' : 'failed', generated ? '已渲染候选' : '30 秒内没有新候选')
+    // Generation is a network round trip to the model; the version chip can appear before the
+    // row is interactive. Settle briefly so the textarea belongs to the new candidate.
+    await sleep(1200)
     await screenshot('06-generated')
   }
 
@@ -567,30 +677,59 @@ try {
   stage('点击发表', publishClicked ? 'passed' : 'failed', publishClicked ? '已点击真实按钮' : '发表按钮不存在')
   if (publishClicked) {
     if (failMode === '') {
+      // ## The success claim has to be the *confirmed* one
+      //
+      // This used to wait for `已发表|回读` — and the step bar renders 「▶ 回读确认」 from the
+      // first paint, so the predicate matched immediately and the stage passed before the
+      // request had even come back. A run whose read-back reported
+      // 「回读与审核内容不一致：回复的作者是 ai_account，而绑定账号是 600001」 therefore
+      // scored 46/46 while the stored session said the outcome was uncertain.
+      //
+      // The label is the one the client actually renders (`workbenchOutcomeConfirmed`), read
+      // from `client/client.cjs` rather than guessed: an assertion written against a sentence
+      // the product never says fails on a correct run and would tempt someone to loosen it.
+      const CONFIRMED = '回读四项全部确认'
       const published = await waitFor(async () => {
         const text = await evaluate<string>(`document.body.innerText`)
-        return text.includes('已发表') || text.includes('回读')
-      }, 30_000)
-      stage('发表结果显示', published ? 'passed' : 'failed', published ? '页面显示发表/回读结果' : '30 秒内没有结果')
+        return text.includes(CONFIRMED) || /发表结果：(结果不确定|已拒绝|未知)/.test(text)
+      }, 45_000)
+      const publishText = await evaluate<string>(`document.body.innerText`)
+      const confirmed = publishText.includes(CONFIRMED)
+      const outcomeLine = publishText.split('\n').find((l) => l.trim().startsWith('发表结果：')) ?? ''
+      stage(
+        '发表结果显示',
+        published && confirmed ? 'passed' : 'failed',
+        confirmed
+          ? `页面给出「发表结果：${CONFIRMED}」`
+          : published
+            ? `页面没有确认回读：${outcomeLine === '' ? '（没有发表结果行）' : outcomeLine.slice(0, 80)}`
+            : '45 秒内没有结论',
+      )
       await screenshot('09-published')
     } else {
       // Wait for *a* result, which may be a refusal. The assertion is not "it said
-      // something" but "what it said is not success" — a page that reports 已发表 on a
-      // rejected request is the exact dishonesty this whole suite exists to catch.
+      // something" but "what it said is not success" — a page that reports the confirmed
+      // label on a rejected request is the exact dishonesty this whole suite exists to catch.
+      //
+      // The success marker is the client's own `workbenchOutcomeConfirmed`
+      // （回读四项全部确认）. The earlier version tested for 「已发表并回读确认」, a sentence
+      // that exists nowhere in the product: the check could never fire, so this stage passed
+      // no matter what the page said.
       const settled = await waitFor(async () => {
         const text = await evaluate<string>(`document.body.innerText`)
-        return /已发表|失败|拒绝|未确认|出错|无法/.test(text)
-      }, 40_000)
+        return /发表结果：/.test(text) && !/发表结果：还没有发表过/.test(text)
+      }, 45_000)
       const text = await evaluate<string>(`document.body.innerText`)
-      const claimsSuccess = /已发表并回读确认/.test(text)
+      const claimsSuccess = text.includes('回读四项全部确认')
+      const outcomeLine = text.split('\n').find((l) => l.trim().startsWith('发表结果：')) ?? ''
       stage(
         '接口失败时不虚报成功',
         settled && !claimsSuccess ? 'passed' : 'failed',
         claimsSuccess
-          ? '页面声称已发表——接口失败了却报成功'
+          ? '页面声称回读四项全部确认——接口失败了却报成功'
           : settled
-            ? '页面给出的是失败/未确认，不是成功'
-            : '40 秒内没有任何结论',
+            ? `页面给出的是「${outcomeLine.replace('发表结果：', '')}」，不是成功`
+            : '45 秒内没有任何结论',
       )
       await screenshot('09-publish-failed')
     }
@@ -692,7 +831,12 @@ try {
   await dismissOverlays()
 
   const reopenedPlugins = await clickByLabel('插件')
-  if (reopenedPlugins) await sleep(2500)
+  if (reopenedPlugins) {
+    // Same race as the first navigation: wait for the row, not for a fixed delay.
+    await waitFor(async () => {
+      return evaluate<boolean>(`document.querySelector('[aria-label="查看 dsh-ai-debate"]') !== null`)
+    }, 20_000)
+  }
   const reopenedDetail = await evaluate<boolean>(`(() => {
     const b = document.querySelector('[aria-label="查看 dsh-ai-debate"]')
     if (!b) return false
