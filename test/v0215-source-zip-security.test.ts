@@ -231,7 +231,7 @@ test('打包安全：ZIP 里的字节不含假凭据内容，不只是文件名�
   }
 })
 
-test('打包安全：符号链接不被跟随，指向树外的私钥进不来（§一.7）', () => {
+test('打包安全：符号链接不被跟随，指向树外的私钥进不来（§一.7）', (t) => {
   const dir = makeDirtyRepo()
   const outside = mkdtempSync(join(tmpdir(), 'dsh-outside-'))
   const secretPath = join(outside, 'outside-secret.txt')
@@ -253,7 +253,7 @@ test('打包安全：符号链接不被跟随，指向树外的私钥进不来�
     const names = zipEntryNames(zipPath)
     assert.equal(names.includes('src/linked-secret.txt'), false, '符号链接被当成普通文件打包了')
     if (!linked) {
-      console.log('  注意：本环境无法创建符号链接，该用例只验证了不存在路径的情况')
+      t.diagnostic('注意：本环境无法创建符号链接，该用例只验证了不存在路径的情况')
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -303,7 +303,7 @@ test('打包安全：未知文件默认不发布（§一.4）', () => {
   }
 })
 
-test('打包安全：本仓库真实产物不含敏感文件（§一.8）', () => {
+test('打包安全：本仓库真实产物不含敏感文件（§一.8）', (t) => {
   // The regression that matters for the shipped archive, not just for the fixture tree.
   const zipPath = join(REPO, '..', 'dsh-ai-debate-source-0.2.15.zip')
   let names
@@ -311,7 +311,7 @@ test('打包安全：本仓库真实产物不含敏感文件（§一.8）', () =
     names = zipEntryNames(zipPath)
   } catch {
     // Not built yet in this run: skip rather than fail, but say so.
-    console.log('  注意：0.2.15 源码包尚未生成，跳过产物检查')
+    t.diagnostic('注意：0.2.15 源码包尚未生成，跳过产物检查')
     return
   }
   const leaky = names.filter(

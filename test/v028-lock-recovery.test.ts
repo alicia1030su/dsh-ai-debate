@@ -32,7 +32,7 @@ function tempDir(): { dir: string; done: () => void } {
 const statePath = (dir: string): string => join(dir, 'state.json')
 const lockPath = (dir: string): string => join(dir, 'state.json.lock')
 
-test('复现：持有者 PID 存活但时间戳过期，锁不得被回收', async () => {
+test('复现：持有者 PID 存活但时间戳过期，锁不得被回收', async (t) => {
   const { dir, done } = tempDir()
   try {
     const store = new DebateStore({ dir, lockTimeoutMs: 300 })
@@ -62,8 +62,8 @@ test('复现：持有者 PID 存活但时间戳过期，锁不得被回收', asy
       }
     })()
 
-    console.log('  mutate:', threw === undefined ? 'RESOLVED（锁被回收了）' : 'threw ' + threw.code)
-    console.log('  锁文件还在:', stillThere)
+    t.diagnostic('  mutate:' + ' ' + threw === undefined ? 'RESOLVED（锁被回收了）' : 'threw ' + threw.code)
+    t.diagnostic('  锁文件还在:' + ' ' + stillThere)
 
     assert.notEqual(
       threw,
@@ -76,7 +76,7 @@ test('复现：持有者 PID 存活但时间戳过期，锁不得被回收', asy
   }
 })
 
-test('复现：锁被回收后，原持有者释放时会删掉新持有者的锁', async () => {
+test('复现：锁被回收后，原持有者释放时会删掉新持有者的锁', async (t) => {
   const { dir, done } = tempDir()
   try {
     // 这个测试直接针对「没有持有者 Token」这个根因：
@@ -104,8 +104,8 @@ test('复现：锁被回收后，原持有者释放时会删掉新持有者的�
       }
     })()
 
-    console.log('  A 的写入:', threw === undefined ? 'RESOLVED（不该）' : 'threw ' + threw.code)
-    console.log('  B 的锁是否被 A 删掉:', lockStillThere ? '否（正确）' : '是（缺陷）')
+    t.diagnostic('  A 的写入:' + ' ' + threw === undefined ? 'RESOLVED（不该）' : 'threw ' + threw.code)
+    t.diagnostic('  B 的锁是否被 A 删掉:' + ' ' + lockStillThere ? '否（正确）' : '是（缺陷）')
 
     assert.notEqual(threw, undefined, '锁被占用时必须拒绝写入')
     assert.equal(lockStillThere, true, '没有抢到锁的一方绝不能删除持有者的锁文件')

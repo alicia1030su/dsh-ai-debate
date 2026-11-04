@@ -531,6 +531,69 @@ for (const name of ['ci.yml', 'release.yml']) {
   }
 }
 
+// --- 11. A test must not write to stdout ------------------------------------
+//
+// ## What this costs if it is missing
+//
+// `node --test` without an explicit reporter streams results from each test file to the
+// parent *over that file's stdout*, as V8-serialized frames. A frame begins with the
+// two-byte V8 header `ff 0f`, and the parent finds frames by scanning for that pair; it
+// then reads the next four bytes as the payload length and deserializes that many bytes.
+//
+// Plain text between frames is harmless — it is treated as captured stdout and forwarded.
+// The failure is not "some text leaked": it is the case where the runner's own length
+// arithmetic lands on bytes it cannot deserialize:
+//
+//   Unable to deserialize cloned data due to invalid or unsupported version.
+//     at #processRawBuffer (node:internal/test_runner/runner)
+//
+// The test file is then reported `not ok` even though every assertion in it passed, and the
+// summary still counts the individual tests as passed. That is what happened to
+// `test/v028-corrupt-overwrite.test.ts` on the v0.2.26 main build: `1..3`, all three
+// subtests `ok`, and the *file* `not ok` with that error. Reproducible locally by writing
+// `Buffer.from([0xff, 0x0f, 0, 0, 0, 0x10])` to stdout inside a test.
+//
+// So the rule is: a test's own diagnostics go through `t.diagnostic()`, which is part of the
+// protocol. Raw `console.log` in a test body is not. `console.log` inside a string handed to
+// a *child* process is fine — that child's stdout is a pipe the test reads, and never the
+// runner's transport.
+const DRIVER_CONSOLE = /^\s*console\.(log|info|debug|warn)\(/m
+
+function scanTestStdout() {
+  const dir = join(root, 'test')
+  if (!existsSync(dir)) return
+  const offenders = []
+  for (const name of readdirSync(dir)) {
+    if (!name.endsWith('.test.ts')) continue
+    const path = join(dir, name)
+    const lines = readFileSync(path, 'utf8').split('\n')
+    // A `console.log` inside a template literal is a child-process script, not the test's
+    // own output. Tracking backtick parity per line is enough for these files: the scripts
+    // are multi-line templates whose opening and closing backticks are both visible.
+    let inTemplate = false
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      const backticks = (line.match(/`/g) ?? []).length
+      const startedInside = inTemplate
+      if (backticks % 2 === 1) inTemplate = !inTemplate
+      if (startedInside) continue
+      if (DRIVER_CONSOLE.test(line)) {
+        offenders.push(`${relative(root, path)}:${i + 1}`)
+      }
+    }
+  }
+  if (offenders.length === 0) {
+    note('测试文件没有直接写 stdout 的调试输出')
+  } else {
+    fail(
+      `测试体里直接写 stdout 会污染 node --test 的帧协议，CI 会报 ` +
+        `"Unable to deserialize cloned data" 并把整个文件判为失败：${offenders.join('、')}。` +
+        `请改用 t.diagnostic()`,
+    )
+  }
+}
+scanTestStdout()
+
 // --- report ----------------------------------------------------------------
 
 console.log('CI 守卫检查')
