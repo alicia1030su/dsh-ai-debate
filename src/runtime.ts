@@ -1074,16 +1074,41 @@ export async function runGeneration(
     )
   }
 
+  // ## Which post the reply actually lands on (v0.2.25)
+  //
+  // v0.2.24 accepted a `targetPostId`, used it to *analyse* the right opponent, and
+  // then still published to `dispute.opponent.lastPostId` — the opponent's newest
+  // post. Choosing a comment therefore changed who you were arguing with but not
+  // where the reply went, and the page said "用这条". That is a silent target
+  // switch, and it is the bug this block removes.
+  //
+  // The platform supports it: `publishReply` sends `comment_id` for a nested reply
+  // and `reply_id` for a floor, so the adapter can address one specific post rather
+  // than "whatever the author said last".
+  //
+  // When the owner picked a comment, that comment *is* the target. When they did
+  // not, the previous behaviour is preserved exactly: the opponent's latest post.
+  const selected = selectedComment(collected, input.targetPostId)
+  const publishTargetPostId = selected?.postId ?? dispute.opponent?.lastPostId ?? ''
+
   // Resolve and verify the target *before* calling the model, so the text is
   // written against a snapshot that a human will review alongside it.
   const targetExpectation: TargetExpectation = {
     threadId: session.threadId,
-    floorPostId: dispute.floorPostId,
-    targetPostId: dispute.opponent?.lastPostId ?? '',
-    targetKind: dispute.opponent
-      ? postKindOf(collected, dispute.opponent.lastPostId ?? '')
-      : session.targetKind ?? 'nested',
-    ...(dispute.opponent?.userId ? { targetAuthorId: dispute.opponent.userId } : {}),
+    floorPostId: selected?.parentPostId ?? dispute.floorPostId,
+    targetPostId: publishTargetPostId,
+    targetKind: selected
+      ? selected.kind
+      : dispute.opponent
+        ? postKindOf(collected, dispute.opponent.lastPostId ?? '')
+        : session.targetKind ?? 'nested',
+    // The author of the post being answered, not the author of some other post by
+    // the same person. `resolveTarget` checks this against the fresh read.
+    ...(selected?.authorNumericUid !== undefined
+      ? { targetAuthorId: selected.authorNumericUid }
+      : dispute.opponent?.userId
+        ? { targetAuthorId: dispute.opponent.userId }
+        : {}),
   }
 
   if (!targetExpectation.targetPostId) {
@@ -1213,10 +1238,15 @@ export async function runGeneration(
   })
 
   const candidateId = newCandidateId(session.id, session.candidates.length + 1)
-  // The stored target is the opponent's verified last post — not whatever id the
-  // model returned. A model may suggest *who* to answer (and is validated
+  // The stored target is the one the reply will actually land on — not whatever id
+  // the model returned. A model may suggest *who* to answer (and is validated
   // against that), but the id used to place the reply comes from collected data.
-  const verifiedTargetPostId = dispute.opponent?.lastPostId ?? ''
+  //
+  // v0.2.25: this used to be `dispute.opponent.lastPostId` regardless of what the
+  // owner picked, so the gate checked one post while the reply was written against
+  // another. It is now the same value the publish target is built from, which is the
+  // only way "the gate validated this target" can mean anything.
+  const verifiedTargetPostId = publishTargetPostId
   const candidateText = result.draft?.reply ?? ''
 
   // The independent security gate.
@@ -1832,6 +1862,48 @@ export function describeFailure(error: unknown): { message: string; pause: boole
  * Read from the collected thread rather than assumed, because the publisher uses
  * it to decide between posting a new floor and replying inside an existing one.
  */
+/**
+ * Find the comment the owner picked, in the freshly collected thread.
+ *
+ * Returns `undefined` when nothing was picked, so the caller keeps the pre-0.2.25
+ * behaviour (answer the opponent's latest post) rather than guessing.
+ *
+ * The lookup is against the *fresh read*, not the stored list: the stored list is a
+ * picker snapshot from when the session was created, and a post can be deleted
+ * between then and now. If the owner picked something this read no longer contains,
+ * `resolveTarget` gets an empty id and refuses — which is the correct outcome, since
+ * a reply cannot land on a post that is not there.
+ */
+function selectedComment(
+  collected: CollectedThread,
+  postId: string | undefined,
+): { postId: string; kind: 'floor' | 'nested'; parentPostId?: string; authorNumericUid?: string } | undefined {
+  if (postId === undefined || postId === '') return undefined
+  for (const entry of collected.floors) {
+    if (entry.floor.postId === postId) {
+      return {
+        postId,
+        kind: 'floor',
+        ...(entry.floor.authorNumericUid === undefined
+          ? {}
+          : { authorNumericUid: entry.floor.authorNumericUid }),
+      }
+    }
+    for (const reply of entry.nested) {
+      if (reply.postId !== postId) continue
+      return {
+        postId,
+        kind: 'nested',
+        parentPostId: entry.floor.postId,
+        ...(reply.authorNumericUid === undefined
+          ? {}
+          : { authorNumericUid: reply.authorNumericUid }),
+      }
+    }
+  }
+  return undefined
+}
+
 /**
  * The nested-reply count the floors declared, summed.
  *

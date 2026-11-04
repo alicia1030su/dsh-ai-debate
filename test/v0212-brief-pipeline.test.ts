@@ -309,15 +309,30 @@ test('目标：brief 的 targetPostId 由程序决定，模型无法通过 brief
   // asserts the source-level fact that the stored target comes from `dispute`, not from the
   // model's `response_target_id`.
   const runtime = readFileSync(join(SRC, 'runtime.ts'), 'utf8')
+
+  // v0.2.25 changed *which* collected post the target comes from — the owner's pick
+  // rather than always the opponent's latest — but not where it comes from. These
+  // assert the provenance, which is the actual guarantee, instead of one exact
+  // assignment that a legitimate change had to rewrite.
   assert.match(
     runtime,
-    /const verifiedTargetPostId = dispute\.opponent\?\.lastPostId/,
-    '落库的目标必须来自 dispute，而不是模型输出',
+    /const publishTargetPostId = selected\?\.postId \?\? dispute\.opponent\?\.lastPostId/,
+    '落库的目标必须来自读取到的数据（选中的评论或对手发言），而不是模型输出',
+  )
+  assert.match(
+    runtime,
+    /const verifiedTargetPostId = publishTargetPostId/,
+    '安全校验与发表必须用同一个目标，否则「闸门验过了」没有意义',
   )
   assert.match(
     runtime,
     /targetPostId: verifiedTargetPostId/,
     '候选必须带程序核定的目标',
+  )
+  assert.doesNotMatch(
+    runtime,
+    /verifiedTargetPostId = result\./,
+    '目标绝不能取自模型返回值',
   )
 })
 
