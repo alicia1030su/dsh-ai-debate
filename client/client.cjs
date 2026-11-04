@@ -253,6 +253,10 @@ window.__ModuleLoader__.load({
       contextTokens: '自定义 token 预算',
       contextTokensHint: '大于 0 时覆盖上面的档位。',
       testModel: '测试模型连接',
+      modelProbeProtocol: '协议',
+      modelProbeBase: '地址',
+      modelProbeLatency: '本次耗时',
+      modelProbeTokens: '输入 / 输出 token',
       testing: '正在请求模型…',
 
       personaStyle: '默认人格',
@@ -622,6 +626,10 @@ window.__ModuleLoader__.load({
       contextTokens: 'Custom token budget',
       contextTokensHint: 'Above 0 it overrides the preset.',
       testModel: 'Test model connection',
+      modelProbeProtocol: 'Protocol',
+      modelProbeBase: 'Endpoint',
+      modelProbeLatency: 'Latency',
+      modelProbeTokens: 'Input / output tokens',
       testing: 'Calling the model…',
 
       personaStyle: 'Default persona',
@@ -2613,10 +2621,43 @@ window.__ModuleLoader__.load({
           : null,
         probe && probe.state === 'done' && probe.result
           ? h(
-              'p',
-              { className: `dsd-hint${probe.result.ok ? '' : ' dsd-hint-error'}`, role: 'status' },
-              probe.result.message +
-                (probe.result.sample ? `（返回：${probe.result.sample}）` : ''),
+              'div',
+              { className: 'dsd-hint', role: 'status' },
+              h(
+                'p',
+                { className: probe.result.ok ? '' : 'dsd-hint-error', style: { margin: 0 } },
+                probe.result.message +
+                  (probe.result.sample ? `（返回：${probe.result.sample}）` : ''),
+              ),
+              // ## What the probe measured, not only whether it worked (v0.2.27)
+              //
+              // "connected" and "connected to the endpoint you meant, speaking the protocol it
+              // supports, in this much time, for this many tokens" are different statements.
+              // The second is what a person needs when a generation later fails for an
+              // unrelated reason.
+              h(
+                'p',
+                { className: 'dsd-hint', style: { margin: '4px 0 0' } },
+                [
+                  probe.result.protocol ? `${t('modelProbeProtocol')}：${probe.result.protocol}` : '',
+                  probe.result.baseUrl ? `${t('modelProbeBase')}：${probe.result.baseUrl}` : '',
+                  probe.result.latencyMs === undefined ? '' : `${t('modelProbeLatency')}：${probe.result.latencyMs} ms`,
+                  probe.result.inputTokens === undefined && probe.result.outputTokens === undefined
+                    ? ''
+                    : `${t('modelProbeTokens')}：${probe.result.inputTokens ?? 0} / ${probe.result.outputTokens ?? 0}`,
+                ]
+                  .filter((line) => line !== '')
+                  .join('　'),
+              ),
+              probe.result.suggestions && probe.result.suggestions.length > 0
+                ? h(
+                    'ul',
+                    { className: 'dsd-hint', style: { margin: '4px 0 0', paddingLeft: 18 } },
+                    probe.result.suggestions.map((line, index) =>
+                      h('li', { key: index }, line),
+                    ),
+                  )
+                : null,
             )
           : null,
       )
