@@ -3297,12 +3297,15 @@ window.__ModuleLoader__.load({
         h(
           'p',
           null,
-          // Ids are concatenated rather than interpolated into a translated template: a
-          // translation that drops a placeholder would silently hide *which* post the reply
-          // would land on, which is the one fact this line exists to show.
+          // v0.2.26: fill the template. The line used to render the raw
+          // `楼层 {floors} 条 …` placeholder *and* append `(floors=0, …)` beside it,
+          // so a reader saw braces and a duplicate count in the same sentence. Both
+          // halves were visible at once, which is how it survived review.
           `${t('workbenchCounts')}：` +
-            `${t('workbenchCountsLine')} ` +
-            `(floors=${wb.counts?.floors ?? 0}, nested=${wb.counts?.nested ?? 0}, candidates=${wb.counts?.candidates ?? 0})`,
+            t('workbenchCountsLine')
+              .replace('{floors}', String(wb.counts?.floors ?? 0))
+              .replace('{nested}', String(wb.counts?.nested ?? 0))
+              .replace('{candidates}', String(wb.counts?.candidates ?? 0)),
         ),
         // v0.2.24: read quality, stated before anything the reader might act on.
         // A partial read must not look complete, and an absent report must read as

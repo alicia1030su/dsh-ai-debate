@@ -54,6 +54,10 @@ function nested(parts: Partial<NestedReply>): NestedReply {
     platform: 'tieba',
     postId: 'r1',
     parentPostId: '900',
+    // A row that names a source normally also carries the handle that source published;
+    // v0.2.26 requires the identifier before it will call anything `verified`, so the
+    // default reflects a realistic row rather than a source label with nobody behind it.
+    authorId: 'someone_un',
     authorName: '某人',
     content: '回复正文',
     relationUncertain: false,
@@ -122,7 +126,10 @@ test('身份状态区分已核验/未核验/冲突，不用布尔压平', () => 
           nested: [
             nested({ postId: 'ok', authorSource: 'wap_floor' }),
             // No declared source: we know some account string, not its namespace.
-            nested({ postId: 'legacy', authorSource: undefined }),
+            // No source *and* no identifier: `unverified` on both counts. v0.2.26 made
+            // the second check explicit — a source label alone no longer counts as an
+            // identity, which is what let an anonymous row render as 「身份已核验」.
+            nested({ postId: 'legacy', authorSource: undefined, authorId: undefined }),
             nested({ postId: 'clash', authorSource: 'comment_page' }),
           ],
         },
