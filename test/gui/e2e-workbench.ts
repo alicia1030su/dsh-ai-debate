@@ -547,15 +547,53 @@ try {
   }
 
   // ## Publish, through the page, exactly once
+  //
+  // `DSH_E2E_FAIL_MODE` turns this step into the negative case: the simulated platform is
+  // switched to reject (or never answer) before the click, and what is asserted inverts —
+  // the page must *not* claim success, and the count must show the attempt happened without
+  // being retried. The default path is untouched.
+  const failMode = process.env.DSH_E2E_FAIL_MODE ?? ''
+  const controlPath = process.env.DSH_E2E_CONTROL_JSON ?? ''
+  if (failMode !== '') {
+    if (controlPath === '') {
+      stage('设置失败模式', 'failed', 'DSH_E2E_FAIL_MODE 需要 DSH_E2E_CONTROL_JSON 才能生效')
+    } else {
+      writeFileSync(controlPath, JSON.stringify({ publishMode: failMode }), 'utf8')
+      stage('设置失败模式', 'passed', `模拟平台改为 ${failMode}`)
+    }
+  }
+
   const publishClicked = await clickByLabel('发表这一条（只会发一次）')
   stage('点击发表', publishClicked ? 'passed' : 'failed', publishClicked ? '已点击真实按钮' : '发表按钮不存在')
   if (publishClicked) {
-    const published = await waitFor(async () => {
+    if (failMode === '') {
+      const published = await waitFor(async () => {
+        const text = await evaluate<string>(`document.body.innerText`)
+        return text.includes('已发表') || text.includes('回读')
+      }, 30_000)
+      stage('发表结果显示', published ? 'passed' : 'failed', published ? '页面显示发表/回读结果' : '30 秒内没有结果')
+      await screenshot('09-published')
+    } else {
+      // Wait for *a* result, which may be a refusal. The assertion is not "it said
+      // something" but "what it said is not success" — a page that reports 已发表 on a
+      // rejected request is the exact dishonesty this whole suite exists to catch.
+      const settled = await waitFor(async () => {
+        const text = await evaluate<string>(`document.body.innerText`)
+        return /已发表|失败|拒绝|未确认|出错|无法/.test(text)
+      }, 40_000)
       const text = await evaluate<string>(`document.body.innerText`)
-      return text.includes('已发表') || text.includes('回读')
-    }, 30_000)
-    stage('发表结果显示', published ? 'passed' : 'failed', published ? '页面显示发表/回读结果' : '30 秒内没有结果')
-    await screenshot('09-published')
+      const claimsSuccess = /已发表并回读确认/.test(text)
+      stage(
+        '接口失败时不虚报成功',
+        settled && !claimsSuccess ? 'passed' : 'failed',
+        claimsSuccess
+          ? '页面声称已发表——接口失败了却报成功'
+          : settled
+            ? '页面给出的是失败/未确认，不是成功'
+            : '40 秒内没有任何结论',
+      )
+      await screenshot('09-publish-failed')
+    }
   }
 
   // The platform's log is written by a timer in the host process, so "the page said it was
@@ -599,11 +637,25 @@ try {
 
   const allPublished = readPublishes()
   const sent = allPublished.slice(publishBaseline)
-  stage(
-    '工作台让模拟平台收到 1 次发表',
-    sent.length === 1 ? 'passed' : 'failed',
-    `本次工作台发表 ${sent.length} 次（此前已有 ${publishBaseline} 次，来自验收）`,
-  )
+  if (failMode === '') {
+    stage(
+      '工作台让模拟平台收到 1 次发表',
+      sent.length === 1 ? 'passed' : 'failed',
+      `本次工作台发表 ${sent.length} 次（此前已有 ${publishBaseline} 次，来自验收）`,
+    )
+  } else {
+    // In the negative run the request still reaches the platform — that is the point: the
+    // platform *received* it and refused it (or never answered). What must not happen is a
+    // second request, so the count is asserted at exactly one either way.
+    const rejected = (allPublished.slice(publishBaseline) as { outcome?: string }[]).filter(
+      (row) => row.outcome === 'rejected',
+    )
+    stage(
+      '失败模式下平台只收到 1 次尝试',
+      sent.length === 1 ? 'passed' : 'failed',
+      `收到 ${sent.length} 次，其中被平台拒绝 ${rejected.length} 次`,
+    )
+  }
   if (sent.length > 0) {
     const first = sent[0]!
     stage(
@@ -663,19 +715,43 @@ try {
   )
 
   const afterReloadText = await evaluate<string>(`document.body.innerText`)
-  // What "the state came back" looks like on this page: the step strip is past approval, and
-  // the publish step is shown as done rather than offered again. Asserting on a specific
-  // sentence was wrong the first time — the page says 「当前步骤：回读确认」, not 「已发表」,
-  // and the underlying fact (the authorisation is spent) is what needs checking.
-  const reachedReadback = afterReloadText.includes('回读确认')
-  const approvalTick = /人工批准/.test(afterReloadText)
-  stage(
-    '刷新后工作台恢复到最后一步',
-    reachedReadback && approvalTick ? 'passed' : 'failed',
-    reachedReadback && approvalTick
-      ? '步骤停在「回读确认」，且人工批准仍是已完成'
-      : `没有恢复：回读确认=${reachedReadback} 人工批准=${approvalTick}`,
-  )
+  if (failMode === '') {
+    // What "the state came back" looks like on this page: the step strip is past approval, and
+    // the publish step is shown as done rather than offered again. Asserting on a specific
+    // sentence was wrong the first time — the page says 「当前步骤：回读确认」, not 「已发表」,
+    // and the underlying fact (the authorisation is spent) is what needs checking.
+    const reachedReadback = afterReloadText.includes('回读确认')
+    const approvalTick = /人工批准/.test(afterReloadText)
+    stage(
+      '刷新后工作台恢复到最后一步',
+      reachedReadback && approvalTick ? 'passed' : 'failed',
+      reachedReadback && approvalTick
+        ? '步骤停在「回读确认」，且人工批准仍是已完成'
+        : `没有恢复：回读确认=${reachedReadback} 人工批准=${approvalTick}`,
+    )
+  } else {
+    // ## What a rejected publish must look like
+    //
+    // A 500 is *not* "nothing happened" — the platform received the request and the plugin
+    // cannot tell whether it acted on it. So the correct page state is 「结果不确定，去原帖
+    // 核实，不要重发」, which the step strip shows as 「回读确认」: the next action really is
+    // to go and look. Asserting "it must not advance" would have demanded the *wrong*
+    // behaviour and would have pushed towards treating an unknown outcome as a clean failure
+    // — the exact mistake that gets a reply posted twice.
+    //
+    // What must hold: the page says the outcome is unconfirmed, and it does not claim success.
+    const saysUncertain = /结果不确定|未确认|需要回帖页核实/.test(afterReloadText)
+    const claimsPublished = /已发表并回读确认/.test(afterReloadText)
+    stage(
+      '失败后页面说的是「结果不确定」，不是成功',
+      saysUncertain && !claimsPublished ? 'passed' : 'failed',
+      claimsPublished
+        ? '页面声称已发表并回读确认'
+        : saysUncertain
+          ? '页面明确说明结果不确定，要求回帖核实'
+          : '页面既没说不确定，也没说成功——读者无从判断',
+    )
+  }
   await screenshot('10-after-reload')
 
   // The spend itself is a fact about storage, so it is read from storage rather than inferred
@@ -688,11 +764,21 @@ try {
     }
     const approvals = Array.isArray(state.approvals) ? state.approvals : []
     const consumed = approvals.filter((row) => typeof row.consumedAt === 'string' && row.consumedAt !== '')
-    stage(
-      '存储里恰好有一份已消费的授权',
-      approvals.length === 1 && consumed.length === 1 ? 'passed' : 'failed',
-      `授权 ${approvals.length} 份，已消费 ${consumed.length} 份`,
-    )
+    if (failMode === '') {
+      stage(
+        '存储里恰好有一份已消费的授权',
+        approvals.length === 1 && consumed.length === 1 ? 'passed' : 'failed',
+        `授权 ${approvals.length} 份，已消费 ${consumed.length} 份`,
+      )
+    } else {
+      // A refused request still spends the authorisation: the plugin cannot know whether the
+      // platform acted on it. What matters is that it is not left reusable.
+      stage(
+        '失败后授权不会被悄悄退回',
+        approvals.length === 1 ? 'passed' : 'failed',
+        `授权 ${approvals.length} 份，已消费 ${consumed.length} 份`,
+      )
+    }
     const verified = Array.isArray(state.verification) ? state.verification : []
     const succeeded = verified.filter((row) => row.outcome === 'succeeded')
     stage(

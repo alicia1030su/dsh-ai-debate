@@ -82,14 +82,39 @@ function configuredAccountOf(
  * publish, and a page showing a value computed at a different moment could differ from the
  * answer the publish gets.
  */
-function capabilityFor(runtime: Runtime, platform: string): { declared: string; effective: string; reason: string } {
+/**
+ * Which capability a publish of this session would need.
+ *
+ * Mirrors `capabilityForSession` in `publisher.ts` — the function the publish path itself
+ * uses — rather than assuming `comment.publish`. The two must agree or the page describes a
+ * different gate from the one that will actually run: v0.2.26 shipped with this hard-wired to
+ * `comment.publish` while the publish path read the candidate's snapshot, so a nested reply
+ * was described as a new comment, its capability row said `unverified` for the wrong name,
+ * and the verification the owner had just completed for `comment.reply` appeared not to count.
+ */
+function capabilityNameForSession(
+  session: { readonly targetKind?: string } | undefined,
+  candidate: { readonly targetSnapshot?: { readonly targetKind?: string } } | undefined,
+): 'comment.publish' | 'comment.reply' {
+  // The candidate wins, because that is the value the publish path reads: a reply written
+  // against a picked comment carries `nested` in its snapshot even when the session was
+  // originally summoned by a floor post.
+  const kind = candidate?.targetSnapshot?.targetKind ?? session?.targetKind ?? 'nested'
+  return kind === 'nested' ? 'comment.reply' : 'comment.publish'
+}
+
+function capabilityFor(
+  runtime: Runtime,
+  platform: string,
+  name: 'comment.publish' | 'comment.reply' = 'comment.publish',
+): { declared: string; effective: string; reason: string } {
   const matrix = runtime.platforms?.capabilitiesOf(platform)
-  const declared = matrix === undefined ? 'unavailable' : stateOf(matrix, 'comment.publish').state
+  const declared = matrix === undefined ? 'unavailable' : stateOf(matrix, name).state
   if (declared === 'unavailable' || declared === 'permission_required' || declared === 'supported') {
     return {
       declared,
       effective: declared,
-      reason: matrix === undefined ? `${platform} 没有声明任何能力` : stateOf(matrix, 'comment.publish').reason,
+      reason: matrix === undefined ? `${platform} 没有声明任何能力` : stateOf(matrix, name).reason,
     }
   }
   const accountId = configuredAccountOf(runtime.config(), platform) ?? ''
@@ -122,7 +147,7 @@ function capabilityFor(runtime: Runtime, platform: string): { declared: string; 
     }))
   const decision = effectiveCapability(
     declared,
-    { platform, capability: 'comment.publish', accountId, adapterVersion },
+    { platform, capability: name, accountId, adapterVersion },
     records,
   )
   return { declared, effective: decision.effective, reason: decision.reason }
@@ -1696,7 +1721,7 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
       const derived = deriveWorkbenchState({
         session,
         approvalApplies: freshness.applies,
-        capability: capabilityFor(runtimeView, platform),
+        capability: capabilityFor(runtimeView, platform, capabilityNameForSession(session, candidate)),
         ...(lastAttempt === undefined ? {} : { lastAttempt }),
         // The counts came from nowhere before v0.2.26: `floorCount` / `nestedCount` were
         // never passed by any production caller, so the page rendered 「楼层 0 条 ·

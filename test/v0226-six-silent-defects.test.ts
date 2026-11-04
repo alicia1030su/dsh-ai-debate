@@ -340,3 +340,60 @@ test('缺陷 3：模型输出不符合契约时，必须报错且不写候选，
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ── The page described a different publish than the one it performed ─────────
+//
+// Found while checking the failure path: the workbench read `session.targetKind` (how the
+// session was summoned — a floor post) while the publish path read the candidate's snapshot
+// (the comment the owner picked). So a nested reply was displayed as `kind=floor`, and the
+// capability row said `comment.publish` — which made the `comment.reply` verification the
+// owner had just completed look like it did not count. The page and the network disagreed
+// about what was being sent, and the page was the one that was wrong.
+
+test('目标形态必须按候选快照显示，而不是按会话被召唤时的形态', () => {
+  const state = deriveWorkbenchState({
+    session: session({
+      // Summoned by a floor post, so the session says `floor`…
+      targetKind: 'floor',
+      candidates: [
+        candidate({
+          targetPostId: 'p-2',
+          // …but the owner picked a nested comment, and that is what the publish path reads.
+          targetSnapshot: {
+            platform: 'tieba',
+            threadId: 't1',
+            floorPostId: 'p-1',
+            floorNumber: 1,
+            targetPostId: 'p-2',
+            targetKind: 'nested',
+            targetAuthorId: 'opp-1',
+            targetAuthorName: '对手B',
+            contentHash: 'h',
+            capturedAt: NOW,
+          } as never,
+        }),
+      ],
+    }),
+    approvalApplies: true,
+  })
+
+  assert.equal(
+    state.target?.kind,
+    'nested',
+    '候选快照说是楼中楼，页面就必须显示楼中楼——否则页面描述的发表和真正发出去的不是同一件事',
+  )
+  assert.equal(state.target?.postId, 'p-2', '目标 id 也要来自候选，不是会话的触发帖')
+})
+
+test('没有快照的旧候选回退到会话形态，不凭空断言', () => {
+  // Candidates written before snapshots existed have nothing better to offer. Falling back
+  // to the session is honest; guessing `nested` would be inventing a fact.
+  const state = deriveWorkbenchState({
+    session: session({
+      targetKind: 'floor',
+      candidates: [candidate({ targetSnapshot: undefined })],
+    }),
+    approvalApplies: true,
+  })
+  assert.equal(state.target?.kind, 'floor', '没有快照时用会话形态，这是唯一有的信息')
+})
