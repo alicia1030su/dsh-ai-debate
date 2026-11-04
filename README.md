@@ -148,22 +148,22 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.24
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.25
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.24) 下载
-`dsh-ai-debate-0.2.24.tgz`，或在仓库根目录自行构建：
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.25) 下载
+`dsh-ai-debate-0.2.25.tgz`，或在仓库根目录自行构建：
 
 ```bash
 node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.24.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.25.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.24.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.25.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
 Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
@@ -472,10 +472,13 @@ debate_publish_reply({
 3. 点某条评论的「用这条」即选定回复对象，再点生成候选。
 4. 生成后可以编辑正文，然后到「发表授权」里逐条批准；批准之后才能发表。
 
-**重要（别被界面误导）**：选中一条评论，选定的是**反驳谁**——也就是分析要以谁为
-对手。真正落点仍是该对手**最新的那条发言**，因为发表前的安全校验会重新读取平台
-并核对该发言的作者。这不是偷懒，是防止「回复正文说的是 A、实际发给了 B」的那道
-检查；本版没有为了提高「点哪发哪」的直觉而削弱它。
+**v0.2.25 修正**：选中哪条评论，回复就发到**那条评论**。v0.2.24 虽然让你选，实际
+仍发到该对手最新的发言——界面写「用这条」，落点却不是你点的那条。这是静默换目标，
+本版已修：选楼中楼就发到该楼中楼（`comment_id`），选楼层就发到该楼层（`reply_id`），
+父楼层跟着选中的评论走。
+
+发表前仍会重新读取该目标、核对作者身份；目标不存在或作者变了就拒绝发表。
+没有选中任何评论时，行为与以前一致：回复对手最新的一条发言。
 
 换一条评论、重新生成、或编辑正文，都会让原来的批准失效——批准绑定的是
 「正文 + 候选版本 + 目标位置」三者，任何一个变了就不再适用。
