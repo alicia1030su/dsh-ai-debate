@@ -16,6 +16,7 @@
 import { readFileSync } from 'node:fs'
 
 import { PERSONAS, PERSONA_STYLES, buildPersonaPrompt, resolvePersona } from './persona.js'
+import { chooseStoreDir, dshHomeDir } from './store-dir.js'
 import type { ResolvedConfig } from './config.js'
 import type { Diagnostics, LoginProbe, ModelProbe, PersonaPreview } from './settings-routes.js'
 import type { Runtime } from './runtime.js'
@@ -225,9 +226,16 @@ export async function collectDiagnostics(
     .reverse()
     .map((row) => ({ at: row.at, message: String(row.error).slice(0, 300) }))
 
+  // Recomputed rather than stored on the runtime: `chooseStoreDir` is pure, and a
+  // second source of truth for "where did this path come from" is exactly how the
+  // v0.2.23 page ended up showing a plausible path with no provenance.
+  const chosenDir = chooseStoreDir({ configured: config.storeDir })
+
   return {
     enabled: config.enabled,
     storePath: runtime.store.path,
+    storeDirSource: chosenDir.source,
+    ...(dshHomeDir() === undefined ? {} : { dshHome: dshHomeDir() as string }),
     sessions: {
       total: data.sessions.length,
       // "active" means work is still possible from this state, which is exactly

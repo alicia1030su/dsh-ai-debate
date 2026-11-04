@@ -14,10 +14,6 @@
  *    state is already committed per mutation, so there is nothing to flush.
  */
 
-import { mkdirSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-
 import { Config, DEFAULT_CONFIG, resolveConfig } from './config.js'
 import { loggerOf, type PluginContext } from './host.js'
 import { DebateStore } from './store.js'
@@ -39,6 +35,7 @@ import {
   type Runtime,
 } from './runtime.js'
 import { buildTools } from './tools.js'
+import { resolveStoreDirStrict } from './store-dir.js'
 import { PlatformRegistry } from './platforms/registry.js'
 import { tiebaProvider } from './platforms/tieba/provider.js'
 import { weiboProvider } from './platforms/weibo/provider.js'
@@ -266,11 +263,22 @@ export const DEBATE_GUIDANCE =
   '主人同意后才调用 debate_publish_reply 并传 confirm=true。\n' +
   '注意：发表是真实写操作，必须由主人明确同意；贴吧的艾特通知读取不可用，请让主人提供帖子链接手动召唤。'
 
-/** Resolve the state directory from config, creating it. */
-export function resolveStoreDir(config: ReturnType<typeof resolveConfig>): string {
-  const dir = config.storeDir || join(homedir(), '.dsh', 'ai-debate')
-  mkdirSync(dir, { recursive: true })
-  return dir
+/**
+ * Resolve the state directory from config, creating it.
+ *
+ * Delegates to {@link resolveStoreDirStrict}, which prefers an explicit `storeDir`,
+ * then a host-provided directory, then `DSH_HOME`, then the historical default. The
+ * v0.2.23 code used `homedir()` unconditionally, so an isolated `DSH_HOME` still wrote
+ * into the real `~/.dsh` — the bug this indirection removes.
+ *
+ * `get` is the plugin context's service lookup, passed in so the host-probe can run
+ * without this function depending on the whole context.
+ */
+export function resolveStoreDir(
+  config: ReturnType<typeof resolveConfig>,
+  get?: ((name: string) => unknown) | undefined,
+): string {
+  return resolveStoreDirStrict({ configured: config.storeDir, get }).dir
 }
 
 /**

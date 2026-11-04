@@ -764,6 +764,17 @@ export interface PersonaPreview {
 export interface Diagnostics {
   readonly enabled: boolean
   readonly storePath: string
+  /**
+   * How `storePath` was chosen (v0.2.24).
+   *
+   * `configured` > `host` > `dsh_home` > `default`, in that order. Surfaced because
+   * the v0.2.23 bug was invisible: the page showed a path, the path looked plausible,
+   * and nothing said it had been resolved from the OS home rather than from the
+   * instance the user was running.
+   */
+  readonly storeDirSource?: 'configured' | 'host' | 'dsh_home' | 'default'
+  /** `DSH_HOME` as the plugin saw it, echoed for the same reason. */
+  readonly dshHome?: string
   readonly sessions: { total: number; active: number; awaitingConfirmation: number; published: number }
   readonly publishLedger: {
     total: number
