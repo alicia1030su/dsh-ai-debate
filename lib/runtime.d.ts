@@ -287,6 +287,18 @@ export declare function runGeneration(runtime: Runtime, input: {
     sessionId: string;
     persona?: Partial<PersonaConfig>;
     ownerInstruction?: string;
+    /**
+     * The comment to answer, when the owner picked one in the workbench (v0.2.24).
+     *
+     * Without this the target is fixed to `session.triggerPostId`, which is whatever
+     * summoned the analysis — so "answer this other comment" was not expressible from
+     * the page at all, and the operator had to reach for a tool argument.
+     *
+     * Validated against the stored comment list: an id the session never read is
+     * refused rather than trusted, because a target the collector never saw cannot
+     * have an identity check behind it.
+     */
+    targetPostId?: string;
     signal?: AbortSignal;
     progress?: Progress;
 }): Promise<GenerateOutput>;

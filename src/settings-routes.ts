@@ -287,6 +287,8 @@ export interface SettingsRouteDeps {
     readonly sessionId: string
     readonly style?: string
     readonly ownerInstruction?: string
+    /** The comment to answer, chosen in the workbench (v0.2.24). */
+    readonly targetPostId?: string
   }): Promise<{ readonly ok: boolean; readonly message?: string; readonly candidates?: number }>
   /**
    * Publish one approved candidate (v0.2.22 §四/§五).
@@ -1515,6 +1517,11 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
         sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
         ...(typeof body.style === 'string' && body.style !== '' ? { style: body.style } : {}),
         ...(typeof body.ownerInstruction === 'string' ? { ownerInstruction: body.ownerInstruction } : {}),
+        // v0.2.24: the comment picked in the workbench. Absent keeps the old
+        // behaviour of answering whatever summoned the session.
+        ...(typeof body.targetPostId === 'string' && body.targetPostId !== ''
+          ? { targetPostId: body.targetPostId }
+          : {}),
       })
       writeJson(response, 200, outcome)
       return

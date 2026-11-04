@@ -238,6 +238,8 @@ export interface SettingsRouteDeps {
         readonly sessionId: string;
         readonly style?: string;
         readonly ownerInstruction?: string;
+        /** The comment to answer, chosen in the workbench (v0.2.24). */
+        readonly targetPostId?: string;
     }): Promise<{
         readonly ok: boolean;
         readonly message?: string;

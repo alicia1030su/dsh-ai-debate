@@ -36,6 +36,7 @@ import {
 } from './runtime.js'
 import { buildTools } from './tools.js'
 import { resolveStoreDirStrict } from './store-dir.js'
+import { MAX_STORED_COMMENTS } from './store.js'
 import { PlatformRegistry } from './platforms/registry.js'
 import { tiebaProvider } from './platforms/tieba/provider.js'
 import { weiboProvider } from './platforms/weibo/provider.js'
@@ -1548,6 +1549,9 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           sessionId: input.sessionId,
           ...(input.style === undefined ? {} : { persona: { style: input.style as never } }),
           ...(input.ownerInstruction === undefined ? {} : { ownerInstruction: input.ownerInstruction }),
+          // The owner's pick from the workbench. Omitting it keeps the pre-0.2.24
+          // behaviour of answering whoever summoned the session.
+          ...(input.targetPostId === undefined ? {} : { targetPostId: input.targetPostId }),
         })
         // One call produces one candidate, deliberately: comparing two drafts means generating
         // twice, and each generation bumps the version — which retires any approval of the
@@ -1647,6 +1651,29 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
         approvalApplies: freshness.applies,
         capability: capabilityFor(runtimeView, platform),
         ...(lastAttempt === undefined ? {} : { lastAttempt }),
+        // v0.2.24: the read-quality facts recorded with this session, plus whether the
+        // owner's own identity still needs re-checking before anything is sent.
+        ...(session.readQuality === undefined
+          ? {}
+          : {
+              readQuality: {
+                floorsRead: session.readQuality.floorsRead,
+                ...(session.readQuality.floorsDeclared === undefined
+                  ? {}
+                  : { floorsDeclared: session.readQuality.floorsDeclared }),
+                nestedRead: session.readQuality.nestedRead,
+                ...(session.readQuality.nestedDeclared === undefined
+                  ? {}
+                  : { nestedDeclared: session.readQuality.nestedDeclared }),
+                truncated: session.readQuality.truncated,
+                reasons: session.readQuality.reasons,
+                observationOverflow: session.readQuality.observationOverflow,
+                ownerNeedsRecheck: session.ownerIdentityAssurance !== 'verified',
+              },
+            }),
+        ...(session.comments === undefined
+          ? {}
+          : { commentsCapped: session.comments.length >= MAX_STORED_COMMENTS }),
       })
 
       // The approval snapshot the page must echo back (v0.2.22 §四).

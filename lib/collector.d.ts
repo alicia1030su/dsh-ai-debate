@@ -148,6 +148,10 @@ export interface CollectedThread {
     readonly identityConflicts?: readonly IdentityConflictReport[];
     /** Non-fatal problems, phrased for a human. */
     readonly issues: readonly string[];
+    /** Floors the platform declared for the whole thread, when it said (v0.2.24). */
+    readonly declaredTotal?: number;
+    /** Floor pages actually fetched (v0.2.24). */
+    readonly pagesRead?: number;
 }
 /** A floor plus whatever nested replies were collected under it. */
 export interface FloorWithNested {
