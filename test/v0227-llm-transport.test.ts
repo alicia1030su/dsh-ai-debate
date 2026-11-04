@@ -32,7 +32,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { LlmError, OpenAiCompatibleClient } from '../lib/llm.js'
+import { LlmError, OpenAiCompatibleClient, type OpenAiClientOptions } from '../lib/llm.js'
 
 /** A fetch double: a queue of replies, and a count of how many were requested. */
 function scriptedFetch(
@@ -62,7 +62,7 @@ function scriptedFetch(
 
 function client(
   fetchImpl: typeof fetch,
-  extra: Partial<Parameters<typeof OpenAiCompatibleClient.prototype.constructor>[0]> = {},
+  extra: Partial<OpenAiClientOptions> = {},
 ): OpenAiCompatibleClient {
   return new OpenAiCompatibleClient({
     baseUrl: 'http://127.0.0.1:9/v1',
@@ -74,7 +74,7 @@ function client(
     maxRetries: 0,
     retryDelayMs: 1,
     ...extra,
-  } as never)
+  })
 }
 
 const okBody = (content: string, finishReason = 'stop'): string =>
@@ -227,7 +227,7 @@ test('重试会调用 onRetry，让日志能记录分类而不是只看到次数
   const { fetchImpl } = scriptedFetch([{ status: 429, body: '' }, { body: okBody('ok') }])
   await client(fetchImpl, {
     maxRetries: 1,
-    onRetry: (info) => seen.push({ attempt: info.attempt, code: info.code }),
+    onRetry: (info: { attempt: number; code: string }) => seen.push({ attempt: info.attempt, code: info.code }),
   }).complete({ messages: [{ role: 'user', content: 'x' }] })
   assert.deepEqual(seen, [{ attempt: 1, code: 'rate_limited' }])
 })
