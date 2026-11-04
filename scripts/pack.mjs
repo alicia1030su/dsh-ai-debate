@@ -163,8 +163,40 @@ process.stdout.write(`\n\x1b[36m▶ 生成 ${tarballName}\x1b[0m\n`)
 // npm tarballs put every file under a single top-level `package/` directory;
 // `npm install ./x.tgz` and the DSH plugin manager both expect that layout.
 const archivePath = (path) => `package/${path}`
+/**
+ * Normalise line endings before archiving.
+ *
+ * `.gitattributes` already says `* text=auto eol=lf`, so a fresh clone is LF
+ * everywhere. But the packer reads the *working tree*, and the working tree is
+ * whatever the last writer left there: an editor, a `git checkout` under a different
+ * `core.autocrlf`, or a tool that wrote a file with `\n`. v0.2.23 shipped exactly that
+ * — the Windows TGZ differed from the CI TGZ in `CHANGELOG.md` alone, 4317 CRLF pairs
+ * versus none, with identical content otherwise.
+ *
+ * Normalising here makes the archive a function of the committed content rather than
+ * of the machine that produced it. It also means the digest is comparable across
+ * platforms, which is what lets a release claim be checked.
+ *
+ * Only files the manifest lists as text are touched; binaries keep their exact bytes.
+ */
+const TEXT_EXTENSIONS = new Set([
+  '.ts', '.js', '.mjs', '.cjs', '.json', '.md', '.txt', '.yml', '.yaml', '.html', '.css', '.svg',
+])
+function normaliseLineEndings(path, data) {
+  const dot = path.lastIndexOf('.')
+  const ext = dot === -1 ? '' : path.slice(dot).toLowerCase()
+  if (!TEXT_EXTENSIONS.has(ext)) return data
+  // CRLF → LF, and a lone CR → LF. Doing both means a file that was never touched by
+  // Git still archives identically.
+  const text = data.toString('utf8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  return Buffer.from(text, 'utf8')
+}
+
 const tgz = createTgz(
-  paths.map((path) => ({ path: archivePath(path), data: readFileSync(join(root, path)) })),
+  paths.map((path) => ({
+    path: archivePath(path),
+    data: normaliseLineEndings(path, readFileSync(join(root, path))),
+  })),
 )
 writeFileSync(join(root, tarballName), tgz)
 const digest = createHash('sha256').update(tgz).digest('hex')

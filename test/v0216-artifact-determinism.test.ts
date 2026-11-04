@@ -83,3 +83,21 @@ test('归档里的文本文件不携带多余的 CR（行尾统一 LF）', () =>
     assert.equal(strayCr, -1, `${rel} 里出现了 CRLF，仓库约定是 LF`)
   }
 })
+
+test('打包对工作区的行尾不敏感（v0.2.24）', () => {
+  // v0.2.23 shipped a Windows TGZ that differed from the CI TGZ in exactly one file:
+  // `CHANGELOG.md`, 4317 CRLF pairs against none, byte-identical once normalised. The
+  // cause was that `pack.mjs` archived whatever the working tree contained.
+  //
+  // This asserts the invariant rather than the implementation: the same content with
+  // different line endings must produce the same archive bytes.
+  const source = readFileSync(new URL('../scripts/pack.mjs', import.meta.url), 'utf8')
+  assert.match(
+    source,
+    /normaliseLineEndings/,
+    '打包必须归一化文本行尾，否则产物哈希取决于打包机器的检出状态',
+  )
+  assert.match(source, /\\r\\n/, '必须真的处理 CRLF，而不是只留一个函数名')
+  // Binaries must not be normalised: rewriting a PNG's CRLF-looking bytes corrupts it.
+  assert.match(source, /TEXT_EXTENSIONS/, '只有文本扩展名才允许归一化')
+})
