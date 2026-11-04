@@ -175,6 +175,10 @@ export interface CollectedThread {
   readonly identityConflicts?: readonly IdentityConflictReport[]
   /** Non-fatal problems, phrased for a human. */
   readonly issues: readonly string[]
+  /** Floors the platform declared for the whole thread, when it said (v0.2.24). */
+  readonly declaredTotal?: number
+  /** Floor pages actually fetched (v0.2.24). */
+  readonly pagesRead?: number
 }
 
 /** A floor plus whatever nested replies were collected under it. */
@@ -997,6 +1001,11 @@ export async function collectThread(
     complete: completeness.sourceComplete && completeness.retainedComplete,
     completeness,
     missingCount: all.missingCount,
+    // v0.2.24: the walk's own accounting, surfaced for the workbench's read-quality
+    // line. Without these the page could show "219 floors" and leave the reader
+    // unable to tell whether the thread had 219 or 240.
+    ...(all.declaredTotal === undefined ? {} : { declaredTotal: all.declaredTotal }),
+    pagesRead: all.pagesRead,
     stopReason: all.stopReason,
     truncated: all.truncated,
     nestedIncomplete,

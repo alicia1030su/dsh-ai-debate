@@ -309,6 +309,33 @@ window.__ModuleLoader__.load({
       workbenchMissing: '缺失证据',
       workbenchCounts: '已读取',
       workbenchCountsLine: '楼层 {floors} 条 · 楼中楼 {nested} 条 · 候选 {candidates} 条',
+      // v0.2.24: the comment list, so choosing a target no longer needs a postId.
+      workbenchComments: '评论列表',
+      workbenchCommentsHint: '选中一条评论作为回复对象；换一条会让原来的批准失效。',
+      workbenchCommentsEmpty: '这次读取没有产生可选择的评论。',
+      workbenchCommentsAbsent: '这个会话早于 v0.2.24，没有保存评论列表。请重新读取帖子后再选。',
+      workbenchCommentsCapped: '评论太多，只列出了前 {shown} 条（共 {total} 条）。',
+      workbenchCommentsPick: '用这条',
+      workbenchCommentsPicked: '已选为目标',
+      workbenchCommentFloor: '第 {floor} 楼',
+      workbenchCommentNested: '楼中楼',
+      workbenchCommentUnder: '属于 {parent}',
+      workbenchCommentTruncated: '正文过长，已截断',
+      workbenchIdentityVerified: '身份已核验',
+      workbenchIdentityUnverified: '身份未核验',
+      workbenchIdentityConflicted: '来源冲突',
+      // v0.2.24: read quality, so a partial read cannot look complete.
+      workbenchReadQuality: '读取完整度',
+      workbenchReadFloors: '楼层 {read} 条',
+      workbenchReadFloorsDeclared: '（平台声明 {declared} 条）',
+      workbenchReadNested: '楼中楼 {read} 条',
+      workbenchReadNestedDeclared: '（声明 {declared} 条）',
+      workbenchReadTruncated: '读取被中断，内容不完整',
+      workbenchReadComplete: '没有发现中断迹象',
+      workbenchReadReasons: '中断原因：{reasons}',
+      workbenchReadOverflow: '有评论的观测数量超过上限（{posts}），已标注 overflow。',
+      workbenchReadOwnerRecheck: '主人身份需要重新核验后才能发表。',
+      workbenchReadUnknown: '没有读到完整度信息，无法判断是否完整。',
       workbenchTarget: '目标',
       workbenchTargetLine: '帖子 {thread} · 回复 {post} · 形式 {kind}',
       workbenchTargetFloor: '楼层',
@@ -641,6 +668,31 @@ window.__ModuleLoader__.load({
       workbenchMissing: 'Missing evidence',
       workbenchCounts: 'Read',
       workbenchCountsLine: '{floors} floors · {nested} nested replies · {candidates} candidates',
+      workbenchComments: 'Comments',
+      workbenchCommentsHint: 'Pick one comment to answer. Picking a different one retires the previous approval.',
+      workbenchCommentsEmpty: 'This read produced no selectable comments.',
+      workbenchCommentsAbsent: 'This session predates v0.2.24 and has no stored comment list. Re-read the thread to choose one.',
+      workbenchCommentsCapped: 'Too many comments: showing the first {shown} of {total}.',
+      workbenchCommentsPick: 'Answer this one',
+      workbenchCommentsPicked: 'Selected as target',
+      workbenchCommentFloor: 'Floor {floor}',
+      workbenchCommentNested: 'Nested reply',
+      workbenchCommentUnder: 'under {parent}',
+      workbenchCommentTruncated: 'Body truncated',
+      workbenchIdentityVerified: 'identity verified',
+      workbenchIdentityUnverified: 'identity unverified',
+      workbenchIdentityConflicted: 'sources disagree',
+      workbenchReadQuality: 'Read quality',
+      workbenchReadFloors: '{read} floors',
+      workbenchReadFloorsDeclared: '(platform declared {declared})',
+      workbenchReadNested: '{read} nested replies',
+      workbenchReadNestedDeclared: '(declared {declared})',
+      workbenchReadTruncated: 'The read was interrupted; the content is incomplete',
+      workbenchReadComplete: 'No sign of interruption',
+      workbenchReadReasons: 'Interrupted by: {reasons}',
+      workbenchReadOverflow: 'Some comments exceeded the observation cap ({posts}); flagged as overflow.',
+      workbenchReadOwnerRecheck: "The owner's identity must be re-checked before publishing.",
+      workbenchReadUnknown: 'No read-quality information; whether this is complete is unknown.',
       workbenchTarget: 'Target',
       workbenchTargetLine: 'thread {thread} · reply {post} · {kind}',
       workbenchTargetFloor: 'floor',
@@ -3227,6 +3279,97 @@ window.__ModuleLoader__.load({
             `${t('workbenchCountsLine')} ` +
             `(floors=${wb.counts?.floors ?? 0}, nested=${wb.counts?.nested ?? 0}, candidates=${wb.counts?.candidates ?? 0})`,
         ),
+        // v0.2.24: read quality, stated before anything the reader might act on.
+        // A partial read must not look complete, and an absent report must read as
+        // "unknown" rather than as "fine".
+        h('p', null, `${t('workbenchReadQuality')}：${
+          wb.readQuality === undefined
+            ? t('workbenchReadUnknown')
+            : `${t('workbenchReadFloors').replace('{read}', String(wb.readQuality.floorsRead))}` +
+              (wb.readQuality.floorsDeclared === undefined
+                ? ''
+                : ` ${t('workbenchReadFloorsDeclared').replace('{declared}', String(wb.readQuality.floorsDeclared))}`) +
+              ` · ${t('workbenchReadNested').replace('{read}', String(wb.readQuality.nestedRead))}` +
+              (wb.readQuality.nestedDeclared === undefined
+                ? ''
+                : ` ${t('workbenchReadNestedDeclared').replace('{declared}', String(wb.readQuality.nestedDeclared))}`) +
+              ` · ${wb.readQuality.truncated ? t('workbenchReadTruncated') : t('workbenchReadComplete')}` +
+              (wb.readQuality.reasons.length === 0
+                ? ''
+                : ` · ${t('workbenchReadReasons').replace('{reasons}', wb.readQuality.reasons.join('；'))}`) +
+              (wb.readQuality.observationOverflow.length === 0
+                ? ''
+                : ` · ${t('workbenchReadOverflow').replace('{posts}', wb.readQuality.observationOverflow.join('、'))}`) +
+              (wb.readQuality.ownerNeedsRecheck ? ` · ${t('workbenchReadOwnerRecheck')}` : '')
+        }`),
+        // The comment list. `absent` (old session) and `empty` (nothing read) are
+        // rendered differently on purpose: only one of them means the thread had no
+        // comments.
+        (function commentsBlock() {
+          if (wb.comments === undefined) {
+            return wb.sessionId === undefined ? null : h('p', null, `${t('workbenchComments')}：${t('workbenchCommentsAbsent')}`)
+          }
+          if (wb.comments.length === 0) {
+            return h('p', null, `${t('workbenchComments')}：${t('workbenchCommentsEmpty')}`)
+          }
+          const shown = wb.comments.slice(0, 80)
+          return h(
+            'div',
+            null,
+            h('p', null, `${t('workbenchComments')}：${t('workbenchCommentsHint')}`),
+            wb.commentsCapped === true
+              ? h(
+                  'p',
+                  null,
+                  t('workbenchCommentsCapped')
+                    .replace('{shown}', String(shown.length))
+                    .replace('{total}', String(wb.comments.length)),
+                )
+              : null,
+            h(
+              'ul',
+              null,
+              ...shown.map((comment) =>
+                h(
+                  'li',
+                  { key: comment.postId },
+                  h(
+                    'span',
+                    null,
+                    `${comment.kind === 'nested'
+                      ? t('workbenchCommentNested')
+                      : t('workbenchCommentFloor').replace('{floor}', String(comment.floorNumber ?? 0))}` +
+                      ` · ${comment.authorName ?? '—'}` +
+                      (comment.authorHandle === undefined ? '' : ` (${comment.authorHandle})`) +
+                      ` · ${comment.identity === 'conflicted'
+                        ? t('workbenchIdentityConflicted')
+                        : comment.identity === 'verified'
+                          ? t('workbenchIdentityVerified')
+                          : t('workbenchIdentityUnverified')}` +
+                      (comment.parentPostId === undefined
+                        ? ''
+                        : ` · ${t('workbenchCommentUnder').replace('{parent}', comment.parentPostId)}`),
+                  ),
+                  h('div', null, comment.text),
+                  comment.truncated === true ? h('em', null, t('workbenchCommentTruncated')) : null,
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      disabled: wb.sessionId === undefined,
+                      onClick: () =>
+                        store.runWorkbenchAction('generate-candidates', {
+                          sessionId: wb.sessionId,
+                          targetPostId: comment.postId,
+                        }),
+                    },
+                    t('workbenchCommentsPick'),
+                  ),
+                ),
+              ),
+            ),
+          )
+        })(),
         wb.target
           ? h(
               'p',

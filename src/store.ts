@@ -164,6 +164,57 @@ export interface CandidateSecurityRecord {
   readonly fingerprint: string
 }
 
+/**
+ * One comment, as the workbench lists it.
+ *
+ * Everything the operator needs to decide "is this the comment I want to answer":
+ * who said it, what they said, where it is, and whether that attribution is actually
+ * verified. `identity` is deliberately a closed set rather than a boolean — "we could
+ * not tell" and "the sources disagreed" are different facts, and collapsing them into
+ * `verified: false` teaches the reader that a conflict is just a missing value.
+ */
+export interface StoredComment {
+  readonly postId: string
+  /** Floor number for a floor post; absent for a nested reply. */
+  readonly floorNumber?: number
+  /** The floor this reply sits under, when it is a nested reply. */
+  readonly parentPostId?: string
+  readonly kind: 'floor' | 'nested'
+  readonly authorName?: string
+  /** The account handle, when the surface published one. */
+  readonly authorHandle?: string
+  /** Numeric account id and the namespace that number belongs to. */
+  readonly authorNumericUid?: string
+  readonly authorNumericUidKind?: 'user_id' | 'tieba_uid'
+  /**
+   * Whether this author's identity is established.
+   *
+   * `conflicted` and `unverified` both mean "do not treat this as a known person",
+   * but only `conflicted` means two sources said different things.
+   */
+  readonly identity: 'verified' | 'unverified' | 'conflicted'
+  /** Truncated body. The full text stays in the analysis result. */
+  readonly text: string
+  readonly truncated?: boolean
+  readonly createdAt?: string
+}
+
+/** The read-quality facts a session keeps. */
+export interface StoredReadQuality {
+  readonly floorsRead: number
+  readonly floorsDeclared?: number
+  readonly nestedRead: number
+  readonly nestedDeclared?: number
+  readonly truncated: boolean
+  readonly reasons: readonly string[]
+  readonly observationOverflow: readonly string[]
+}
+
+/** Cap on stored comments per session. */
+export const MAX_STORED_COMMENTS = 400
+/** Cap on stored body length per comment. */
+export const MAX_STORED_COMMENT_CHARS = 600
+
 /** One discussion session, scoped to a single thread + owner + opponent. */export interface StoredSession {
   readonly id: string
   readonly platform: string
@@ -223,6 +274,36 @@ export interface CandidateSecurityRecord {
     readonly postId: string
     readonly summary: string
   }[]
+  /**
+   * The comments this read actually produced, as the workbench lists them (v0.2.24).
+   *
+   * ## Why this is stored rather than re-read
+   *
+   * The workbench runs in the browser against the store; it never holds a
+   * `CollectedThread` and cannot collect one itself. Without a stored list the page
+   * could show counts but not the comments those counts describe, so "choose the
+   * comment to answer" was impossible — the operator had to name a `postId` from
+   * somewhere else, which is exactly the tool-level knowledge the workbench exists to
+   * remove.
+   *
+   * Bounded on purpose: `text` is truncated, and the list is capped at
+   * {@link MAX_STORED_COMMENTS}. The full body stays in the analysis result; this is a
+   * picker, not a second copy of the thread.
+   *
+   * Absent on sessions written before this release, which the page renders as
+   * "this session has no comment list" — never as an empty discussion.
+   */
+  readonly comments?: readonly StoredComment[]
+  /**
+   * What the read achieved, recorded when the session was created (v0.2.24).
+   *
+   * Stored rather than recomputed: the page has no `CollectedThread`, and the honest
+   * answer to "was this complete?" is a fact about *that* read, not about the thread
+   * as it looks now.
+   *
+   * Absent on older sessions, which the page reports as "unknown" — never as complete.
+   */
+  readonly readQuality?: StoredReadQuality
   /**
    * How the owner's identity was established when this session was created
    * (v0.2.23).

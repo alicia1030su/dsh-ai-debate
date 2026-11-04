@@ -287,6 +287,8 @@ export interface SettingsRouteDeps {
     readonly sessionId: string
     readonly style?: string
     readonly ownerInstruction?: string
+    /** The comment to answer, chosen in the workbench (v0.2.24). */
+    readonly targetPostId?: string
   }): Promise<{ readonly ok: boolean; readonly message?: string; readonly candidates?: number }>
   /**
    * Publish one approved candidate (v0.2.22 §四/§五).
@@ -764,6 +766,17 @@ export interface PersonaPreview {
 export interface Diagnostics {
   readonly enabled: boolean
   readonly storePath: string
+  /**
+   * How `storePath` was chosen (v0.2.24).
+   *
+   * `configured` > `host` > `dsh_home` > `default`, in that order. Surfaced because
+   * the v0.2.23 bug was invisible: the page showed a path, the path looked plausible,
+   * and nothing said it had been resolved from the OS home rather than from the
+   * instance the user was running.
+   */
+  readonly storeDirSource?: 'configured' | 'host' | 'dsh_home' | 'default'
+  /** `DSH_HOME` as the plugin saw it, echoed for the same reason. */
+  readonly dshHome?: string
   readonly sessions: { total: number; active: number; awaitingConfirmation: number; published: number }
   readonly publishLedger: {
     total: number
@@ -1504,6 +1517,11 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
         sessionId: typeof body.sessionId === 'string' ? body.sessionId : '',
         ...(typeof body.style === 'string' && body.style !== '' ? { style: body.style } : {}),
         ...(typeof body.ownerInstruction === 'string' ? { ownerInstruction: body.ownerInstruction } : {}),
+        // v0.2.24: the comment picked in the workbench. Absent keeps the old
+        // behaviour of answering whatever summoned the session.
+        ...(typeof body.targetPostId === 'string' && body.targetPostId !== ''
+          ? { targetPostId: body.targetPostId }
+          : {}),
       })
       writeJson(response, 200, outcome)
       return

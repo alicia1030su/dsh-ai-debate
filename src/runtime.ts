@@ -63,6 +63,7 @@ import {
 } from './store.js'
 import type { ResolvedConfig } from './config.js'
 import { guardOutput, toStorageRecord, type ConversationPost } from './security/output-guard.js'
+import { buildCommentList } from './comment-list.js'
 import { ownerFromBinding, type CandidateSecurityAssessment, type SecurityStrictness } from './security/security-policy.js'
 import { makeEvent, type SecurityEvent, type SecurityEventKind } from './security/security-events.js'
 
@@ -705,6 +706,23 @@ async function persistAnalysis(
             summary: entry.summary,
           })),
         }),
+    // v0.2.24: the workbench cannot collect, so the comments it must let the owner
+    // choose between have to be stored with the session. Built from the canonical
+    // list only — identity observations stay out of this view.
+    comments: buildCommentList(collected).comments,
+    // Recorded from the same read, so "was this complete?" is answered by the read
+    // that produced the comments rather than guessed later from a stored count.
+    readQuality: {
+      floorsRead: collected.floors.length,
+      ...(collected.declaredTotal === undefined ? {} : { floorsDeclared: collected.declaredTotal }),
+      nestedRead: collected.floors.reduce((sum, entry) => sum + entry.nested.length, 0),
+      ...(declaredNestedOf(collected) === undefined
+        ? {}
+        : { nestedDeclared: declaredNestedOf(collected) as number }),
+      truncated: collected.complete !== true,
+      reasons: [...(collected.completeness?.reasons ?? [])],
+      observationOverflow: [...(collected.observationOverflow ?? [])],
+    },
     sentTexts: [] as readonly string[],
     createdAt: now,
     updatedAt: now,
@@ -959,6 +977,18 @@ export async function runGeneration(
     sessionId: string
     persona?: Partial<PersonaConfig>
     ownerInstruction?: string
+    /**
+     * The comment to answer, when the owner picked one in the workbench (v0.2.24).
+     *
+     * Without this the target is fixed to `session.triggerPostId`, which is whatever
+     * summoned the analysis — so "answer this other comment" was not expressible from
+     * the page at all, and the operator had to reach for a tool argument.
+     *
+     * Validated against the stored comment list: an id the session never read is
+     * refused rather than trusted, because a target the collector never saw cannot
+     * have an identity check behind it.
+     */
+    targetPostId?: string
     signal?: AbortSignal
     progress?: Progress
   },
@@ -992,9 +1022,27 @@ export async function runGeneration(
   assertCollected(collected)
 
   const owner = ownerIdentity(config, session.platform)
+  // ## Which comment this generation answers
+  //
+  // Default stays `triggerPostId` so resumed sessions behave exactly as before. An
+  // explicit choice must appear in the stored comment list: a `postId` the collector
+  // never read has no identity check behind it, no floor, and no content, and letting
+  // it through would mean generating a reply to something we cannot locate.
+  const requestedTarget = input.targetPostId
+  if (requestedTarget !== undefined) {
+    const known = (session.comments ?? []).some((entry) => entry.postId === requestedTarget)
+    if (!known) {
+      throw new Error(
+        `目标评论 ${requestedTarget} 不在这次读取到的评论里，无法作为回复对象。` +
+          '请先重新读取帖子，再从工作台的评论列表里选择。',
+      )
+    }
+  }
+  const targetPostId = requestedTarget ?? session.triggerPostId
+
   const dispute = analyzeDispute(collected, owner, {
-    postId: session.triggerPostId,
-    content: buildTimeline(collected).find((entry) => entry.postId === session.triggerPostId)?.content,
+    postId: targetPostId,
+    content: buildTimeline(collected).find((entry) => entry.postId === targetPostId)?.content,
   })
 
   // Opponent drift is a hard stop, not a warning.
@@ -1784,6 +1832,23 @@ export function describeFailure(error: unknown): { message: string; pause: boole
  * Read from the collected thread rather than assumed, because the publisher uses
  * it to decide between posting a new floor and replying inside an existing one.
  */
+/**
+ * The nested-reply count the floors declared, summed.
+ *
+ * `undefined` when no floor declared one: a zero would read as "the platform said
+ * there are none", which is a different claim from "nobody told us".
+ */
+function declaredNestedOf(collected: CollectedThread): number | undefined {
+  let total = 0
+  let declared = false
+  for (const entry of collected.floors) {
+    if (entry.floor.nestedCount === undefined) continue
+    declared = true
+    total += entry.floor.nestedCount
+  }
+  return declared ? total : undefined
+}
+
 function postKindOf(collected: CollectedThread, postId: string): 'floor' | 'nested' {
   for (const entry of collected.floors) {
     if (entry.floor.postId === postId) return 'floor'

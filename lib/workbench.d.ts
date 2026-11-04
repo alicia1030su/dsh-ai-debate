@@ -125,6 +125,25 @@ export interface OwnerIdentityView {
     /** The evidence, in words, for the reader who wants to check. */
     readonly evidence?: string;
 }
+import type { StoredComment } from './store.js';
+/** What the read actually achieved, versus what the platform claimed. */
+export interface ReadQualityView {
+    /** Floors the read produced. */
+    readonly floorsRead: number;
+    /** Floors the platform said the thread has, when it said so. */
+    readonly floorsDeclared?: number;
+    readonly nestedRead: number;
+    /** Nested replies the floors declared, when they did. */
+    readonly nestedDeclared?: number;
+    /** True when the collector flagged the read as incomplete. */
+    readonly truncated: boolean;
+    /** Plain-language reasons, already deduplicated by the collector. */
+    readonly reasons: readonly string[];
+    /** Post ids whose observation list hit the retention cap. */
+    readonly observationOverflow: readonly string[];
+    /** Whether the owner's own identity still needs re-checking before publishing. */
+    readonly ownerNeedsRecheck: boolean;
+}
 export interface WorkbenchState {
     readonly step: WorkbenchStep;
     readonly steps: readonly WorkbenchStepView[];
@@ -175,6 +194,25 @@ export interface WorkbenchState {
         readonly nested: number;
         readonly candidates: number;
     };
+    /**
+     * The comments this session actually read, so the owner can pick the one to answer
+     * (v0.2.24).
+     *
+     * Absent means the session predates this release and carries no list — which the
+     * page must render as "this session has no comment list", never as "the thread had
+     * no comments". The two are different facts and only one of them is true.
+     */
+    readonly comments?: readonly StoredComment[];
+    /** True when the stored list was capped and does not cover the whole read. */
+    readonly commentsCapped?: boolean;
+    /**
+     * Why the read stopped early, when it did.
+     *
+     * Carried so the page can say "the platform said 240 floors and we got 219" instead
+     * of showing a number with no provenance. Every field here is a fact the collector
+     * observed; nothing is computed to fill a gap.
+     */
+    readonly readQuality?: ReadQualityView;
     /** The target the current candidate would land on, when one is fixed. */
     readonly target?: {
         readonly threadId: string;
@@ -210,6 +248,10 @@ export interface WorkbenchInput {
     readonly session?: StoredSession;
     /** Whether an approval exists that still binds the candidate as it is now. */
     readonly approvalApplies: boolean;
+    /** True when the stored comment list was capped. */
+    readonly commentsCapped?: boolean;
+    /** What the read achieved, versus what the platform claimed. */
+    readonly readQuality?: ReadQualityView;
     /** Capability state from the same evidence rules the publish gate uses. */
     readonly capability?: {
         declared: string;

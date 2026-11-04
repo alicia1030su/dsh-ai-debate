@@ -26,8 +26,18 @@ export declare const inject: string[];
 export { Config, DEFAULT_CONFIG, resolveConfig };
 /** What the agent is told about this plugin. */
 export declare const DEBATE_GUIDANCE: string;
-/** Resolve the state directory from config, creating it. */
-export declare function resolveStoreDir(config: ReturnType<typeof resolveConfig>): string;
+/**
+ * Resolve the state directory from config, creating it.
+ *
+ * Delegates to {@link resolveStoreDirStrict}, which prefers an explicit `storeDir`,
+ * then a host-provided directory, then `DSH_HOME`, then the historical default. The
+ * v0.2.23 code used `homedir()` unconditionally, so an isolated `DSH_HOME` still wrote
+ * into the real `~/.dsh` — the bug this indirection removes.
+ *
+ * `get` is the plugin context's service lookup, passed in so the host-probe can run
+ * without this function depending on the whole context.
+ */
+export declare function resolveStoreDir(config: ReturnType<typeof resolveConfig>, get?: ((name: string) => unknown) | undefined): string;
 /**
  * Build the runtime synchronously; disk reads happen on first use.
  *
