@@ -220,7 +220,17 @@ if (listedPaths.length !== expectedPaths.length) {
 }
 for (const entry of listed) {
   const relativePath = entry.path.replace(/^package\//, '')
-  const actual = statSync(join(root, ...relativePath.split('/'))).size
+  // Compare against what was *archived*, not against the raw working-tree bytes.
+  //
+  // The writer normalises CRLF to LF (see `normaliseLineEndings`), so on a machine with
+  // `core.autocrlf=true` every text file in the working tree is longer than its archive
+  // entry. Comparing `statSync().size` here made this check fail on precisely the
+  // platforms the normalisation exists for — it reported "18186 ≠ 18211" for a package
+  // that was byte-for-byte correct, and the only way past it was to hand-convert files
+  // to LF, which is the machine-dependent step the normalisation was meant to remove.
+  // Reading the same normalised bytes the writer used keeps the check honest: it still
+  // catches a truncated or misordered entry, and no longer punishes the checkout style.
+  const actual = normaliseLineEndings(relativePath, readFileSync(join(root, ...relativePath.split('/')))).length
   if (entry.size !== actual) {
     process.stderr.write(`\x1b[31m✖ ${entry.path} 的大小不符：${entry.size} ≠ ${actual}\x1b[0m\n`)
     process.exit(1)

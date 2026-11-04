@@ -401,6 +401,14 @@ window.__ModuleLoader__.load({
       verifyOutcomeFailed: '平台拒绝',
       verifyOutcomeUncertain: '结果未确认',
       verifyFormTitle: '发起一次验收（需要你逐项填写）',
+      verifyPlatform: '平台',
+      verifyNoPlatform: '这个构建没有可用的平台适配器',
+      verifyReading: '正在读取验收状态…',
+      verifyNotRead: '还没有读过验收状态。点下面的按钮读一次。',
+      verifyRead: '读取验收状态',
+      verifyFieldCapability: '要验收的能力',
+      verifyCapReply: '回复某条评论（comment.reply）',
+      verifyCapPublish: '发表新评论（comment.publish）',
       verifyFieldAccount: '发帖账号 id',
       verifyFieldThread: '帖子 id',
       verifyFieldFloor: '要回复的楼层 id',
@@ -759,6 +767,14 @@ window.__ModuleLoader__.load({
       verifyOutcomeFailed: 'Rejected by the platform',
       verifyOutcomeUncertain: 'Outcome not confirmed',
       verifyFormTitle: 'Run one verification (you fill in every field)',
+      verifyPlatform: 'Platform',
+      verifyNoPlatform: 'This build has no usable platform adapter',
+      verifyReading: 'Reading the verification state…',
+      verifyNotRead: 'The verification state has not been read yet. Use the button below.',
+      verifyRead: 'Read the verification state',
+      verifyFieldCapability: 'Capability to verify',
+      verifyCapReply: 'Reply to a comment (comment.reply)',
+      verifyCapPublish: 'Post a new comment (comment.publish)',
       verifyFieldAccount: 'Publishing account id',
       verifyFieldThread: 'Thread id',
       verifyFieldFloor: 'Floor id to reply under',
@@ -1132,6 +1148,17 @@ window.__ModuleLoader__.load({
         this.verificationState = { state: 'idle' }
         this.verificationRun = null
         /**
+         * Which platform the panel is reading and will verify.
+         *
+         * Held here rather than only inside the section because the *read* needs it: the
+         * route is `GET /verification?platform=…`, and an empty platform legitimately
+         * answers "you have not chosen one yet" with no capability rows and no form. That
+         * is a correct answer to a question nobody asked, which is exactly how this panel
+         * came to render its heading and nothing else: nothing ever called the read, so
+         * the page sat on the "no view" branch forever.
+         */
+        this.verificationPlatform = ''
+        /**
          * Workbench state (v0.2.22 §一).
          *
          * `workbench` is the last served read model; `workbenchState` is the read's own
@@ -1188,6 +1215,7 @@ window.__ModuleLoader__.load({
           verification: this.verification,
           verificationState: this.verificationState,
           verificationRun: this.verificationRun,
+          verificationPlatform: this.verificationPlatform,
           workbench: this.workbench,
           workbenchState: this.workbenchState,
           workbenchEdit: this.workbenchEdit,
@@ -1265,6 +1293,66 @@ window.__ModuleLoader__.load({
         this.tab = tab
         this.publish()
         if (tab === 'approve') this.refreshApprovals()
+        // The verification panel's content is a *read*, and it was never triggered by
+        // anything: `loadVerification` had exactly one caller — the run handler — whose
+        // button only renders once a view exists. Opening the tab therefore showed the
+        // section's "no view" branch forever: a heading, one hint sentence, and no form.
+        // This is that missing trigger.
+        if (tab === 'verify') this.refreshVerification()
+        // The workbench is the same shape of mistake. Its section says, in as many words,
+        // that reloading returns to the same place — but nothing re-read on entry, and the
+        // only automatic read happened inside `load()`, before a session could exist. After
+        // a refresh the page therefore showed "paste a link" while the store held an
+        // approved, already-published reply. That is not a stale label; it is the page
+        // forgetting what it promised. Re-reading on entry is what makes the sentence true.
+        if (tab === 'workbench') this.loadWorkbench(this.workbenchSessionId())
+      }
+
+      /**
+       * Which session the workbench should describe.
+       *
+       * A served session id wins, because that is the one whose state is on screen. With no
+       * served one, `undefined` is passed on purpose: the Host answers with the latest
+       * session, which is the same rule the fresh-load path uses. Inventing an id here
+       * would let the page ask about a session it has never seen.
+       */
+      workbenchSessionId() {
+        const served = this.workbench && this.workbench.sessionId
+        return typeof served === 'string' && served !== '' ? served : undefined
+      }
+
+      /**
+       * Pick the platform the verification panel should describe when the owner has not
+       * chosen one.
+       *
+       * The Host already knows which platform this build actually talks to (`active`), and
+       * that is the only defensible default: guessing a name would let the panel describe a
+       * platform that has no adapter and report a blocker the owner cannot act on.
+       */
+      defaultVerificationPlatform() {
+        const rows = Array.isArray(this.view.platforms) ? this.view.platforms : []
+        const active = rows.find((row) => row.active === true && row.implemented === true)
+        if (active !== undefined) return String(active.id)
+        const anyImplemented = rows.find((row) => row.implemented === true)
+        if (anyImplemented !== undefined) return String(anyImplemented.id)
+        return ''
+      }
+
+      /**
+       * Read (or re-read) the verification panel for one platform.
+       *
+       * Kept separate from `loadVerification` so the trigger above can resolve a default
+       * first, and so switching platforms in the panel is one call.
+       */
+      async refreshVerification(platform) {
+        const chosen =
+          typeof platform === 'string' && platform !== ''
+            ? platform
+            : this.verificationPlatform !== ''
+              ? this.verificationPlatform
+              : this.defaultVerificationPlatform()
+        this.verificationPlatform = chosen
+        await this.loadVerification(chosen)
       }
 
       /**
@@ -1443,6 +1531,7 @@ window.__ModuleLoader__.load({
        * different — and reassuring — claim from "we could not find out".
        */
       async loadVerification(platform) {
+        if (typeof platform === 'string') this.verificationPlatform = platform
         this.verificationState = { state: 'loading' }
         this.publish()
         try {
@@ -3658,8 +3747,63 @@ window.__ModuleLoader__.load({
         )
       }
       if (!view || typeof view !== 'object') {
-        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('verifyHint')))
+        // "Not read yet" and "reading" are different sentences, and neither of them is
+        // "there is nothing to verify". Before the tab learned to trigger the read, this
+        // branch was the whole page: a heading and a hint that described the feature, with
+        // no way to start it. Saying which of the two states we are in, and offering the
+        // read as a button, is what makes that visible instead of silent.
+        const loading = read.state === 'loading'
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          title,
+          h('p', { className: 'dsd-hint' }, loading ? t('verifyReading') : t('verifyNotRead')),
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsd-btn',
+              disabled: loading,
+              onClick: () => store.refreshVerification(),
+            },
+            loading ? t('verifyReading') : t('verifyRead'),
+          ),
+        )
       }
+
+      // Which platform this panel describes. Shown as a selector because verification is a
+      // per-platform fact: a build with two adapters must not let the owner read one
+      // platform's evidence while believing it belongs to another.
+      //
+      // `state.view` is guarded rather than assumed: the panel is rendered by tests and by
+      // hosts that serve only the verification payload, and a page that throws on a missing
+      // sibling field is a page that shows nothing at all.
+      const platformRows =
+        state.view && Array.isArray(state.view.platforms) ? state.view.platforms : []
+      const platformChoices = platformRows
+        .filter((row) => row.implemented === true)
+        .map((row) => ({ value: String(row.id), label: String(row.displayName || row.id) }))
+      const currentPlatform = state.verificationPlatform || (view.report && view.report.platform) || ''
+      const platformBlock = h(
+        'div',
+        { className: 'dsd-field' },
+        h('label', { className: 'dsd-field-label', htmlFor: 'dsd-verify-platform' }, t('verifyPlatform')),
+        h(
+          'select',
+          {
+            id: 'dsd-verify-platform',
+            className: 'dsd-select',
+            value: currentPlatform,
+            disabled: busy,
+            onChange: (event) => store.refreshVerification(event.target.value),
+          },
+          platformChoices.length === 0
+            ? h('option', { value: '' }, currentPlatform === '' ? t('verifyNoPlatform') : currentPlatform)
+            : platformChoices.map((option) =>
+                h('option', { key: option.value, value: option.value }, option.label),
+              ),
+        ),
+      )
 
       const blockers = Array.isArray(view.blockers) ? view.blockers : []
       const capabilities = Array.isArray(view.capabilities) ? view.capabilities : []
@@ -3803,6 +3947,31 @@ window.__ModuleLoader__.load({
         { className: 'dsd-sect' },
         h('p', { className: 'dsd-hint' }, t('verifyFormTitle')),
         h('p', { className: 'dsd-hint' }, t('verifyNeedFields')),
+        // Which capability is being proven. This was fixed at `comment.publish`, which made
+        // the panel unable to verify the one capability the workbench actually needs: the
+        // workbench answers an existing comment, so it publishes under `comment.reply` and
+        // stayed blocked by `capability_not_proven` no matter how many times this form was
+        // submitted. The choice belongs to the owner, and it decides which fields appear.
+        h(
+          'label',
+          { className: 'dsd-field' },
+          h('span', null, t('verifyFieldCapability')),
+          h(
+            'select',
+            {
+              className: 'dsd-select',
+              value: draft.capability,
+              disabled: busy,
+              onChange: (event) => set('capability', event.target.value),
+            },
+            [
+              { value: 'comment.reply', label: 'verifyCapReply' },
+              { value: 'comment.publish', label: 'verifyCapPublish' },
+            ].map((option) =>
+              h('option', { key: option.value, value: option.value }, t(option.label)),
+            ),
+          ),
+        ),
         field('authorizedAccountId', 'verifyFieldAccount'),
         field('authorizedThreadId', 'verifyFieldThread'),
         // A new comment has no parent. Showing the two parent fields for one would invite an id
@@ -3819,7 +3988,7 @@ window.__ModuleLoader__.load({
             disabled: busy,
             onClick: () =>
               store.runVerification({
-                platform: view.report && view.report.platform ? view.report.platform : draft.platform,
+                platform: currentPlatform || (view.report && view.report.platform) || draft.platform,
                 capability: draft.capability,
                 authorizedAccountId: draft.authorizedAccountId,
                 authorizedThreadId: draft.authorizedThreadId,
@@ -3844,6 +4013,7 @@ window.__ModuleLoader__.load({
         { className: 'dsd-sect' },
         title,
         h('p', { className: 'dsd-hint' }, t('verifyHint')),
+        platformBlock,
         accountLine,
         blockerBlock,
         capabilityRows,

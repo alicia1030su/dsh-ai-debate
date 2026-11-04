@@ -387,6 +387,44 @@ try {
   await sleep(2000)
   stage('进入验收页', verifyTab ? 'passed' : 'failed', verifyTab ? '已点击页签' : '找不到验收页签')
 
+  // ## The tab must actually be populated
+  //
+  // v0.2.25 ended here: the tab highlighted, the section showed its heading and one
+  // sentence, and there was no form. Two product defects, both fixed in v0.2.26 — the
+  // read was never triggered on tab entry, and the capability was hard-wired to
+  // `comment.publish`, so the two parent fields could not be rendered at all.
+  //
+  // This stage exists so a regression to either one fails here rather than showing up
+  // much later as "the platform never received a publish".
+  const panelLoaded = await waitFor(async () => {
+    const text = await evaluate<string>(`document.body.innerText`)
+    return text.includes('发起一次验收') && text.includes('要验收的能力')
+  }, 20_000)
+  stage(
+    '验收面板加载出表单',
+    panelLoaded ? 'passed' : 'failed',
+    panelLoaded ? '能力选择器与表单字段都在' : '20 秒内没有出现表单',
+  )
+  await screenshot('05a-verify-panel')
+
+  /** Set a `<select>` the way a person does: real change event through the native setter. */
+  async function pickOption(selectLabelOrId: string, value: string): Promise<boolean> {
+    return evaluate<boolean>(`(() => {
+      const nodes = [...document.querySelectorAll('select')]
+      const select = nodes.find((s) => (s.id || '') === ${JSON.stringify(selectLabelOrId)})
+        ?? nodes.find((s) => {
+          const label = s.closest('label') ?? document.querySelector('label[for="' + s.id + '"]')
+          return label !== null && (label.textContent || '').includes(${JSON.stringify(selectLabelOrId)})
+        })
+        ?? nodes.find((s) => [...s.options].some((o) => o.value === ${JSON.stringify(value)}))
+      if (!select) return false
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set
+      setter?.call(select, ${JSON.stringify(value)})
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      return select.value === ${JSON.stringify(value)}
+    })()`)
+  }
+
   async function fillVerifyField(label: string, value: string): Promise<boolean> {
     const focused = await evaluate<boolean>(`(() => {
       const labels = [...document.querySelectorAll('label')]
@@ -402,6 +440,17 @@ try {
     await sleep(120)
     return true
   }
+
+  // Choose the capability the workbench actually needs. A reply is `comment.reply`;
+  // verifying `comment.publish` here would leave the workbench blocked with
+  // `capability_not_proven`, which is exactly what v0.2.25 shipped.
+  const capabilityPicked = await pickOption('要验收的能力', 'comment.reply')
+  await sleep(600)
+  stage(
+    '选择要验收的能力 comment.reply',
+    capabilityPicked ? 'passed' : 'failed',
+    capabilityPicked ? '已选中 comment.reply' : '能力选择器不存在或选不中',
+  )
 
   const verifyText = '隔离验收：这条是端到端测试环境发出的模拟回复。'
   const filled =
@@ -424,6 +473,22 @@ try {
     stage('验收结果返回', verified ? 'passed' : 'failed', verified ? '页面显示验收结论' : '40 秒内没有结论')
     await screenshot('05c-verify-result')
   }
+
+  // ## Baseline for the publish count
+  //
+  // The verification above published one reply on purpose — that is the whole point of it.
+  // Everything after this line is the workbench's own work, so "it published exactly once"
+  // must be measured from here. Measuring from zero made a correct run look like a double
+  // publish, and would have masked a real one.
+  const publishBaseline =
+    publishLog !== '' && existsSync(publishLog)
+      ? (JSON.parse(readFileSync(publishLog, 'utf8')) as { publishes: unknown[] }).publishes.length
+      : 0
+  stage(
+    '验收本身恰好发表 1 次',
+    publishBaseline === 1 ? 'passed' : 'failed',
+    `验收阶段模拟平台收到 ${publishBaseline} 次`,
+  )
 
   // Back to the workbench for the rest of the flow.
   await clickByLabel('工作台')
@@ -493,14 +558,52 @@ try {
     await screenshot('09-published')
   }
 
+  // The platform's log is written by a timer in the host process, so "the page said it was
+  // sent" can be true a few hundred milliseconds before the record is on disk. Waiting for
+  // the record itself is what makes the count below a measurement rather than a race —
+  // without it a correct run reads 1 and a double publish reads 2, one second later.
+  await waitFor(async () => {
+    const rows =
+      publishLog !== '' && existsSync(publishLog)
+        ? (JSON.parse(readFileSync(publishLog, 'utf8')) as { publishes: unknown[] }).publishes.length
+        : 0
+    return rows > publishBaseline
+  }, 15_000)
+
   // ## What the simulated platform actually received
-  const platformLog = publishLog !== '' && existsSync(publishLog)
-    ? (JSON.parse(readFileSync(publishLog, 'utf8')) as {
-        publishes: { seq: number; kind: string; nestedReplyId?: string; floorPostId?: string; content: string }[]
-      })
-    : { publishes: [] }
-  const sent = platformLog.publishes
-  stage('模拟平台收到 1 次发表', sent.length === 1 ? 'passed' : 'failed', `实际 ${sent.length} 次`)
+  //
+  // The log is cumulative, and the verification step above *legitimately* published one
+  // reply — that is what verification is. Counting both as "the workbench published twice"
+  // would have been a false failure, and counting the first one as the workbench's would
+  // have compared the approved text against the verification text. So the baseline is taken
+  // where the simulation last had a reason to publish, and only what comes after it is the
+  // workbench's.
+  const readPublishes = (): {
+    seq: number
+    kind: string
+    nestedReplyId?: string
+    floorPostId?: string
+    content: string
+  }[] =>
+    publishLog !== '' && existsSync(publishLog)
+      ? (JSON.parse(readFileSync(publishLog, 'utf8')) as {
+          publishes: {
+            seq: number
+            kind: string
+            nestedReplyId?: string
+            floorPostId?: string
+            content: string
+          }[]
+        }).publishes
+      : []
+
+  const allPublished = readPublishes()
+  const sent = allPublished.slice(publishBaseline)
+  stage(
+    '工作台让模拟平台收到 1 次发表',
+    sent.length === 1 ? 'passed' : 'failed',
+    `本次工作台发表 ${sent.length} 次（此前已有 ${publishBaseline} 次，来自验收）`,
+  )
   if (sent.length > 0) {
     const first = sent[0]!
     stage(
@@ -519,13 +622,102 @@ try {
   // ## Clicking publish again must not send a second time
   await clickByLabel('发表这一条（只会发一次）')
   await sleep(2500)
-  const afterSecond = publishLog !== '' && existsSync(publishLog)
-    ? (JSON.parse(readFileSync(publishLog, 'utf8')) as { publishes: unknown[] }).publishes.length
-    : 0
+  const afterSecond = readPublishes().slice(publishBaseline).length
   stage(
     '重复点击不会二次发表',
     afterSecond === sent.length ? 'passed' : 'failed',
-    `第二次点击后共 ${afterSecond} 次`,
+    `第二次点击后本次共 ${afterSecond} 次`,
+  )
+
+  // ## Reload, and prove the state on screen came back from storage
+  //
+  // Everything above could be explained by a page that kept its own optimistic copy. The
+  // reload is what separates "the UI remembers" from "the state is on disk": after a fresh
+  // document, the approval must read as spent and the candidate must come back from the
+  // store, not from a deleted React tree.
+  await send('Page.reload', { ignoreCache: true })
+  await sleep(9000)
+  await dismissOverlays()
+
+  const reopenedPlugins = await clickByLabel('插件')
+  if (reopenedPlugins) await sleep(2500)
+  const reopenedDetail = await evaluate<boolean>(`(() => {
+    const b = document.querySelector('[aria-label="查看 dsh-ai-debate"]')
+    if (!b) return false
+    b.click(); return true
+  })()`)
+  if (reopenedDetail) await sleep(2200)
+  const reopenedConfig = await evaluate<boolean>(`(() => {
+    const b = document.querySelector('[aria-label="配置 dsh-ai-debate"]')
+    if (!b) return false
+    b.click(); return true
+  })()`)
+  if (reopenedConfig) await sleep(2600)
+
+  const reopenedWorkbench = await clickByLabel('工作台')
+  if (reopenedWorkbench) await sleep(3000)
+  stage(
+    '刷新后能重新进入工作台',
+    reopenedPlugins && reopenedDetail && reopenedConfig && reopenedWorkbench ? 'passed' : 'failed',
+    `插件=${reopenedPlugins} 详情=${reopenedDetail} 配置=${reopenedConfig} 工作台=${reopenedWorkbench}`,
+  )
+
+  const afterReloadText = await evaluate<string>(`document.body.innerText`)
+  // What "the state came back" looks like on this page: the step strip is past approval, and
+  // the publish step is shown as done rather than offered again. Asserting on a specific
+  // sentence was wrong the first time — the page says 「当前步骤：回读确认」, not 「已发表」,
+  // and the underlying fact (the authorisation is spent) is what needs checking.
+  const reachedReadback = afterReloadText.includes('回读确认')
+  const approvalTick = /人工批准/.test(afterReloadText)
+  stage(
+    '刷新后工作台恢复到最后一步',
+    reachedReadback && approvalTick ? 'passed' : 'failed',
+    reachedReadback && approvalTick
+      ? '步骤停在「回读确认」，且人工批准仍是已完成'
+      : `没有恢复：回读确认=${reachedReadback} 人工批准=${approvalTick}`,
+  )
+  await screenshot('10-after-reload')
+
+  // The spend itself is a fact about storage, so it is read from storage rather than inferred
+  // from a label. `consumedAt` present means exactly one authorisation was used, once.
+  const storePath = process.env.DSH_E2E_STORE_STATE ?? ''
+  if (storePath !== '' && existsSync(storePath)) {
+    const state = JSON.parse(readFileSync(storePath, 'utf8')) as {
+      approvals?: { consumedAt?: string; textHash?: string }[]
+      verification?: { outcome?: string }[]
+    }
+    const approvals = Array.isArray(state.approvals) ? state.approvals : []
+    const consumed = approvals.filter((row) => typeof row.consumedAt === 'string' && row.consumedAt !== '')
+    stage(
+      '存储里恰好有一份已消费的授权',
+      approvals.length === 1 && consumed.length === 1 ? 'passed' : 'failed',
+      `授权 ${approvals.length} 份，已消费 ${consumed.length} 份`,
+    )
+    const verified = Array.isArray(state.verification) ? state.verification : []
+    const succeeded = verified.filter((row) => row.outcome === 'succeeded')
+    stage(
+      '存储里的验收证据是 succeeded',
+      succeeded.length === 1 ? 'passed' : 'failed',
+      `验收记录 ${verified.length} 条，succeeded ${succeeded.length} 条`,
+    )
+  }
+
+  // A second publish after the reload must be impossible: the authorisation was spent, and
+  // the page must not offer a fresh button that pretends otherwise.
+  const republishOffered = await evaluate<boolean>(`(() => {
+    return [...document.querySelectorAll('button')].some(b =>
+      (b.textContent || '').trim() === '发表这一条（只会发一次）' && !b.disabled)
+  })()`)
+  const beforeRepublish = readPublishes().length
+  if (republishOffered) {
+    await clickByLabel('发表这一条（只会发一次）')
+    await sleep(3000)
+  }
+  const afterRepublish = readPublishes().length
+  stage(
+    '刷新后不能复用已消费的授权',
+    afterRepublish === beforeRepublish ? 'passed' : 'failed',
+    `刷新后再发表：${republishOffered ? '按钮存在' : '没有可用按钮'}，发表数 ${beforeRepublish} → ${afterRepublish}`,
   )
 
   // What did the server actually do?
