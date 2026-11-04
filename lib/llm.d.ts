@@ -27,9 +27,28 @@ export interface LlmResponse {
     readonly outputTokens?: number;
     /** Provider/model label, for the usage log. */
     readonly model?: string;
+    /**
+     * Why generation stopped, when the provider said so (`finish_reason`).
+     *
+     * `length` is the one that matters: the answer was cut off at `max_tokens`. The text is
+     * still real, but it is *incomplete*, and treating it as a finished reply is how a
+     * truncated sentence reaches a publish button. Kept as the provider's own word rather
+     * than collapsed into a boolean, so a future provider-specific reason is not lost.
+     */
+    readonly finishReason?: string;
+    /**
+     * True when the provider reported that generation stopped because it hit the token cap.
+     *
+     * Derived here, in the transport, because it is a fact about the response, not an opinion
+     * about the text: no content check can distinguish "short answer" from "answer cut in
+     * half".
+     */
+    readonly truncated?: boolean;
+    /** How many attempts the client made before returning this, when retrying is enabled. */
+    readonly attempts?: number;
 }
 /** A classified LLM failure. */
-export type LlmErrorCode = 'unavailable' | 'timeout' | 'rate_limited' | 'quota' | 'bad_response' | 'context_too_long' | 'cancelled' | 'unknown';
+export type LlmErrorCode = 'unavailable' | 'unauthorized' | 'timeout' | 'rate_limited' | 'quota' | 'bad_response' | 'truncated' | 'context_too_long' | 'cancelled' | 'unknown';
 /** An error from the LLM layer, with a code the caller can act on. */
 export declare class LlmError extends Error {
     readonly code: LlmErrorCode;
@@ -53,6 +72,32 @@ export interface OpenAiClientOptions {
     readonly model: string;
     readonly timeoutMs?: number;
     readonly fetchImpl?: typeof fetch;
+    /**
+     * How many *additional* attempts to make after a failure the transport classifies as
+     * transient. Default 0: no retry unless asked.
+     *
+     * ## Why this is off by default, and what it is allowed to retry
+     *
+     * Retrying a generation is not free and not always safe. A timeout may mean the provider
+     * is still working on the request; a 429 counts against the same quota the retry will
+     * spend. So the default is "do not retry", and the caller that wants it must ask.
+     *
+     * When it is on, only failures where the request provably did not take effect are retried:
+     * a connection error, a timeout, a 429, or a 5xx. Authentication (401/403), quota (402),
+     * a context that is too long, a malformed response, or an explicit cancellation are **not**
+     * retried — repeating them produces the same answer and spends the budget twice. This is
+     * the rule `classifyHttpFailure` already encodes in the error codes; the retry loop reads
+     * those codes rather than inspecting messages.
+     */
+    readonly maxRetries?: number;
+    /** Base delay for exponential backoff, in ms. Injected so tests do not wait. */
+    readonly retryDelayMs?: number;
+    /** Called before each retry, for logging. */
+    readonly onRetry?: (info: {
+        attempt: number;
+        code: LlmErrorCode;
+        message: string;
+    }) => void;
 }
 /**
  * An OpenAI-compatible chat-completions client.
@@ -66,7 +111,15 @@ export declare class OpenAiCompatibleClient implements LlmClient {
     private readonly options;
     private readonly fetchImpl;
     constructor(options: OpenAiClientOptions);
+    /**
+     * Run one completion, retrying only failures that provably did not take effect.
+     *
+     * The loop is deliberately outside `completeOnce`, so a single attempt stays a single
+     * request: nothing here re-sends half a stream or reuses an aborted controller.
+     */
     complete(request: LlmRequest): Promise<LlmResponse>;
+    /** One request, one response. No retry, no shared state. */
+    private completeOnce;
 }
 /**
  * A deterministic client for tests.

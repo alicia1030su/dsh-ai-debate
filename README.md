@@ -148,22 +148,22 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.25
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.27
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.25) 下载
-`dsh-ai-debate-0.2.25.tgz`，或在仓库根目录自行构建：
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.27) 下载
+`dsh-ai-debate-0.2.27.tgz`，或在仓库根目录自行构建：
 
 ```bash
 node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.25.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.27.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.25.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.27.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
 Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
@@ -1434,6 +1434,17 @@ v0.1.5 **不能**。贴吧没有可用的公开艾特通知接口，`/c/u/feed/a
 28. **贴吧真实登录态发表尚未完成完整验收**：接口契约按真实响应实现，回读核对也写了，
     但本机 IP 对贴吧持续 403，从未用真实账号端到端发布过一条回复。发布路径的全部
     证据来自假适配器与单元测试。
+29. **v0.2.27 的真实读取仍未完成**：本轮再次实测，未登录 GET 拿到的仍是
+    **HTTP 403 + 「百度安全验证」**。这是平台的访问控制，插件**不会**去绕过它
+    （不求解验证码、不伪装 UA 对抗）。因此本轮能做、也确实做了的是：把这份真实响应
+    存成夹具，断言它被识别为「安全验证」而不是「帖子不存在」；并用 v0.1.3 抓到的
+    真实页面复查解析器（第 1 页 29 楼、声明 8 页共 240 楼、两页之间无重复 post id）。
+    **今日对公开帖的实时读取：未完成。**
+30. **v0.2.27 的真实模型质量评测未在本环境完成**：评测通道与 64 个案例已就绪，
+    并可用 `node --experimental-transform-types test/evaluation/run-quality.ts`
+    在任意 OpenAI 兼容端点上重复运行；本机没有可用的真实模型凭据，因此只跑了本地
+    模拟服务（用来验证通道本身能工作），没有真实模型的质量分数。不把模拟结果
+    当作真实模型结论。
 
 ---
 

@@ -69,9 +69,25 @@ function makeRepoWithoutArchive() {
   return { temp, archive, sandbox }
 }
 
+/**
+ * Remove the temporary sandbox, retrying while Windows still holds handles.
+ *
+ * The guard runs as a child process over a copied tree, and on Windows the OS releases
+ * those handles a moment after the child exits. `rmSync` then fails with `ENOTEMPTY` —
+ * which, thrown from a `t.after` hook, fails a test whose assertions all passed. Measured
+ * on Node 24 at `--test-concurrency=8`: this fired on roughly one run in two while the
+ * guard itself exited 0.
+ *
+ * Cleanup failing is not a product defect, so it must not be reported as one. The retry
+ * is bounded and the delay short; a genuinely undeletable directory still surfaces.
+ */
+function removeSandbox(path: string): void {
+  rmSync(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+}
+
 test('守卫：没有源码包且未指定 --require-archive 时跳过归档检查并通过', (t) => {
   const { temp, archive, sandbox } = makeRepoWithoutArchive()
-  t.after(() => rmSync(sandbox, { recursive: true, force: true }))
+  t.after(() => removeSandbox(sandbox))
   assert.equal(existsSync(archive), false, '前置条件：临时仓库的上一级不该有源码包')
 
   // 关键一条：`CI` 必须被设置着。旧实现正是在这种情况下一头撞死。
@@ -83,7 +99,7 @@ test('守卫：没有源码包且未指定 --require-archive 时跳过归档检�
 
 test('守卫：指定 --require-archive 但源码包不存在时必须失败', (t) => {
   const { temp, archive, sandbox } = makeRepoWithoutArchive()
-  t.after(() => rmSync(sandbox, { recursive: true, force: true }))
+  t.after(() => removeSandbox(sandbox))
   assert.equal(existsSync(archive), false)
 
   const result = runGuard(temp, ['--require-archive'])

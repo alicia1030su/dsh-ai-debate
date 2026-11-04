@@ -20,7 +20,7 @@ function tempDir(): { dir: string; done: () => void } {
   return { dir, done: () => rmSync(dir, { recursive: true, force: true }) }
 }
 
-test('复现：两个 store 交错写同一文件，后写的覆盖先写的', async () => {
+test('复现：两个 store 交错写同一文件，后写的覆盖先写的', async (t) => {
   const { dir, done } = tempDir()
   try {
     const a = new DebateStore({ dir, sessionTtlMs: 3600_000 })
@@ -56,9 +56,9 @@ test('复现：两个 store 交错写同一文件，后写的覆盖先写的', a
     const onDisk = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))
     const ids = (onDisk.security ?? []).map((row: { id: string }) => row.id)
 
-    console.log('  磁盘上的安全事件: ' + JSON.stringify(ids))
-    console.log('  A 的内存视图: ' + JSON.stringify(a.getSecurityEvents().map((r) => r.id)))
-    console.log('  B 的内存视图: ' + JSON.stringify(b.getSecurityEvents().map((r) => r.id)))
+    t.diagnostic('  磁盘上的安全事件: ' + JSON.stringify(ids))
+    t.diagnostic('  A 的内存视图: ' + JSON.stringify(a.getSecurityEvents().map((r) => r.id)))
+    t.diagnostic('  B 的内存视图: ' + JSON.stringify(b.getSecurityEvents().map((r) => r.id)))
 
     assert.deepEqual(
       ids.sort(),
@@ -70,7 +70,7 @@ test('复现：两个 store 交错写同一文件，后写的覆盖先写的', a
   }
 })
 
-test('复现：两个 store 交错写去重台账，confirmed 记录被覆盖', async () => {
+test('复现：两个 store 交错写去重台账，confirmed 记录被覆盖', async (t) => {
   const { dir, done } = tempDir()
   try {
     const a = new DebateStore({ dir, sessionTtlMs: 3600_000 })
@@ -130,7 +130,7 @@ test('复现：两个 store 交错写去重台账，confirmed 记录被覆盖', 
 
     const onDisk = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))
     const keys = (onDisk.dedupe ?? []).map((row: { key: string }) => row.key)
-    console.log('  磁盘上的去重键: ' + JSON.stringify(keys))
+    t.diagnostic('  磁盘上的去重键: ' + JSON.stringify(keys))
 
     assert.ok(
       keys.includes('tieba:1:1:1:na'),
@@ -142,7 +142,7 @@ test('复现：两个 store 交错写去重台账，confirmed 记录被覆盖', 
   }
 })
 
-test('复现：批准记录被另一个实例的写入冲掉', async () => {
+test('复现：批准记录被另一个实例的写入冲掉', async (t) => {
   const { dir, done } = tempDir()
   try {
     const a = new DebateStore({ dir, sessionTtlMs: 3600_000 })
@@ -183,7 +183,7 @@ test('复现：批准记录被另一个实例的写入冲掉', async () => {
 
     const onDisk = JSON.parse(readFileSync(join(dir, 'state.json'), 'utf8'))
     const approvals = (onDisk.approvals ?? []).map((row: { id: string }) => row.id)
-    console.log('  磁盘上的批准记录: ' + JSON.stringify(approvals))
+    t.diagnostic('  磁盘上的批准记录: ' + JSON.stringify(approvals))
 
     assert.ok(approvals.includes('approval-1'), '批准记录不能被另一个实例的写入冲掉')
   } finally {

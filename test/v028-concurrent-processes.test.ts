@@ -97,7 +97,7 @@ function runWorker(
   })
 }
 
-test('两个独立进程同时写同一个状态文件：成功的写入一条都不能丢', async () => {
+test('两个独立进程同时写同一个状态文件：成功的写入一条都不能丢', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'debate-race-'))
   try {
     // 先建库，避免两个进程同时走「首次启动」分支。
@@ -108,8 +108,8 @@ test('两个独立进程同时写同一个状态文件：成功的写入一条�
 
     const each = 12
     const [a, b] = await Promise.all([runWorker(dir, 'a', each), runWorker(dir, 'b', each)])
-    console.log(`  进程 A 写入 ${a.written} / 拒绝 ${a.refused}`)
-    console.log(`  进程 B 写入 ${b.written} / 拒绝 ${b.refused}`)
+    t.diagnostic(`  进程 A 写入 ${a.written} / 拒绝 ${a.refused}`)
+    t.diagnostic(`  进程 B 写入 ${b.written} / 拒绝 ${b.refused}`)
 
     // A worker that wrote nothing proves nothing. This guard exists because the first
     // version of this file sliced argv from index 2, so every worker opened a directory
@@ -123,7 +123,7 @@ test('两个独立进程同时写同一个状态文件：成功的写入一条�
       dedupe: { key: string }[]
     }
     const keys = new Set(final.dedupe.map((row) => row.key))
-    console.log(`  最终台账 ${final.dedupe.length} 条（去重后 ${keys.size} 个 key）`)
+    t.diagnostic(`  最终台账 ${final.dedupe.length} 条（去重后 ${keys.size} 个 key）`)
 
     // 每个进程自己报告成功的那几条，必须能在文件里找到。这才是「没有丢数据」：
     // 覆盖写会表现成 A 说写了 12 条、B 也说写了 12 条，但文件里只剩后面那批。

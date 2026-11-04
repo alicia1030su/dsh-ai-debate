@@ -32,7 +32,7 @@ function tempDir(): { dir: string; done: () => void } {
 
 const statePath = (dir: string): string => join(dir, 'state.json')
 
-test('复现：初始化成功、写过一次、文件被外部破坏，再 mutate 不得覆盖坏文件', async () => {
+test('复现：初始化成功、写过一次、文件被外部破坏，再 mutate 不得覆盖坏文件', async (t) => {
   const { dir, done } = tempDir()
   try {
     const store = new DebateStore({ dir })
@@ -58,8 +58,8 @@ test('复现：初始化成功、写过一次、文件被外部破坏，再 muta
 
     // 6. 坏文件必须原样还在
     const after = readFileSync(statePath(dir), 'utf8')
-    console.log('  mutate 结果:', threw === undefined ? 'RESOLVED（不可接受）' : 'threw ' + threw.code)
-    console.log('  磁盘内容是否仍是坏字节:', after === broken)
+    t.diagnostic('  mutate 结果:' + ' ' + threw === undefined ? 'RESOLVED（不可接受）' : 'threw ' + threw.code)
+    t.diagnostic('  磁盘内容是否仍是坏字节:' + ' ' + after === broken)
 
     assert.notEqual(threw, undefined, '文件损坏时 mutate 必须拒绝，而不是静默成功')
     assert.ok(threw instanceof StoreError, '必须是 StoreError')
@@ -70,7 +70,7 @@ test('复现：初始化成功、写过一次、文件被外部破坏，再 muta
   }
 })
 
-test('复现：已初始化的文件被删掉，再次写入不得当成首次启动静默重建', async () => {
+test('复现：已初始化的文件被删掉，再次写入不得当成首次启动静默重建', async (t) => {
   const { dir, done } = tempDir()
   try {
     const store = new DebateStore({ dir })
@@ -106,11 +106,11 @@ test('复现：已初始化的文件被删掉，再次写入不得当成首次�
     } catch (error) {
       threw = error
     }
-    console.log('  文件消失后 mutate:', threw === undefined ? 'RESOLVED（不可接受）' : 'threw ' + threw.code)
+    t.diagnostic('  文件消失后 mutate:' + ' ' + threw === undefined ? 'RESOLVED（不可接受）' : 'threw ' + threw.code)
 
     // 文件确实不在了（没被静默重建）
     const recreated = existsSync(statePath(dir))
-    console.log('  是否被静默重建:', recreated)
+    t.diagnostic('  是否被静默重建:' + ' ' + recreated)
 
     assert.notEqual(threw, undefined, '初始化成功后文件消失，不能无条件当成首次启动')
     assert.equal(recreated, false, '拒绝写入时不应凭空创建新文件')

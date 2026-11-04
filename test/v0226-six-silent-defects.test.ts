@@ -25,7 +25,11 @@
  */
 
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { test } from 'node:test'
+
+const ROOT = join(import.meta.dirname, '..')
 
 import { analyzeDispute } from '../lib/analyzer.js'
 import type { CollectedThread } from '../lib/collector.js'
@@ -396,4 +400,32 @@ test('没有快照的旧候选回退到会话形态，不凭空断言', () => {
     approvalApplies: true,
   })
   assert.equal(state.target?.kind, 'floor', '没有快照时用会话形态，这是唯一有的信息')
+})
+
+// ── Regenerating must not quietly retarget (v0.2.27) ────────────────────────
+//
+// Found while re-running the GUI flow with the model probe added. The workbench has two
+// buttons that generate: 「用这条」 beside a comment, which carries that comment's id, and the
+// plain 「生成候选」, which sent only the session id. The server then fell back to the post
+// that summoned the session — so after picking a comment, the next generate produced a reply
+// for a *different* post. The stored candidate, the approval bound to it, and the publish
+// request ended up describing two different targets.
+//
+// The product promise is "选中哪条，就针对哪条生成与发表". This pins that the second button
+// carries the selection the page is already showing.
+
+test('工作台的「生成候选」必须带上当前选中的目标', () => {
+  const SOURCE = readFileSync(join(ROOT, 'client', 'client.cjs'), 'utf8')
+  // The generate handler must read the Host's recorded target rather than posting only the
+  // session. A substring check is the right shape here: rendering the whole card to observe a
+  // request body would test React far more than this decision.
+  const generateBlock = SOURCE.slice(
+    SOURCE.indexOf("store.runWorkbenchAction('generate-candidates'"),
+    SOURCE.indexOf("store.runWorkbenchAction('generate-candidates'") + 400,
+  )
+  assert.match(
+    generateBlock,
+    /targetPostId/,
+    '「生成候选」不带 targetPostId，重新生成会退回「召唤本会话的那条帖」，静默换目标',
+  )
 })

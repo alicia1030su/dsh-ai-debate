@@ -741,6 +741,23 @@ export interface ModelProbe {
   readonly latencyMs?: number
   readonly message: string
   readonly sample?: string
+  /**
+   * Which wire protocol the probe actually spoke (v0.2.27).
+   *
+   * A diagnostic that only says "failed" hides the most common real problem: the Base URL
+   * points at something that is not a chat-completions endpoint. Naming the protocol and the
+   * URL it was sent to makes that visible without reading the source.
+   */
+  readonly protocol?: string
+  /** The classified failure, when it failed. Same vocabulary the runtime acts on. */
+  readonly errorCode?: string
+  /** HTTP status, when the failure had one. */
+  readonly status?: number
+  /** What the owner can do about it. Empty when nothing is actionable. */
+  readonly suggestions?: readonly string[]
+  /** Token usage reported by this probe, when the endpoint returns it. */
+  readonly inputTokens?: number
+  readonly outputTokens?: number
 }
 
 /** Result of probing the Tieba login state. */

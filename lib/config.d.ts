@@ -119,6 +119,16 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;
     /**
+     * Extra attempts after a *transient* model failure (v0.2.27).
+     *
+     * Default 0, matching the transport's own default, because a generation is not free and
+     * a timeout may mean the provider is still working. When set, only failures that provably
+     * did not take effect are retried — connection errors, timeouts, 429 and 5xx. A rejected
+     * key, an exhausted quota, an over-long context and an explicit cancellation are never
+     * retried: repeating them produces the same answer and spends the budget twice.
+     */
+    llmRetries: z<number, number, "volatile-defined">;
+    /**
      * Sampling temperature.
      *
      * Low by default: this task is precision, not creativity. Raise it only if the
@@ -283,6 +293,16 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;
     /**
+     * Extra attempts after a *transient* model failure (v0.2.27).
+     *
+     * Default 0, matching the transport's own default, because a generation is not free and
+     * a timeout may mean the provider is still working. When set, only failures that provably
+     * did not take effect are retried — connection errors, timeouts, 429 and 5xx. A rejected
+     * key, an exhausted quota, an over-long context and an explicit cancellation are never
+     * retried: repeating them produces the same answer and spends the budget twice.
+     */
+    llmRetries: z<number, number, "volatile-defined">;
+    /**
      * Sampling temperature.
      *
      * Low by default: this task is precision, not creativity. Raise it only if the
@@ -361,6 +381,7 @@ export declare const DEFAULT_CONFIG: {
     llmApiKey: string;
     llmModel: string;
     llmTimeoutMs: number;
+    llmRetries: number;
     llmTemperature: number;
     llmMaxOutputTokens: number;
     authProbeThreadId: string;

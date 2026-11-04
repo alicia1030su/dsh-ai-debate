@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "baseline": 314,
-  "updatedAt": "2026-11-02T06:31:09.128Z",
+  "baseline": 311,
+  "updatedAt": "2026-11-04T12:46:57.246Z",
   "note": "测试代码里已知的类型错误数。只许下降：这个数字变大说明新代码引入了新的类型错误，闸门会变红。改小之后请用 node scripts/test-typecheck.mjs --update 收紧基线。",
   "worstFiles": [
     {
@@ -81,8 +81,8 @@
       "count": 5
     },
     {
-      "file": "test/v028-lock-recovery.test.ts",
-      "count": 5
+      "file": "test/helpers.ts",
+      "count": 4
     }
   ]
 }

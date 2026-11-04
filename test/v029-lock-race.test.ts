@@ -68,7 +68,7 @@ const tokenIn = (raw: string): string | undefined => {
   }
 }
 
-test('复现：写入前锁被别人接管，必须拒绝写入（v0.2.9）', async () => {
+test('复现：写入前锁被别人接管，必须拒绝写入（v0.2.9）', async (t) => {
   // The precise window. `decide` runs after the document has been read and before the
   // write, which is exactly where an `await` lets a peer reclaim. Overwriting the lock
   // file inside the callback reproduces that moment with no timing involved at all.
@@ -90,7 +90,7 @@ test('复现：写入前锁被别人接管，必须拒绝写入（v0.2.9）', as
       threw = error
     }
 
-    console.log('  transact:', threw === undefined ? 'RESOLVED（不该）' : `threw ${(threw as { code?: string }).code}`)
+    t.diagnostic('  transact:' + ' ' + threw === undefined ? 'RESOLVED（不该）' : `threw ${(threw as { code?: string }).code}`)
 
     assert.notEqual(threw, undefined, '锁在写入前被接管时，事务必须拒绝写入')
     assert.ok(threw instanceof StoreError)
@@ -106,7 +106,7 @@ test('复现：写入前锁被别人接管，必须拒绝写入（v0.2.9）', as
   }
 })
 
-test('复现：mutate 在同一个窗口里也必须拒绝（v0.2.9）', async () => {
+test('复现：mutate 在同一个窗口里也必须拒绝（v0.2.9）', async (t) => {
   // `mutate` takes the same path, but its callback receives no lock handle. The
   // injection still works: the callback runs inside the lock, after the read.
   const { dir, done } = tempDir()
@@ -126,7 +126,7 @@ test('复现：mutate 在同一个窗口里也必须拒绝（v0.2.9）', async (
       threw = error
     }
 
-    console.log('  mutate:', threw === undefined ? 'RESOLVED（不该）' : `threw ${(threw as { code?: string }).code}`)
+    t.diagnostic('  mutate:' + ' ' + threw === undefined ? 'RESOLVED（不该）' : `threw ${(threw as { code?: string }).code}`)
     assert.notEqual(threw, undefined, 'mutate 也必须复核所有权')
     assert.equal(readFileSync(statePath(dir), 'utf8'), before, '拒绝写入时磁盘必须保持原样')
   } finally {
@@ -197,7 +197,7 @@ test('基线：活着的持有者即便超时也不回收（v0.2.8 回归，v0.2
   }
 })
 
-test('回收者必须自己赢下路径：三方竞争下只有一方能写（v0.2.9）', async () => {
+test('回收者必须自己赢下路径：三方竞争下只有一方能写（v0.2.9）', async (t) => {
   // Deterministic version of the "reclaim empties the path" hazard, played out with
   // real processes but with the timing pinned: the peer waits for the specific stale
   // lock to disappear, then takes the path. The store must end up either owning the
@@ -257,8 +257,8 @@ test('回收者必须自己赢下路径：三方竞争下只有一方能写（v0
     await new Promise((resolve) => child.on('close', resolve))
 
     const after = readFileSync(statePath(dir), 'utf8')
-    console.log(`  peer: ${out || '(none)'}`)
-    console.log(`  store: ${threw === undefined ? 'wrote' : `refused ${(threw as { code?: string }).code}`}`)
+    t.diagnostic(`  peer: ${out || '(none)'}`)
+    t.diagnostic(`  store: ${threw === undefined ? 'wrote' : `refused ${(threw as { code?: string }).code}`}`)
 
     // Whatever happened, the document must be valid and must not contain a half-write.
     JSON.parse(after)
