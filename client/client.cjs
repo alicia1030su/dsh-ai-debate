@@ -3126,6 +3126,29 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      const linkForm = h(
+        'div',
+        { className: 'dsd-sect' },
+        h('p', { className: 'dsd-hint' }, t('workbenchLinkLabel')),
+        h('input', {
+          type: 'text',
+          className: 'dsd-field',
+          value: draftUrl,
+          disabled: busy,
+          onChange: (event) => setDraftUrl(event.target.value),
+        }),
+        h(
+          'button',
+          {
+            type: 'button',
+            className: 'dsd-btn',
+            disabled: busy || draftUrl.trim() === '',
+            onClick: () => store.runWorkbenchAction('analyze-thread', { url: draftUrl.trim() }),
+          },
+          busy ? t('workbenchWorking') : t('workbenchAnalyze'),
+        ),
+      )
+
       if (read.state === 'failed') {
         return h(
           'div',
@@ -3135,7 +3158,9 @@ window.__ModuleLoader__.load({
         )
       }
       if (!view || typeof view !== 'object') {
-        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('workbenchHint')))
+        // v0.2.25: keep the link field here. Returning only a hint left a first-time
+        // owner with no way to start a read — the one control this tab exists for.
+        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('workbenchHint')), linkForm)
       }
       if (Array.isArray(view.blockers) && view.blockers.length > 0 && !view.workbench) {
         return h(
@@ -3148,7 +3173,7 @@ window.__ModuleLoader__.load({
 
       const wb = view.workbench
       if (!wb) {
-        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('workbenchNoBuild')))
+        return h('div', { className: 'dsd-sect' }, title, h('p', { className: 'dsd-hint' }, t('workbenchNoBuild')), linkForm)
       }
 
       const outcomeLabel = {
@@ -3417,29 +3442,6 @@ window.__ModuleLoader__.load({
       // "Collect" and "generate" spend work but change nothing on the platform. "Publish" is
       // irreversible, so it is only offered when the derived state says an approval still binds
       // the bytes *and* the capability gate would pass — and even then the server re-checks.
-      const linkForm = h(
-        'div',
-        { className: 'dsd-sect' },
-        h('p', { className: 'dsd-hint' }, t('workbenchLinkLabel')),
-        h('input', {
-          type: 'text',
-          className: 'dsd-field',
-          value: draftUrl,
-          disabled: busy,
-          onChange: (event) => setDraftUrl(event.target.value),
-        }),
-        h(
-          'button',
-          {
-            type: 'button',
-            className: 'dsd-btn',
-            disabled: busy || draftUrl.trim() === '',
-            onClick: () => store.runWorkbenchAction('analyze-thread', { url: draftUrl.trim() }),
-          },
-          busy ? t('workbenchWorking') : t('workbenchAnalyze'),
-        ),
-      )
-
       const step = wb.step
       // Generated locally rather than reusing the `newest` declared further down: these
       // controls are built before that binding exists, and reading it here threw the whole

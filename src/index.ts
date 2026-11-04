@@ -1592,7 +1592,17 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
       if (session === undefined) {
         // Nothing collected yet. `deriveWorkbenchState` already answers "paste a link" for this
         // case, so the page gets the same shape it gets for a live session.
-        return { ok: true, sessionId: undefined, ...deriveWorkbenchState({ approvalApplies: false }) } as never
+        //
+        // v0.2.25: it has to be the *same shape*, which means under `workbench`. This used to
+        // spread the derived state at the top level while the session branch nested it, so the
+        // client's `view.workbench` was undefined on a fresh install. The page then rendered
+        // 「当前构建没有接上工作台」 — a false statement about the build — and, worse, skipped
+        // the link field entirely, so a first-time owner had no way to start a read at all.
+        return {
+          ok: true,
+          sessionId: undefined,
+          workbench: deriveWorkbenchState({ approvalApplies: false }),
+        } as never
       }
 
       const platform = session.platform
