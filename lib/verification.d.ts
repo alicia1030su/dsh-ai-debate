@@ -76,6 +76,14 @@ export interface VerificationAuthorization {
      */
     readonly replyToPostId?: string;
     /**
+     * Display name of the person being answered, when the authorisation names one.
+     *
+     * Tieba states the answered person only as a name (`回复 X：`), never as a post id, so
+     * this is the strongest fact available for checking that a nested reply landed under
+     * the intended comment rather than merely under the right floor.
+     */
+    readonly replyToAuthorName?: string;
+    /**
      * The exact reply text, pre-approved by the owner.
      *
      * Required rather than generated: the point of verification is to observe what

@@ -54,6 +54,8 @@ for (const [key, value] of [
 interface Panel {
   readonly VerifySection: (props: Record<string, unknown>) => unknown
   readonly calls: { url: string; method: string; body?: string }[]
+  /** The card store, for the tests that must check a *trigger* rather than a render. */
+  readonly store: Record<string, unknown>
 }
 
 function loadPanel(): Panel {
@@ -104,6 +106,9 @@ function loadPanel(): Panel {
   return {
     VerifySection: exports['VerifySection'] as Panel['VerifySection'],
     calls,
+    // The card store is what owns `setTab`, so the trigger for the verification read can be
+    // asserted directly rather than inferred from a rendered sentence.
+    store: (exports['__createCardStore'] as () => Record<string, unknown>)(),
   }
 }
 
@@ -174,15 +179,23 @@ test('读失败渲染成错误，不是「还没有记录」', async () => {
   }
 })
 
-test('从没读过时不假装读过', async () => {
-  const { text, unmount } = await render({
+test('从没读过时不假装读过，并且给得出能读一次的办法', async () => {
+  const { text, buttons, unmount } = await render({
     verificationState: { state: 'idle' },
     verification: null,
     verificationRun: null,
   })
   try {
-    assert.match(text, /verifyHint/, '未读状态应当解释这个区块做什么，而不是给一个空列表')
-    assert.doesNotMatch(text, /verifyNoRecords/)
+    // v0.2.26: this used to assert `verifyHint` — a paragraph describing the feature — with
+    // no control at all. That was the exact shape of the GUI blocker: the page explained what
+    // verification is and offered no way to start it, and `loadVerification` had no caller.
+    // "Not read yet" is now said in those words, and the read is a button.
+    assert.match(text, /verifyNotRead/, '未读就要说未读，不能拿一段功能介绍顶替状态')
+    assert.doesNotMatch(text, /verifyNoRecords/, '没读过却显示「还没有验收过」，这是本轮要消灭的那类错误')
+    assert.ok(
+      buttons.includes('verifyRead'),
+      `未读状态必须给一次读取入口，实际按钮：${buttons.join(' / ')}`,
+    )
   } finally {
     unmount()
   }
@@ -279,4 +292,80 @@ test('验收在平台之后有自己的标签页，不是藏在平台列表里',
   assert.match(SOURCE, /\{ id: 'verify', label: 'tabVerify' \}/, '验收必须是独立标签页')
   assert.match(SOURCE, /tabVerify: '验收'/, '中文标签要存在')
   assert.match(SOURCE, /tabVerify: 'Verification'/, '英文标签要存在')
+})
+
+// ── v0.2.26: two defects that made this panel unreachable ────────────────────
+//
+// The GUI run ended on a page that showed this section's heading and its one-sentence
+// description, then stopped. Both causes below are product bugs, not test bugs, and each
+// one alone was enough to make the panel impossible to use.
+
+test('打开验收页签必须真的去读一次，而不是停在一个永远不来的空视图上', async () => {
+  // The read had exactly one caller: the run handler, whose button only exists once a view
+  // is present. That is a cycle with no entry point, and it rendered as "heading + hint,
+  // forever". The tab switch is the entry point that was missing.
+  const store = loadPanel().store
+  const loads: string[] = []
+  store['view'] = { platforms: [{ id: 'tieba', displayName: '贴吧', implemented: true, active: true }] }
+  store['loadVerification'] = async (platform: string) => {
+    loads.push(platform)
+  }
+  await (store as { setTab: (tab: string) => void }).setTab('verify')
+  // `setTab` starts the read without awaiting it (the tab strip must respond instantly), so
+  // give the microtask a turn rather than asserting on the promise we do not have.
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(loads, ['tieba'], `切到验收页必须读一次当前平台，实际读取：${JSON.stringify(loads)}`)
+})
+
+test('验收表单能选 comment.reply，并因此显示父楼层与目标评论', async () => {
+  const panel = loadPanel()
+  const container = dom.window.document.createElement('div')
+  dom.window.document.body.appendChild(container)
+  const root = createRoot(container as unknown as HTMLElement)
+  const originalError = console.error
+  console.error = () => undefined
+  try {
+    root.render(
+      React.createElement(
+        panel.VerifySection as never,
+        {
+          t: (key: string) => key,
+          state: READY_EMPTY,
+          ...READY_EMPTY,
+          store: { runVerification: async () => undefined, refreshVerification: async () => undefined },
+        } as never,
+      ),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 60))
+
+    // The capability决定 which fields appear. Before this, it was hard-wired to
+    // `comment.publish`, so the two parent fields could never be rendered at all — the
+    // workbench's `comment.reply` could not be verified through the UI by any sequence
+    // of clicks, and it stayed blocked by `capability_not_proven` forever.
+    const select = [...container.querySelectorAll('select')].find((node) =>
+      [...node.querySelectorAll('option')].some((option) => option.value === 'comment.reply'),
+    )
+    assert.ok(select, '表单里必须有能力选择器，否则 comment.reply 永远验不了')
+    const values = [...Array.from((select as HTMLSelectElement).options)].map((option) => option.value)
+    assert.ok(values.includes('comment.reply'), `能力选项里要有 comment.reply，实际：${values.join(',')}`)
+
+    const before = container.textContent ?? ''
+    assert.doesNotMatch(before, /verifyFieldFloor/, '默认是发表新评论时不该出现父楼层字段')
+
+    const setter = Object.getOwnPropertyDescriptor(
+      dom.window.HTMLSelectElement.prototype,
+      'value',
+    )?.set
+    setter?.call(select, 'comment.reply')
+    select!.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    await new Promise((resolve) => setTimeout(resolve, 60))
+
+    const after = container.textContent ?? ''
+    assert.match(after, /verifyFieldFloor/, '选了回复评论就必须出现「要回复的楼层 id」')
+    assert.match(after, /verifyFieldReplyTo/, '选了回复评论就必须出现「要回复的那条评论 id」')
+  } finally {
+    console.error = originalError
+    root.unmount()
+    container.remove()
+  }
 })

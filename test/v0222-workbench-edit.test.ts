@@ -122,7 +122,16 @@ test('编辑正文会重算哈希、升版本、清掉批准与安全评估', as
     assert.notEqual(stored.textHash, 'hash-old', '正文改了哈希必须跟着变')
     assert.equal(stored.candidateVersion, 2, '版本要升：重新生成与手工编辑都不该复用旧批准')
     assert.equal(stored.approved, false, '编辑之后必须变成未批准')
-    assert.equal(stored.security, undefined, '安全评估是针对旧正文的，改了正文就不能继续沿用')
+    // The old assertion was `security === undefined`: the assessment described the old
+    // prose, so clearing it looked like the honest move. Nothing re-assessed afterwards,
+    // and the publish path refuses a candidate with no assessment — so a single edit made
+    // the candidate permanently unpublishable, which is how the browser run got stuck at
+    // 「这条候选没有安全评估快照，无法创建批准」.
+    //
+    // What must hold is "the old verdict is not reused", and that is what is asserted now:
+    // a fresh assessment exists, and its fingerprint is not the one the old text produced.
+    assert.ok(stored.security !== undefined, '编辑之后应当立刻重新评估，而不是留空')
+    assert.notEqual(stored.security?.fingerprint, 'fp-1', '不能沿用旧正文的评估')
   } finally {
     done()
   }

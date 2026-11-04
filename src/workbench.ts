@@ -215,6 +215,17 @@ export interface WorkbenchState {
     readonly candidates: number
   }
   /**
+   * The session this view describes (v0.2.26).
+   *
+   * The client has always posted `wb.sessionId` back with 「用这条」,
+   * 「生成候选」 and the publish button, and the view never carried it — so the button's
+   * `disabled` test (`wb.sessionId === undefined`) was permanently true. The control
+   * rendered as enabled, took the click, and did nothing. That is why the whole second
+   * half of the workbench was unreachable in a browser while the server routes worked
+   * fine when called directly.
+   */
+  readonly sessionId?: string
+  /**
    * The comments this session actually read, so the owner can pick the one to answer
    * (v0.2.24).
    *
@@ -436,6 +447,7 @@ export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
   }
 
   return {
+    sessionId: session?.id,
     step,
     steps: buildSteps(step, doneFlags),
     blockers,
@@ -466,7 +478,18 @@ export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
           target: {
             threadId: session.threadId,
             postId: current.targetPostId,
-            kind: session.targetKind ?? 'nested',
+            // ## The candidate's snapshot decides, not the session (v0.2.26)
+            //
+            // `session.targetKind` describes how the session was *summoned* — a floor post,
+            // usually. Once the owner picks a nested comment in the workbench, the reply goes
+            // out as a nested reply: the publish path reads `candidate.targetSnapshot`, and
+            // the capability gate follows it to `comment.reply`. This line kept reading the
+            // session, so the page said 「kind=楼层」 and 「comment.publish」 next to a real
+            // nested reply — the page and the network disagreed about what was being sent.
+            //
+            // The snapshot wins when present; the session is the fallback for candidates
+            // written before snapshots existed.
+            kind: current.targetSnapshot?.targetKind ?? session.targetKind ?? 'nested',
             ...(session.opponentName === undefined ? {} : { authorName: session.opponentName }),
           },
         }),
@@ -681,6 +704,19 @@ export function describeTargetIdentity(
  *
  * `undefined` approval means "nothing to compare", which is a refusal, not a pass.
  */
+/**
+ * Compare two body hashes produced by different functions.
+ *
+ * One is 64 hex chars over the exact bytes (`hashText`); the other is 32 over the
+ * whitespace-normalised text (`contentHash`). Same body, different digest — so comparing
+ * them directly answers "different" for every pair, which is how every approval used to
+ * invalidate itself the moment it was granted. Comparing a common prefix is all that can
+ * be done without recomputing, and `publishCandidate` re-checks the full text before sending.
+ */
+function normalizeHashForCompare(hash: string): string {
+  return hash.trim().toLowerCase().slice(0, 32)
+}
+
 export function approvalStillApplies(input: {
   readonly candidate: Pick<StoredCandidate, 'replyId' | 'textHash' | 'candidateVersion' | 'targetPostId' | 'approved'>
   readonly approval?: {
@@ -706,7 +742,22 @@ export function approvalStillApplies(input: {
       reason: `候选版本已从 ${approval.candidateVersion} 变成 ${candidate.candidateVersion}（重新生成过），旧批准不再适用`,
     }
   }
-  if (approval.textHash !== undefined && approval.textHash !== candidate.textHash) {
+  // ## Compare hashes of the same kind (v0.2.26)
+  //
+  // Two hashes describe a body and they are not interchangeable:
+  //
+  // - `candidate.textHash` is `contentHash` — whitespace-normalised, truncated to 32 hex.
+  // - an approval record's `textHash` is `hashText` — the full sha256 of the exact bytes.
+  //
+  // They were compared directly, so they *never* matched. Every approval therefore read as
+  // 「正文在批准之后被修改过」 one screen after being granted, the step fell back to
+  // `approve`, and the publish button never appeared. Both values are legitimate for their
+  // own purpose (the record binds exact bytes; the candidate is checked after normalising),
+  // so the comparison normalises the same way instead of changing either record.
+  if (
+    approval.textHash !== undefined &&
+    normalizeHashForCompare(approval.textHash) !== normalizeHashForCompare(candidate.textHash)
+  ) {
     return { applies: false, reason: '正文在批准之后被修改过，旧批准不再适用' }
   }
   if (approval.targetPostId !== undefined && approval.targetPostId !== candidate.targetPostId) {

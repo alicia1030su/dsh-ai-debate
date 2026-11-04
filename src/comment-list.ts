@@ -45,11 +45,25 @@ function truncate(text: string): { text: string; truncated: boolean } {
 function identityOf(options: {
   readonly authorSource: string | undefined
   readonly conflicted: boolean
+  /** The login name, when the surface published one. */
+  readonly authorId: string | undefined
+  /** The numeric account id, when the surface published one. */
+  readonly numericUid: string | undefined
 }): 'verified' | 'unverified' | 'conflicted' {
   if (options.conflicted) return 'conflicted'
-  // No declared source means we know *some* account string but not which namespace it
-  // belonged to. That is `unverified`, and calling it anything else would be the exact
-  // promotion v0.2.23 removed.
+  // ## A source label is not an identity
+  //
+  // v0.2.25 returned `verified` whenever `authorSource` was set, and `comment_page`
+  // always sets one — even for a row that carries no `username` and no numeric id. The
+  // workbench then labelled 「路过的匿名 · 身份已核验」, which claims to know who spoke
+  // when the only thing known is where the row came from.
+  //
+  // Verified now requires an actual identifier: a login name or a numeric account id.
+  // Provenance alone says the *source* is trustworthy, not that the author is known.
+  const hasIdentifier =
+    (options.authorId !== undefined && options.authorId !== '') ||
+    (options.numericUid !== undefined && options.numericUid !== '')
+  if (!hasIdentifier) return 'unverified'
   if (options.authorSource === undefined || options.authorSource === '') return 'unverified'
   return 'verified'
 }
@@ -81,6 +95,8 @@ export function buildCommentList(collected: CollectedThread): CommentList {
       identity: identityOf({
         authorSource: floor.authorSource,
         conflicted: conflicted.has(floor.postId),
+        authorId: floor.authorId,
+        numericUid: floor.authorNumericUid,
       }),
       text: body.text,
       ...(body.truncated ? { truncated: true } : {}),
@@ -102,6 +118,8 @@ export function buildCommentList(collected: CollectedThread): CommentList {
         identity: identityOf({
           authorSource: reply.authorSource,
           conflicted: conflicted.has(reply.postId),
+          authorId: reply.authorId,
+          numericUid: reply.authorNumericUid,
         }),
         text: nestedBody.text,
         ...(nestedBody.truncated ? { truncated: true } : {}),

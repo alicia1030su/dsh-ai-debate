@@ -376,22 +376,77 @@ export async function readBackVerification(
   const textMatched = typeof body === 'string' ? normalize(body) === normalize(authorization.approvedText) : false
   if (typeof body !== 'string') notes.push('回读到的回复没有正文，无法核对内容')
 
-  const authorId = context.nested ? context.nested.authorId : context.floor.authorId
-  const authorMatched = typeof authorId === 'string' && authorId === authorization.authorizedAccountId
-  if (typeof authorId !== 'string') {
+  // ## The author is checked in either namespace (v0.2.26)
+  //
+  // `authorizedAccountId` is whatever the owner bound — on Tieba, usually the numeric
+  // `user_id` from `data_editor`. A nested reply read back from `/p/comment`, however,
+  // publishes the *login name* (`username`) and, separately, a numeric `user_id`. The old
+  // comparison used only `authorId`, which is the handle, so a numeric authorization could
+  // never match a reply the same account had just posted: verification refused with
+  // 「回读到的作者是 ai_account，而授权账号是 600001」 for a reply that was correct.
+  //
+  // Both namespaces identify the same account, so either matching is a match. Neither
+  // present still refuses — "the platform did not say who" is not "it was the right one".
+  const authorHandle = context.nested ? context.nested.authorId : context.floor.authorId
+  const authorNumeric = context.nested ? context.nested.authorNumericUid : context.floor.authorNumericUid
+  const authorized = authorization.authorizedAccountId
+  const authorMatched =
+    (typeof authorHandle === 'string' && authorHandle === authorized) ||
+    (typeof authorNumeric === 'string' && authorNumeric === authorized)
+  if (typeof authorHandle !== 'string' && typeof authorNumeric !== 'string') {
     notes.push('平台没有给出这条回复的作者，无法确认是谁发的')
   } else if (!authorMatched) {
-    notes.push(`回读到的作者是 ${authorId}，而授权账号是 ${authorization.authorizedAccountId}`)
+    const seen = [authorHandle, authorNumeric].filter((v): v is string => typeof v === 'string')
+    notes.push(`回读到的作者是 ${seen.join(' / ')}，而授权账号是 ${authorized}`)
   }
 
   let parentMatched: boolean
   if (authorization.capability === 'comment.reply') {
     const nested = context.nested
-    parentMatched =
-      nested !== undefined &&
-      (authorization.authorizedFloorId === undefined || nested.parentPostId === authorization.authorizedFloorId) &&
-      (authorization.replyToPostId === undefined || nested.replyToPostId === authorization.replyToPostId)
-    if (!parentMatched) notes.push('回读到的回复没有挂在授权的楼层/评论下')
+    // ## The parent floor is checkable; the exact post it answered is not (v0.2.26)
+    //
+    // The condition used to require `nested.replyToPostId === replyToPostId`. No Tieba
+    // parser ever produces `replyToPostId` — the surface states the answered person as a
+    // display name (`回复 X：`) and never an id, and `grep -c replyToPostId src/platforms/
+    // tieba/parse.ts` is 0. So the check was unsatisfiable: every `comment.reply`
+    // verification ended 「回读到的回复没有挂在授权的楼层/评论下」 and the capability
+    // could never reach `supported`, no matter how correct the reply was.
+    //
+    // It is replaced with what the data can actually prove: the reply must hang under the
+    // authorised floor, and where the platform names who was answered, that name must be
+    // the target's author. The name is weaker than an id, so a *mismatch* refuses and a
+    // *missing* name is reported as unconfirmed rather than counted as agreement.
+    const floorOk =
+      authorization.authorizedFloorId === undefined ||
+      nested?.parentPostId === authorization.authorizedFloorId
+
+    // When the read *does* state which comment was answered, that id is authoritative and
+    // a mismatch is a failure — a reply under the right floor but aimed at a different
+    // comment is not the reply the owner authorised. Strictness here is cheap; a
+    // misattributed reply is not.
+    const replyToOk =
+      authorization.replyToPostId === undefined ||
+      nested?.replyToPostId === undefined ||
+      nested.replyToPostId === authorization.replyToPostId
+
+    // Where the platform names the answered person instead of the post (Tieba renders
+    // `回复 X：`), fall back to the name — a mismatch refuses, and an absent name is
+    // reported as unconfirmed rather than counted as agreement.
+    const expectedName = authorization.replyToAuthorName
+    const namedReplyTo = nested?.replyToName
+    const nameOk =
+      expectedName === undefined || expectedName === '' || namedReplyTo === undefined || namedReplyTo === expectedName
+
+    parentMatched = nested !== undefined && floorOk && replyToOk && nameOk
+    if (!parentMatched) {
+      notes.push(
+        floorOk
+          ? '回读到的回复没有挂在授权的评论下'
+          : '回读到的回复没有挂在授权的楼层下',
+      )
+    } else if (expectedName !== undefined && expectedName !== '' && namedReplyTo === undefined) {
+      notes.push('平台没有说明这条回复回的是谁，只能按楼层确认位置')
+    }
   } else {
     parentMatched = context.nested === undefined
     if (!parentMatched) notes.push('回读到的内容不是楼层（期望的是一条新的评论）')
