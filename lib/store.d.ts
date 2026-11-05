@@ -183,6 +183,57 @@ export interface StoredReadQuality {
 export declare const MAX_STORED_COMMENTS = 400;
 /** Cap on stored body length per comment. */
 export declare const MAX_STORED_COMMENT_CHARS = 600;
+/**
+ * 一条人工导入的发言，持久化的形状（v0.2.30）。
+ *
+ * 与 `import/manual.ts` 的 `ImportedComment` 结构相同，但**在这里重新声明**：
+ * 持久化层不应该依赖解析层。两边的字段一旦不同，`import/session.ts` 的
+ * `StoredImport` 别名就会编译不过——这是刻意的，它让「解析多了个字段但没存」
+ * 变成类型错误而不是静默丢失。
+ */
+export interface StoredManualComment {
+    readonly id: string;
+    readonly author: string;
+    readonly authorId?: string;
+    readonly text: string;
+    readonly createdAt?: string;
+    /** 这条在回复哪一条（id 或昵称，由 `replyToKind` 说明）。 */
+    readonly replyTo?: string;
+    readonly replyToKind?: 'id' | 'name';
+}
+/**
+ * 一份人工导入的讨论（v0.2.30 §一）。
+ *
+ * ## 为什么必须落盘
+ *
+ * 离线流程从「确认导入」到「生成候选」之间隔着若干次页面刷新，而生成阶段要
+ * 重新投影整份内容去验证目标。没有这份存档，刷新就等于丢掉刚才导进来的东西——
+ * 而工作台只会显示「这个会话没有评论列表」，看起来像导入从来没成功过。
+ *
+ * ## 为什么带 `droppedComments`
+ *
+ * 存档有上限。超出的部分会被丢掉，而**丢掉这件事本身必须被记下来**：
+ * 悄悄截断会让用户刷新后看到一个更短、但看起来同样权威的讨论。
+ */
+export interface StoredManualImport {
+    readonly source: 'text' | 'json' | 'file';
+    readonly title: string;
+    /** 用户填的原帖链接，只作展示，从不据此读取。 */
+    readonly url?: string;
+    readonly importedAt: string;
+    readonly root: {
+        readonly id?: string;
+        readonly author: string;
+        readonly authorId?: string;
+        readonly text: string;
+        readonly createdAt?: string;
+    };
+    readonly comments: readonly StoredManualComment[];
+    /** 因上限没保存的条数。0 表示全都存下了。 */
+    readonly droppedComments: number;
+    /** 正文被截断的条数。 */
+    readonly truncatedComments: number;
+}
 /** One discussion session, scoped to a single thread + owner + opponent. */ export interface StoredSession {
     readonly id: string;
     readonly platform: string;
@@ -324,6 +375,32 @@ export declare const MAX_STORED_COMMENT_CHARS = 600;
     readonly publishedPostIds: readonly string[];
     /** Reply texts already sent, for repetition checks. */
     readonly sentTexts: readonly string[];
+    /**
+     * 这份会话的讨论是人工导入的（v0.2.30）。
+     *
+     * ## 它的存在本身就是一条安全边界
+     *
+     * 有 `imported` 的会话，平台一定是 `manual`，注册表里没有这个平台，
+     * 所以 `adapterFor` 会抛错——**它无法触达任何真实平台**。发表路径另外还有
+     * 一道显式拒绝（`runPublish` 看到 `imported` 直接返回 `refused`），
+     * 因为「结构上够不到」和「明确说了不做」是两道独立的门，少一道都不算边界。
+     *
+     * 可选：真实读取的会话没有这个字段，与之前完全一样。
+     */
+    readonly imported?: StoredManualImport;
+    /**
+     * 这份讨论里出现过的人，分析时算出来的（v0.2.30）。
+     *
+     * 存下来是为了让离线工作台能显示「谁在跟谁吵」而不必重新解析：
+     * 页面拿不到 `Dispute`，而重新跑一遍分析器会在每次刷新时重算一遍可能已经
+     * 变化的内容。它只用于展示，任何判断都不读它。
+     */
+    readonly participants?: readonly {
+        readonly name: string;
+        readonly postCount: number;
+        readonly isOwner: boolean;
+        readonly isOpponent: boolean;
+    }[];
     readonly error?: string;
     readonly createdAt: string;
     readonly updatedAt: string;
