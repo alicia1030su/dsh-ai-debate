@@ -167,11 +167,226 @@ export function __setCliInvocation(next: CliInvocation | undefined): void {
  * argument array stays an array; nothing is concatenated into a command line, and the
  * only value that changes is the program's resolved name.
  */
+/**
+ * The only CLI subcommands this build is allowed to run.
+ *
+ * ## Why a list, when `publishReply` already throws (v0.2.29)
+ *
+ * The adapter refuses to publish. That protects the paths that go *through the adapter*
+ * — and nothing else. Every read in this file ends up in `runCli`, which is a general
+ * "spawn this argv" function: whoever can reach it can reach `statuses` / `comments` /
+ * `users` and, on a CLI that grows a write command, would reach that too. A boundary
+ * enforced only at the layer above will be bypassed by the first new caller.
+ *
+ * So the guard sits at the point of execution, where it cannot be stepped around.
+ *
+ * ## What is on the list, and why each entry is there
+ *
+ * Only what this build actually calls, plus the two local readiness commands. Nothing
+ * is listed "in case it is useful later" — an unused entry is an unused capability, and
+ * the way an allowlist rots is by accumulating entries nobody audited.
+ *
+ * - `version` / `doctor` — local checks, no network write, no quota.
+ * - `commands list` / `commands show` — catalog discovery; the manual's own mechanism.
+ * - `auth whoami` — reads the bound identity. Listed so the identity check does not have
+ *   to shell out around the guard; it cannot modify anything.
+ *
+ * ## Why denial is checked before spawn, not after
+ *
+ * A rejected command that still ran is a write that happened. The check therefore
+ * happens in `runCli` *before* `execFile`, and returns a classified refusal in the same
+ * shape as every other failure — so a caller cannot distinguish "blocked" from "the CLI
+ * said no" by the shape of the result, only by the message, which names the guard.
+ */
+export type CliVerb = 'version' | 'doctor' | 'commands' | 'auth'
+
+/**
+ * The read commands, expressed as `group action` pairs.
+ *
+ * A `commands` call is allowed only for `list` / `show`; the pair is checked, not just
+ * the verb, because `commands` is a group name that could later grow a mutating action.
+ */
+const ALLOWED_INVOCATIONS: readonly { readonly verb: CliVerb; readonly action?: string }[] = [
+  { verb: 'version' },
+  { verb: 'doctor' },
+  { verb: 'commands', action: 'list' },
+  { verb: 'commands', action: 'show' },
+  { verb: 'auth', action: 'whoami' },
+]
+
+/**
+ * The command groups this CLI actually has, taken from its own `GROUP_DESCRIPTIONS`.
+ *
+ * ## Why an unknown group must be refused even when its action looks like a read (v0.2.29)
+ *
+ * The first version of the guard let anything whose action began with `list`/`show`
+ * through, reasoning that "the account's catalog decides what is callable". That is true
+ * for *whether* a command works, and false for *whether we should try*: a group we have
+ * never seen is a group whose actions we have never read, so `mystery list` would be
+ * executed on the strength of its name. Default-deny is the task book's rule and also the
+ * only rule that stays true when the CLI grows a group.
+ *
+ * These nine are the groups `@weibo-ai/weibo-cli@0.9.8` ships, read out of its
+ * `help.js`. A future version that adds a group will be refused until this list is
+ * updated — which is the intended behaviour: adding a capability should require a
+ * deliberate edit, not arrive silently.
+ */
+const KNOWN_GROUPS: ReadonlySet<string> = new Set([
+  'attitudes',
+  'comments',
+  'friendships',
+  'search',
+  'short_url',
+  'statuses',
+  'tags',
+  'users',
+  'wbindex',
+])
+
+/**
+ * What a command name is allowed to look like.
+ *
+ * ## The `list && create` case (v0.2.29)
+ *
+ * `execFile` takes an argument array and never involves a shell, so a segment like
+ * `list && create` is passed through as one literal argv entry and does nothing. That is
+ * a real property and it is not the one being relied on here: the guard is supposed to
+ * answer "is this a command we recognise", and a string carrying a shell operator is
+ * evidence that it is not. Letting it through because a *different* layer happens to be
+ * safe is how a boundary quietly becomes "safe as long as nobody changes this other file".
+ *
+ * The pattern also rejects `--`-prefixed strings, path separators and quotes, so nothing
+ * that could be mistaken for a flag or a path is ever read as a command name.
+ */
+const COMMAND_SEGMENT_PATTERN = /^[A-Za-z][A-Za-z0-9_]*(\/[A-Za-z][A-Za-z0-9_]*)?$/
+
+/**
+ * Read verbs the *business* commands use, checked as the action segment.
+ *
+ * These are not hardcoded endpoint names — the account's own catalog decides which one
+ * is actually callable (see `classifyCommands`). This list only answers "is this the
+ * shape of a read", so that the executor can refuse a write verb it has never seen.
+ * A name that is neither here nor in the catalog is refused, never executed.
+ *
+ * Matched on the segment before any `/`: the CLI's own actions include suffixes such as
+ * `show_batch/biz`, where `biz` is a scope qualifier rather than a different verb. The
+ * `_batch` suffix is part of the verb itself (a batch form of the same read), so it is
+ * allowed explicitly rather than by a looser prefix match — `showanything` must not pass.
+ */
+const READ_ACTION_PATTERN =
+  /^(list|show|get|read|detail|search|query|counts?|timeline|expand)(_batch)?$/i
+
+/**
+ * Verbs that would change something at the platform, named so the refusal can be
+ * specific instead of "not allowed".
+ *
+ * This is a **deny** list that adds clarity, not the boundary itself: the boundary is
+ * "only `READ_ACTION_PATTERN` actions may run". Listing the dangerous ones separately
+ * means the audit trail says which write was attempted, which matters when a prompt
+ * injection is trying them.
+ */
+const WRITE_ACTION_PATTERN =
+  /^(create|post|publish|send|reply|comment|repost|forward|like|unlike|favourite|favorite|delete|destroy|remove|update|edit|follow|unfollow|block|report|upload)/i
+
+/** What the guard decided about one argv. */
+export interface CliGuardVerdict {
+  readonly allowed: boolean
+  /** Why it was refused, in words that name the command and the rule. */
+  readonly reason?: string
+  /** True when the refused verb looks like a write; false when it is merely unknown. */
+  readonly looksLikeWrite?: boolean
+}
+
+/**
+ * Decide whether an argv may be executed.
+ *
+ * Pure and exported so the rule can be tested directly, and so a caller can ask before
+ * building a command. `runCli` calls it too — the exported version is for tests and for
+ * pre-flight checks, not a second implementation.
+ */
+export function guardCliInvocation(args: readonly string[]): CliGuardVerdict {
+  const [verb, second] = args
+  if (verb === undefined) {
+    return { allowed: false, reason: '拒绝执行：没有指定任何命令。' }
+  }
+
+  // `commands list|show` and `auth whoami` are the discovery/identity surface.
+  const entry = ALLOWED_INVOCATIONS.find(
+    (candidate) => candidate.verb === verb && (candidate.action === undefined || candidate.action === second),
+  )
+  if (entry !== undefined) return { allowed: true }
+
+  // ## Business reads: `<group> <action> [flags]`
+  //
+  // Two independent conditions, both required:
+  //   1. the group is one this CLI actually has, and
+  //   2. the action's verb is a read, not a write.
+  //
+  // Checking only the action let `mystery list` through — a group whose actions were
+  // never read, executed because its second word happened to look harmless.
+  if (second !== undefined && !second.startsWith('--')) {
+    // A segment that is not a plain name (contains `&&`, `;`, `|`, a path separator)
+    // is not a command we know, whatever it starts with.
+    if (!COMMAND_SEGMENT_PATTERN.test(second)) {
+      return {
+        allowed: false,
+        reason: `拒绝执行 weibo-cli ${verb} ${second}：命令名不是合法的命令标识。`,
+      }
+    }
+    const verbSegment = second.split('/')[0]!.toLowerCase()
+    if (WRITE_ACTION_PATTERN.test(verbSegment)) {
+      return {
+        allowed: false,
+        reason:
+          `拒绝执行 weibo-cli ${verb} ${second}：本版只做真实只读接入，` +
+          '发表、评论、转发、点赞、删除等写操作一律不执行。这是代码里的边界，不是界面上的。',
+        looksLikeWrite: true,
+      }
+    }
+    if (!KNOWN_GROUPS.has(verb.toLowerCase())) {
+      return {
+        allowed: false,
+        reason: `拒绝执行 weibo-cli ${verb}：这个命令分组不在已知列表内，未执行。`,
+      }
+    }
+    if (READ_ACTION_PATTERN.test(verbSegment)) return { allowed: true }
+    return {
+      allowed: false,
+      reason: `拒绝执行 weibo-cli ${verb} ${second}：这不是一个已登记的只读命令。`,
+    }
+  }
+
+  return {
+    allowed: false,
+    reason: `拒绝执行 weibo-cli ${verb}：不在只读允许列表内。`,
+  }
+}
+
 async function runCli(
   args: readonly string[],
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ code: number; stdout: string; stderr: string; errorCode?: string }> {
   type CliResult = { code: number; stdout: string; stderr: string; errorCode?: string }
+
+  // ## The guard runs before the spawn, not after (v0.2.29)
+  //
+  // A refused command that still executed is a write that already happened. Checking
+  // here means every path in this module — current and future — inherits the boundary,
+  // because `runCli` is the only way out of this process.
+  const verdict = guardCliInvocation(args)
+  if (!verdict.allowed) {
+    return {
+      code: 1,
+      stdout: '',
+      stderr: JSON.stringify({
+        success: false,
+        code: verdict.looksLikeWrite === true ? 'WRITE_FORBIDDEN' : 'COMMAND_NOT_ALLOWED',
+        message: verdict.reason ?? '拒绝执行。',
+      }),
+      errorCode: verdict.looksLikeWrite === true ? 'WRITE_FORBIDDEN' : 'COMMAND_NOT_ALLOWED',
+    }
+  }
+
 
   const attempt = (file: string, argv: readonly string[]): Promise<CliResult> =>
     new Promise((resolve) => {
@@ -300,6 +515,24 @@ function resolveWindowsEntry(): string | undefined {
  * without one (an older version, or a crash before the request).
  */
 const ERROR_CODE_STATUS: Readonly<Record<string, { status: WeiboCliStatus; message: string }>> = {
+  /**
+   * The local read-only guard refused the command (v0.2.29).
+   *
+   * Given its own code rather than folded into `failed`, because the owner needs to read
+   * 「本版不允许写操作」 and not 「调用失败，请重试」 — one of those is not a fault, and the
+   * other is the one message that would encourage someone to push harder on a blocked path.
+   */
+  WRITE_FORBIDDEN: {
+    status: 'command_unavailable',
+    message:
+      '本版只做真实只读接入，发表、评论、转发、点赞、删除等写操作不会执行。' +
+      '这条拒绝发生在调用 weibo-cli 之前，所以没有任何请求到达平台。',
+  },
+  /** The local guard refused a subcommand that is not on the read allowlist (v0.2.29). */
+  COMMAND_NOT_ALLOWED: {
+    status: 'command_unavailable',
+    message: '这条命令不在本版的只读允许列表内，未执行。',
+  },
   IP_GEO_DENIED: {
     status: 'not_authenticated',
     message: '当前网络位置被微博拒绝：请在你的常用网络环境下使用，不要通过代理访问。',

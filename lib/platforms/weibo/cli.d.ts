@@ -110,6 +110,82 @@ interface CliInvocation {
  */
 export declare function __setCliInvocation(next: CliInvocation | undefined): void;
 /**
+ * Run one CLI command and capture stdout/stderr.
+ *
+ * Uses `execFile`, which takes an argument array and spawns the binary directly — the
+ * documented way to invoke a tool without a shell. `shell` is never enabled, so no
+ * character in any argument can be reinterpreted as syntax.
+ *
+ * ## Windows cannot spawn `weibo-cli` at all, and that is not "not installed" (v0.2.28)
+ *
+ * npm installs a CLI as three shims in `node_modules/.bin`: `weibo-cli` (a POSIX shell
+ * script), `weibo-cli.cmd` (a cmd.exe batch file) and `weibo-cli.ps1`. There is **no**
+ * extension-less executable on Windows, so `execFile('weibo-cli', …)` fails with `ENOENT`
+ * even though the CLI is installed and works from a terminal — cmd.exe appends `.cmd` via
+ * `PATHEXT`, and `execFile` does not.
+ *
+ * Measured on this machine with `@weibo-ai/weibo-cli@0.9.8` installed and on PATH:
+ *
+ *     execFile('weibo-cli', ['version'])  → ENOENT, empty stderr
+ *
+ * The plugin therefore told every Windows user 「没有安装 weibo-cli」 and printed
+ * `npm install -g …` — advice they had already followed. That is worse than a missing
+ * feature: it sends the owner to re-do the one thing that was already correct.
+ *
+ * The fix keeps `shell: false` (the security property that matters) and adds exactly one
+ * fallback: when the bare name is ENOENT **on win32**, retry through the `.cmd` shim. The
+ * argument array stays an array; nothing is concatenated into a command line, and the
+ * only value that changes is the program's resolved name.
+ */
+/**
+ * The only CLI subcommands this build is allowed to run.
+ *
+ * ## Why a list, when `publishReply` already throws (v0.2.29)
+ *
+ * The adapter refuses to publish. That protects the paths that go *through the adapter*
+ * — and nothing else. Every read in this file ends up in `runCli`, which is a general
+ * "spawn this argv" function: whoever can reach it can reach `statuses` / `comments` /
+ * `users` and, on a CLI that grows a write command, would reach that too. A boundary
+ * enforced only at the layer above will be bypassed by the first new caller.
+ *
+ * So the guard sits at the point of execution, where it cannot be stepped around.
+ *
+ * ## What is on the list, and why each entry is there
+ *
+ * Only what this build actually calls, plus the two local readiness commands. Nothing
+ * is listed "in case it is useful later" — an unused entry is an unused capability, and
+ * the way an allowlist rots is by accumulating entries nobody audited.
+ *
+ * - `version` / `doctor` — local checks, no network write, no quota.
+ * - `commands list` / `commands show` — catalog discovery; the manual's own mechanism.
+ * - `auth whoami` — reads the bound identity. Listed so the identity check does not have
+ *   to shell out around the guard; it cannot modify anything.
+ *
+ * ## Why denial is checked before spawn, not after
+ *
+ * A rejected command that still ran is a write that happened. The check therefore
+ * happens in `runCli` *before* `execFile`, and returns a classified refusal in the same
+ * shape as every other failure — so a caller cannot distinguish "blocked" from "the CLI
+ * said no" by the shape of the result, only by the message, which names the guard.
+ */
+export type CliVerb = 'version' | 'doctor' | 'commands' | 'auth';
+/** What the guard decided about one argv. */
+export interface CliGuardVerdict {
+    readonly allowed: boolean;
+    /** Why it was refused, in words that name the command and the rule. */
+    readonly reason?: string;
+    /** True when the refused verb looks like a write; false when it is merely unknown. */
+    readonly looksLikeWrite?: boolean;
+}
+/**
+ * Decide whether an argv may be executed.
+ *
+ * Pure and exported so the rule can be tested directly, and so a caller can ask before
+ * building a command. `runCli` calls it too — the exported version is for tests and for
+ * pre-flight checks, not a second implementation.
+ */
+export declare function guardCliInvocation(args: readonly string[]): CliGuardVerdict;
+/**
  * Parse one JSON document out of CLI output.
  *
  * The CLI prints JSON when asked (`--output json`); some commands may precede it with a
