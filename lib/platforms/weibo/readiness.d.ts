@@ -58,8 +58,41 @@ export type ReadinessState =
  | 'not_applicable';
 /** 八项检查各自的标识。用字符串而不是序号：它要出现在页面的 `data-check` 里。 */
 export type ReadinessCheckId = 'installed' | 'version' | 'commands' | 'login' | 'certification' | 'activation' | 'quota' | 'last_read';
-/** 顺序即页面顺序，也是「下一步该做什么」的优先级。 */
+/** 顺序即页面顺序。 */
 export declare const READINESS_ORDER: readonly ReadinessCheckId[];
+/**
+ * 授权链的因果顺序——与 `READINESS_ORDER` **不同**，这一点是 v0.2.30 用真实
+ * CLI 状态测出来才发现的。
+ *
+ * ## 为什么不能拿展示顺序当因果顺序
+ *
+ * 2026-11 在本机用 `@weibo-ai/weibo-cli@0.9.8` 实测（登录已完成、认证与开通未完成）：
+ *
+ * ```
+ * ✓ 注册或登录: 一个天真的矿哥
+ * × 完成开发者认证
+ * × 开通服务
+ *
+ * commands list --available → { total: 75, available_count: 0, commands: [] }
+ * ```
+ *
+ * 页面展示顺序是「安装/版本/命令清单/登录/认证/开通/额度/最近读取」——命令清单排在
+ * 登录前面，因为它和「能不能读」最直接相关。但按那个顺序取第一个阻断项，得到的
+ * 结论是「命令清单不可用」。
+ *
+ * 而命令清单为空是**结果**：没有开发者认证与服务，账号本来就没有可用命令。
+ * 让用户先去查命令清单，等于让他排查一个不是原因的现象。
+ *
+ * 因果顺序是另一条链：
+ *
+ * ```
+ * 装上 → 版本对 → 登录 → 开发者认证 → 开通服务 → 才有命令 → 才能读
+ * ```
+ *
+ * `blocking` 沿这条链取第一个阻断项，用户就会得到「去完成扫脸认证」这个
+ * 真正能解开死结的下一步。
+ */
+export declare const CAUSAL_ORDER: readonly ReadinessCheckId[];
 /** 一项检查的展示形态。 */
 export interface ReadinessCheck {
     readonly id: ReadinessCheckId;

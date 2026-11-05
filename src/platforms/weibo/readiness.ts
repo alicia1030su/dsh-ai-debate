@@ -70,7 +70,7 @@ export type ReadinessCheckId =
   | 'quota'
   | 'last_read'
 
-/** 顺序即页面顺序，也是「下一步该做什么」的优先级。 */
+/** 顺序即页面顺序。 */
 export const READINESS_ORDER: readonly ReadinessCheckId[] = [
   'installed',
   'version',
@@ -80,6 +80,47 @@ export const READINESS_ORDER: readonly ReadinessCheckId[] = [
   'activation',
   'quota',
   'last_read',
+]
+
+/**
+ * 授权链的因果顺序——与 `READINESS_ORDER` **不同**，这一点是 v0.2.30 用真实
+ * CLI 状态测出来才发现的。
+ *
+ * ## 为什么不能拿展示顺序当因果顺序
+ *
+ * 2026-11 在本机用 `@weibo-ai/weibo-cli@0.9.8` 实测（登录已完成、认证与开通未完成）：
+ *
+ * ```
+ * ✓ 注册或登录: 一个天真的矿哥
+ * × 完成开发者认证
+ * × 开通服务
+ *
+ * commands list --available → { total: 75, available_count: 0, commands: [] }
+ * ```
+ *
+ * 页面展示顺序是「安装/版本/命令清单/登录/认证/开通/额度/最近读取」——命令清单排在
+ * 登录前面，因为它和「能不能读」最直接相关。但按那个顺序取第一个阻断项，得到的
+ * 结论是「命令清单不可用」。
+ *
+ * 而命令清单为空是**结果**：没有开发者认证与服务，账号本来就没有可用命令。
+ * 让用户先去查命令清单，等于让他排查一个不是原因的现象。
+ *
+ * 因果顺序是另一条链：
+ *
+ * ```
+ * 装上 → 版本对 → 登录 → 开发者认证 → 开通服务 → 才有命令 → 才能读
+ * ```
+ *
+ * `blocking` 沿这条链取第一个阻断项，用户就会得到「去完成扫脸认证」这个
+ * 真正能解开死结的下一步。
+ */
+export const CAUSAL_ORDER: readonly ReadinessCheckId[] = [
+  'installed',
+  'version',
+  'login',
+  'certification',
+  'activation',
+  'commands',
 ]
 
 /** 一项检查的展示形态。 */
@@ -417,7 +458,20 @@ export function buildReadiness(probe: ReadinessProbe): ReadinessSnapshot {
     })
   }
 
-  const blockingCheck = checks.find((check) => check.state === 'blocked')
+  /**
+   * 第一个阻断项，**按因果链**取，不按展示顺序。
+   *
+   * 详见 {@link CAUSAL_ORDER}：展示顺序把「命令清单」排在认证之前，因为它与
+   * 「能不能读」最直接相关；但命令清单为空只是认证与服务缺失的**结果**。
+   * 按展示顺序取，真实环境下得到的下一步是「去查命令清单」，而正确的下一步是
+   * 「去完成扫脸认证」。
+   */
+  const blockedIds = new Set(
+    checks.filter((check) => check.state === 'blocked').map((check) => check.id),
+  )
+  const blockingId = CAUSAL_ORDER.find((id) => blockedIds.has(id))
+  const blockingCheck =
+    blockingId === undefined ? undefined : checks.find((check) => check.id === blockingId)
   const canRead = checks
     .filter((check) => check.id !== 'quota' && check.id !== 'last_read')
     .every((check) => check.state === 'ready')

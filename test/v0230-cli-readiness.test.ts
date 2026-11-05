@@ -19,6 +19,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  CAUSAL_ORDER,
   READINESS_ORDER,
   buildReadiness,
   describeReadiness,
@@ -263,4 +264,137 @@ test('八项 17：isInstallFailure 只认 cli_missing', () => {
   for (const status of ['ok', 'not_authenticated', 'service_inactive', 'quota_exhausted', 'command_unavailable', 'failed'] as const) {
     assert.equal(isInstallFailure(status), false, `${status} 不该被当成「没装」`)
   }
+})
+
+// ---------------------------------------------------------------------------
+// 真实环境回归（2026-11 在 Windows 上用 @weibo-ai/weibo-cli@0.9.8 实测）
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组不是构造出来的场景，是**实测记录的原始状态**：
+ *
+ * ```
+ * $ weibo-cli.cmd doctor
+ * 使用准备检查
+ * ✓ 注册或登录: 一个天真的矿哥
+ * × 完成开发者认证
+ * × 开通服务
+ *
+ * $ weibo-cli.cmd commands list --available --output json
+ * { "service_status": "none", "total": 75, "available_count": 0, "commands": [] }
+ * ```
+ *
+ * 它抓到过一个只在真实环境里才暴露的缺陷：`blocking` 按**展示顺序**取第一个
+ * 阻断项，于是得到「命令清单不可用」。而命令清单为空是认证与服务缺失的
+ * **结果**——用户会去排查一个不是原因的现象，真正的下一步（扫脸认证）反而藏着。
+ *
+ * 展示顺序与因果顺序必须分开。这条测试锁住因果顺序。
+ */
+test('真实回归 1：登录已通、认证与服务未通时，blocking 指向认证而不是命令清单', () => {
+  const probe: ReadinessProbe = {
+    cliInstalled: true,
+    cliVersion: '0.9.8',
+    // 真实输出：total 75，available 0。
+    commands: { ok: true, count: 0 },
+    doctorSteps: [
+      { label: '注册或登录: 一个天真的矿哥', ok: true },
+      { label: '完成开发者认证', ok: false },
+      { label: '开通服务', ok: false },
+    ],
+    doctorExitCode: 0,
+    quota: { known: false, reason: '本进程没有查询额度（账户管理不由插件执行）。' },
+  }
+  const snapshot = buildReadiness(probe)
+
+  // 逐项都要对：登录通、认证与服务不通、命令清单不通。
+  assert.equal(snapshot.checks.find((c) => c.id === 'installed')!.state, 'ready')
+  assert.equal(snapshot.checks.find((c) => c.id === 'version')!.state, 'ready')
+  assert.equal(snapshot.checks.find((c) => c.id === 'login')!.state, 'ready')
+  assert.equal(snapshot.checks.find((c) => c.id === 'certification')!.state, 'blocked')
+  assert.equal(snapshot.checks.find((c) => c.id === 'activation')!.state, 'blocked')
+  assert.equal(snapshot.checks.find((c) => c.id === 'commands')!.state, 'blocked')
+
+  // 核心断言：blocking 必须是认证，不是命令清单。
+  assert.equal(
+    snapshot.blocking,
+    'certification',
+    'blocking 必须按因果链取第一个阻断项；命令清单为空是认证缺失的结果，不是原因',
+  )
+  assert.match(snapshot.summary!, /开发者认证/)
+  assert.doesNotMatch(snapshot.summary!, /命令清单/)
+  assert.equal(snapshot.canRead, false)
+})
+
+test('真实回归 2：登录这一行带账号名时仍被认成「登录已通」', () => {
+  // doctor 打印的是「注册或登录: 一个天真的矿哥」——冒号后面是账号名。
+  // 用词而不是位置匹配，所以带名字也不影响。
+  const probe: ReadinessProbe = {
+    ...healthy(),
+    doctorSteps: [
+      { label: '注册或登录: 任意账号名', ok: true },
+      { label: '完成开发者认证', ok: true },
+      { label: '开通服务', ok: true },
+    ],
+  }
+  assert.equal(stateOf(probe, 'login'), 'ready')
+})
+
+test('真实回归 3：能读命令清单但一条都不可用时，blocking 仍指向更早的原因', () => {
+  // 「命令清单读到了但 0 条」这一句本身是对的（CLI 确实回了 200 和一个空数组），
+  // 它只是不该被当成下一步。
+  const probe: ReadinessProbe = {
+    cliInstalled: true,
+    cliVersion: '0.9.8',
+    commands: { ok: true, count: 0 },
+    doctorSteps: [
+      { label: '注册或登录', ok: false },
+      { label: '完成开发者认证', ok: false },
+      { label: '开通服务', ok: false },
+    ],
+    doctorExitCode: 0,
+  }
+  assert.equal(buildReadiness(probe).blocking, 'login', '没登录时，连认证都无从谈起')
+  const detail = buildReadiness(probe).checks.find((c) => c.id === 'commands')!.detail
+  assert.match(detail, /一条可用命令都没有/, '命令清单这一项仍然要如实说明自己的状态')
+})
+
+test('真实回归 4：全部通过时 blocking 缺席，即使额度未知', () => {
+  const probe: ReadinessProbe = {
+    cliInstalled: true,
+    cliVersion: '0.9.8',
+    commands: { ok: true, count: 75 },
+    doctorSteps: [
+      { label: '注册或登录: 某账号', ok: true },
+      { label: '完成开发者认证', ok: true },
+      { label: '开通服务', ok: true },
+    ],
+    doctorExitCode: 0,
+    quota: { known: false, reason: '本进程没有查询额度' },
+  }
+  const snapshot = buildReadiness(probe)
+  assert.equal(snapshot.blocking, undefined)
+  assert.equal(snapshot.canRead, true)
+  assert.equal(snapshot.summary, undefined)
+})
+
+test('真实回归 5：展示顺序与因果顺序是两个常量，不能拿前者当后者', () => {
+  // 展示顺序里命令清单在登录之前（它与「能不能读」最直接相关）；
+  // 因果顺序里命令清单在最后（它由前几项共同决定）。
+  assert.ok(
+    READINESS_ORDER.indexOf('commands') < READINESS_ORDER.indexOf('login'),
+    '展示顺序：命令清单应当排在登录之前，靠近「能不能读」',
+  )
+  assert.ok(
+    CAUSAL_ORDER.indexOf('commands') > CAUSAL_ORDER.indexOf('activation'),
+    '因果顺序：命令清单必须排在服务开通之后',
+  )
+  // 两条链覆盖同一批「会阻断」的项。
+  assert.deepEqual([...CAUSAL_ORDER].sort(), [
+    'activation',
+    'certification',
+    'commands',
+    'installed',
+    'login',
+    'version',
+  ])
 })
