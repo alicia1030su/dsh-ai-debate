@@ -751,6 +751,30 @@ export function toCollectedThread(discussion: ImportedDiscussion): CollectedThre
     }
   }
 
+  // ## 同名不同人：说清我们分不开
+  //
+  // 导入内容里没有账号 id，所以两条都署名「甲」的发言会被分析器当成同一个人
+  // （这是 `indexParticipants` 的既定规则：没有账号标识时，昵称就是键）。
+  // 那不一定错——可能真的是同一个人发言两次——但用户必须知道这个假设。
+  //
+  // 不说的话，一份「两个不同的人都叫小王」的转录会显示出一个人说了很多话，
+  // 而分析出的立场是两个人的混合。
+  const nameCounts = new Map<string, number>()
+  for (const comment of discussion.comments) {
+    nameCounts.set(comment.author, (nameCounts.get(comment.author) ?? 0) + 1)
+  }
+  const duplicated = [...nameCounts.entries()].filter(([, count]) => count > 1)
+  if (duplicated.length > 0) {
+    issues.push(
+      `有 ${duplicated.length} 个名字出现了不止一次（${duplicated
+        .slice(0, 5)
+        .map(([name, count]) => `「${name}」${count} 次`)
+        .join('、')}${duplicated.length > 5 ? ' 等' : ''}）。` +
+        '导入内容里没有账号 id，所以同名发言会被当成同一个人。' +
+        '如果确实是不同的人，请改用结构化 JSON 并给每条填不同的 id。',
+    )
+  }
+
   return {
     thread,
     floors,
