@@ -59,12 +59,36 @@
 | 平台 | 状态 | 说明 |
 | --- | --- | --- |
 | 百度贴吧 | ✅ **已实现；真实发表尚未完成闭环** | 帖子 / 楼层分页 / 部分楼中楼读取 / 分析 / 人工批准 / 发表接口 / 回读核对**都有实现和测试**；但本机 IP 对贴吧持续 403，**从未在真实已登录账号上完成一次受控发表** |
-| 微博 | 🟡 **适配层已接线；真实读取仍未验证** | URL 解析、ID 规范化、ConversationGraph 转换、官方 `weibo-cli` 适配层均已实现。v0.2.12 起 Provider 真正调用 CLI（探测 → `commands show` 校验参数 → 执行读取 → `projection.ts` 投影），但本机没装 CLI、没有开发者认证、没有 OAuth 登录，**一次真实读取都没跑过**——新增测试是命令级假 CLI，不是端到端 |
+| 微博 | 🟡 **适配层已接线；真实读取仍未验证** | URL 解析、ID 规范化、ConversationGraph 转换、官方 `weibo-cli` 适配层均已实现。v0.2.12 起 Provider 真正调用 CLI（探测 → `commands show` 校验参数 → 执行读取 → `projection.ts` 投影）。**v0.2.29 实测确认本机 `weibo-cli@0.9.8` 的三项准备全未完成**（未登录 / 无开发者认证 / 未开通服务），因此**一次真实读取都没跑过**——测试全部是命令级假 CLI 与投影层断言，不是端到端。真实读取需要主人本人完成一次授权登录，见下文「微博真实读取需要的授权」 |
 | 知乎 | ⬜ 规划阶段 | 只有能力清单，没有适配器 |
 | 小红书 | ⬜ 规划阶段 | 同上 |
 | 抖音 | ⬜ 规划阶段 | 同上 |
 
 **这张表里没有 `✅ 真实可用` 的微博。** 「写了适配代码」和「在真实平台上读到过」是两件事，前者只是后者的前提。
+
+### 微博真实读取需要的授权（v0.2.29 实测记录）
+
+本机装的是 `@weibo-ai/weibo-cli@0.9.8`。`weibo-cli doctor` 的输出：
+
+```
+使用准备检查
+------------------------------------------
+× 注册或登录
+× 完成开发者认证
+× 开通服务
+```
+
+`weibo-cli auth whoami` 进一步说明：「缺少登录令牌」。三项都需要账号本人在微博客户端与开放平台完成，程序无法代办，也不应该代办：
+
+| 缺口 | 谁来做 | 怎么做 |
+| --- | --- | --- |
+| 登录 | 主人本人 | `weibo-cli auth login`（有图形界面），或 `auth login --device`（远程/无界面） |
+| 开发者认证 | 主人本人 | 微博开放平台控制台，需要扫脸 |
+| 开通服务 | 主人本人 | 免费 7 天体验，或购买积分包 |
+
+**不要把密码、Cookie、Token 贴进聊天记录或提交到仓库。** CLI 自己保存 OAuth 会话，本插件从不读取它。也可以在无人值守环境自行设置 `WEIBO_CLI_TOKEN` / `WEIBO_CLI_REFRESH_TOKEN` 环境变量——那是你自己的机器上的密钥，不要提交。
+
+三项齐备后，`weibo-cli doctor` 会全绿，插件的微博读取能力才会从 `unverified` 变成实测可用。
 
 贴吧能力的**逐项验证状态**（这个区分很重要，别把「写了代码」当成「验证过」）：
 
@@ -148,22 +172,22 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.28
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.29
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.28) 下载
-`dsh-ai-debate-0.2.28.tgz`，或在仓库根目录自行构建：
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.29) 下载
+`dsh-ai-debate-0.2.29.tgz`，或在仓库根目录自行构建：
 
 ```bash
 node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.28.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.29.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.28.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.29.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
 Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
