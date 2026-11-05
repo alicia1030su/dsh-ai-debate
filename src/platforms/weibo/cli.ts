@@ -653,21 +653,120 @@ function classifyFailure(
 }
 
 /**
+ * Whether the character after a bracket could open a JSON value.
+ *
+ * Used to tell a document from a bracketed log prefix: `[{"id":…` is a document, `[INFO]`
+ * is not. Only the first non-space character matters — a container always starts with
+ * `{`, `[`, `"`, `-`, a digit, or one of `t`/`f`/`n` (`true` / `false` / `null`).
+ */
+function looksLikeJsonStart(text: string, bracketAt: number): boolean {
+  for (let index = bracketAt + 1; index < text.length; index += 1) {
+    const char = text[index]!
+    if (char === ' ' || char === '\t' || char === '\r' || char === '\n') continue
+    return /[{[":\-0-9tfn]/.test(char)
+  }
+  // An empty container (`[]` / `{}`) closes immediately; that is a document too.
+  return true
+}
+
+/**
  * Parse one JSON document out of CLI output.
  *
  * The CLI prints JSON when asked (`--output json`); some commands may precede it with a
- * progress line, so this takes the first `{`…last `}` span rather than assuming the whole
- * stdout is the document. A payload that does not parse is a hard failure — returning a
- * partial object would let a caller treat "unreadable" as "empty".
+ * progress line, so this takes the outermost span rather than assuming the whole stdout
+ * is the document. A payload that does not parse is a hard failure — returning a partial
+ * object would let a caller treat "unreadable" as "empty".
+ *
+ * ## The top level can be an array, and the first version could not read one (v0.2.29)
+ *
+ * The old implementation searched for the first `{` and the last `}`. For a list-shaped
+ * response — which is what the CLI produces for any `list`/`timeline`/`*_batch` command,
+ * and what its own README documents:
+ *
+ *     weibo statuses friends_timeline/biz --output json | jq '.[] | .text'
+ *
+ * …that span starts at the first object inside the array and ends at the last, yielding
+ * `{…},{…}`. `JSON.parse` rejects it, the caller reports `failed`, and every list-shaped
+ * read fails on perfectly valid output. Measured against the real binary's documented
+ * shape: `[{"id":"1"},{"id":"2"}]` → `CLI 输出的 JSON 无法解析`.
+ *
+ * The fix: work out which bracket opened the document, and take the span from that one
+ * to its own closer. Comparing positions is what distinguishes the two cases without
+ * guessing:
+ *
+ *     [{"id":"1"}]        first `[` before first `{`  → the document is the array
+ *     {"comments":[{}]}   first `{` before first `[`  → the document is the object
+ *
+ * The other span is still tried as a fallback, because stdout can legitimately contain
+ * a bracketed log prefix (`[INFO] {…}`) that is not part of the document.
+ *
+ * ## But a fallback must not truncate (v0.2.29)
+ *
+ * The fallback has one dangerous case. Given a **truncated** array —
+ *
+ *     [{"id":"6001"},{"id":"6002"
+ *
+ * — there is no closing `]`, so the array span is unavailable and the object span picks
+ * up `{"id":"6001"}`. That parses, and the caller receives a *shorter list* than the
+ * platform sent. A short list reads downstream as "the platform has fewer comments",
+ * which is a wrong fact rather than a failure, and wrong facts are the ones that get
+ * acted on.
+ *
+ * So the fallback is only taken when the outer bracket clearly did not open a document.
+ * `looksLikeJsonStart` decides that by looking at the character after the bracket: a real
+ * container is followed by `{`, `[`, `"`, `-`, a digit, or one of `t/f/n`. `[INFO]` fails
+ * that test (an `I`), which is exactly the log-prefix case the fallback exists for.
  */
 export function parseCliJson<T>(stdout: string): { ok: true; data: T } | { ok: false; reason: string } {
-  const start = stdout.indexOf('{')
-  const end = stdout.lastIndexOf('}')
-  if (start < 0 || end <= start) return { ok: false, reason: 'CLI 没有输出 JSON 对象' }
-  const slice = stdout.slice(start, end + 1)
-  try {
-    return { ok: true, data: JSON.parse(slice) as T }
-  } catch (error) {
+  const objectStart = stdout.indexOf('{')
+  const objectEnd = stdout.lastIndexOf('}')
+  const arrayStart = stdout.indexOf('[')
+  const arrayEnd = stdout.lastIndexOf(']')
+
+  const objectSpan: [number, number] | undefined =
+    objectStart >= 0 && objectEnd > objectStart ? [objectStart, objectEnd + 1] : undefined
+  const arraySpan: [number, number] | undefined =
+    arrayStart >= 0 && arrayEnd > arrayStart ? [arrayStart, arrayEnd + 1] : undefined
+
+  // Which bracket opened the document? The first one to appear, unless it is obviously
+  // not a document opener (`[INFO] ready` — an `I` after the bracket).
+  const firstBracket = Math.min(
+    objectStart === -1 ? Number.POSITIVE_INFINITY : objectStart,
+    arrayStart === -1 ? Number.POSITIVE_INFINITY : arrayStart,
+  )
+  const documentIsArray = firstBracket === arrayStart && firstBracket !== Number.POSITIVE_INFINITY
+  const openerIsJson = firstBracket !== Number.POSITIVE_INFINITY && looksLikeJsonStart(stdout, firstBracket)
+
+  const spans: [number, number][] = []
+  if (openerIsJson) {
+    // The document is whatever the first bracket opened, and only that. A truncated
+    // array must fail here rather than degrade into its first object: a shorter list
+    // reads as "the platform sent fewer comments", which is a wrong fact, not an error.
+    const chosen = documentIsArray ? arraySpan : objectSpan
+    if (chosen !== undefined) spans.push(chosen)
+  } else {
+    // A log prefix occupied the outer position. Fall back to whichever span closes.
+    if (objectSpan !== undefined) spans.push(objectSpan)
+    if (arraySpan !== undefined) spans.push(arraySpan)
+  }
+
+  if (spans.length === 0) return { ok: false, reason: 'CLI 没有输出 JSON 对象或数组' }
+
+  let lastError: unknown
+  for (const [from, to] of spans) {
+    const slice = stdout.slice(from, to)
+    try {
+      return { ok: true, data: JSON.parse(slice) as T }
+    } catch (error) {
+      // Remember the first failure and try the other span shape. A stdout that contains
+      // both `{}` and `[]` is either a list of objects (array span wins) or an object
+      // with arrays inside (object span wins); trying both is how the two are told apart
+      // without guessing from the text.
+      lastError ??= error
+    }
+  }
+  {
+    const error = lastError
     // ## The parse error carries a fragment of the input (v0.2.12 audit)
     //
     // `classifyFailure` scrubs stderr and stdout, but this path did not — and modern V8

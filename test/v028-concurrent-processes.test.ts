@@ -33,6 +33,28 @@ await store.ready()
 
 let written = 0
 let refused = 0
+// The keys that actually reached disk.
+//
+// ## Why this is a list and not a count (v0.2.29)
+//
+// The assertion used to reconstruct the successes as keys.slice(0, written) -- the first
+// "written" of the twelve it tried. That is only correct if refusals land at the *end* of
+// the loop, and a lock timeout lands wherever it happens to land.
+//
+// Reproduced under CPU load: worker A was refused at race:a:1 and then wrote race:a:2
+// ... race:a:11 successfully. It reported written: 11 and the final file held exactly
+// 23 rows for 23 successes -- the store was correct -- but slice(0, 11) included the one
+// that was refused and excluded the last one that landed. The test then failed with
+//
+//     a 报告成功但文件里找不到：race:a:1 -- 说明被对方的写入覆盖了
+//
+// which is a false accusation against a correct store, and would have sent the next
+// reader hunting for a lost-update bug that does not exist. Recording the real keys
+// removes the guessing entirely.
+//
+// (No backticks in this comment: it lives inside a template literal, and a backtick here
+// terminates the worker source. That is what broke the first version of this fix.)
+const succeeded = []
 for (let index = 0; index < Number(count); index += 1) {
   const key = 'race:' + label + ':' + index
   try {
@@ -54,13 +76,14 @@ for (let index = 0; index < Number(count); index += 1) {
       ],
     }))
     written += 1
+    succeeded.push(key)
   } catch {
     refused += 1
   }
   // 50ms 的错位：让两个进程的读-改-写窗口**交叠**，而不是排成两队。
   await new Promise((resolve) => setTimeout(resolve, 5))
 }
-process.stdout.write(JSON.stringify({ written, refused, keys: Array.from({ length: Number(count) }, (_, i) => 'race:' + label + ':' + i) }))
+process.stdout.write(JSON.stringify({ written, refused, keys: succeeded }))
 `
 
 function runWorker(
@@ -125,14 +148,23 @@ test('两个独立进程同时写同一个状态文件：成功的写入一条�
     const keys = new Set(final.dedupe.map((row) => row.key))
     t.diagnostic(`  最终台账 ${final.dedupe.length} 条（去重后 ${keys.size} 个 key）`)
 
-    // 每个进程自己报告成功的那几条，必须能在文件里找到。这才是「没有丢数据」：
-    // 覆盖写会表现成 A 说写了 12 条、B 也说写了 12 条，但文件里只剩后面那批。
+    // Each process's own success list must be findable in the file. That is what "no data
+    // lost" means: an overwriting write shows up as A reporting 12, B reporting 12, and
+    // the file holding only the later batch.
+    //
+    // `keys` is the real success list — not `slice(0, written)`. See the worker's comment:
+    // refusals land wherever a lock timeout happens, so slicing by count accuses a correct
+    // store of losing data.
     for (const [label, result] of [
       ['a', a],
       ['b', b],
     ] as const) {
-      const reported = result.keys.slice(0, result.written)
-      const missing = reported.filter((key) => !keys.has(key))
+      assert.equal(
+        result.keys.length,
+        result.written,
+        `${label} 报告的条数与记录的成功 key 数不一致（${result.written} vs ${result.keys.length}），worker 自身有问题`,
+      )
+      const missing = result.keys.filter((key) => !keys.has(key))
       assert.deepEqual(
         missing,
         [],

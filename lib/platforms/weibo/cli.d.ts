@@ -189,9 +189,49 @@ export declare function guardCliInvocation(args: readonly string[]): CliGuardVer
  * Parse one JSON document out of CLI output.
  *
  * The CLI prints JSON when asked (`--output json`); some commands may precede it with a
- * progress line, so this takes the first `{`…last `}` span rather than assuming the whole
- * stdout is the document. A payload that does not parse is a hard failure — returning a
- * partial object would let a caller treat "unreadable" as "empty".
+ * progress line, so this takes the outermost span rather than assuming the whole stdout
+ * is the document. A payload that does not parse is a hard failure — returning a partial
+ * object would let a caller treat "unreadable" as "empty".
+ *
+ * ## The top level can be an array, and the first version could not read one (v0.2.29)
+ *
+ * The old implementation searched for the first `{` and the last `}`. For a list-shaped
+ * response — which is what the CLI produces for any `list`/`timeline`/`*_batch` command,
+ * and what its own README documents:
+ *
+ *     weibo statuses friends_timeline/biz --output json | jq '.[] | .text'
+ *
+ * …that span starts at the first object inside the array and ends at the last, yielding
+ * `{…},{…}`. `JSON.parse` rejects it, the caller reports `failed`, and every list-shaped
+ * read fails on perfectly valid output. Measured against the real binary's documented
+ * shape: `[{"id":"1"},{"id":"2"}]` → `CLI 输出的 JSON 无法解析`.
+ *
+ * The fix: work out which bracket opened the document, and take the span from that one
+ * to its own closer. Comparing positions is what distinguishes the two cases without
+ * guessing:
+ *
+ *     [{"id":"1"}]        first `[` before first `{`  → the document is the array
+ *     {"comments":[{}]}   first `{` before first `[`  → the document is the object
+ *
+ * The other span is still tried as a fallback, because stdout can legitimately contain
+ * a bracketed log prefix (`[INFO] {…}`) that is not part of the document.
+ *
+ * ## But a fallback must not truncate (v0.2.29)
+ *
+ * The fallback has one dangerous case. Given a **truncated** array —
+ *
+ *     [{"id":"6001"},{"id":"6002"
+ *
+ * — there is no closing `]`, so the array span is unavailable and the object span picks
+ * up `{"id":"6001"}`. That parses, and the caller receives a *shorter list* than the
+ * platform sent. A short list reads downstream as "the platform has fewer comments",
+ * which is a wrong fact rather than a failure, and wrong facts are the ones that get
+ * acted on.
+ *
+ * So the fallback is only taken when the outer bracket clearly did not open a document.
+ * `looksLikeJsonStart` decides that by looking at the character after the bracket: a real
+ * container is followed by `{`, `[`, `"`, `-`, a digit, or one of `t/f/n`. `[INFO]` fails
+ * that test (an `I`), which is exactly the log-prefix case the fallback exists for.
  */
 export declare function parseCliJson<T>(stdout: string): {
     ok: true;
