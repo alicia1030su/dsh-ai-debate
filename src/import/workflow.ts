@@ -237,9 +237,20 @@ export async function analyzeImport(
 
   const { dispute, targetPostId } = analyzed
   const now = new Date(input.now?.() ?? Date.now()).toISOString()
-  const sessionId = `m${now.replace(/[-:.TZ]/g, '').slice(0, 14)}${Math.abs(
-    [...collected.thread.id].reduce((acc, char) => (acc * 31 + char.codePointAt(0)!) >>> 0, 7),
-  ).toString(36)}`
+  /**
+   * 会话 id。
+   *
+   * ## 为什么不能只用「时间戳 + 线程哈希」
+   *
+   * 第一版就是这么算的，而它有一个只在真实使用中才出现的缺陷：同一秒内对同一份
+   * 内容分析两次（`reselectImport` 正是这样——它先建一个新会话再把内容搬到旧 id 上），
+   * 两次得到同一个 id。于是「删掉刚才多插的那一条」把原会话一起删掉了，
+   * 用户看到的是「会话消失了」。
+   *
+   * 时间戳精确到秒、线程哈希确定，只有第三个分量能保证唯一。用进程内单调计数：
+   * 它不依赖随机数（可测），也不依赖更多的时间精度（同一毫秒仍会撞）。
+   */
+  const sessionId = `m${now.replace(/[-:.TZ]/g, '').slice(0, 14)}${nextManualSessionSerial().toString(36)}`
 
   const participants = [
     dispute.owner,
@@ -290,7 +301,7 @@ export async function analyzeImport(
       : { opponentKey: dispute.opponent.key, opponentName: dispute.opponent.displayName }),
     ...(dispute.opponent?.lastPostId === undefined
       ? {}
-      : { targetKind: containerOf(collected, targetPostId)?.isThreadBody === true ? 'floor' : 'nested' }),
+      : { targetKind: postKindOf(collected, targetPostId) }),
     ownerIdentityAssurance: dispute.ownerIdentityAssurance,
     ownerIdentityEvidence: dispute.ownerIdentityEvidence,
     disputeFloorPostId: dispute.floorPostId,
@@ -338,6 +349,21 @@ function detectInjectionText(text: string): readonly string[] {
   // 直接复用安全模块的实现；这个薄包装存在的唯一理由是让上面的调用点读起来
   // 像「检测这段文本」，而不是「导入一个以 detect 开头的函数」。
   return detectInjection(text)
+}
+
+/**
+ * 进程内单调计数，只用于让会话 id 唯一。
+ *
+ * 从模块加载时刻的毫秒值起算而不是从 0 起算：两个进程同时分析同一份内容时，
+ * 起始值的差异让它们几乎不可能落在同一个数上。这不是严格的唯一性保证
+ * （那需要一个真正的外部分配器），但对同一个 store 里的两个会话已经足够——
+ * 而 store 本身在写入时会加跨进程锁。
+ */
+let manualSessionSerial = Date.now() % 1_000_000
+
+function nextManualSessionSerial(): number {
+  manualSessionSerial += 1
+  return manualSessionSerial
 }
 
 function buildStoredComments(collected: CollectedThread): readonly StoredComment[] {
@@ -502,7 +528,7 @@ export async function generateForImport(
     threadId: session.threadId,
     floorPostId: containerOf(collected, targetPostId)?.postId ?? dispute.floorPostId,
     targetPostId,
-    targetKind: containerOf(collected, targetPostId)?.isThreadBody === true ? 'floor' : 'nested',
+    targetKind: postKindOf(collected, targetPostId),
     ...(dispute.opponent?.userId === undefined ? {} : { targetAuthorId: dispute.opponent.userId }),
   }
   const resolved = await resolveTarget(localTargetResolver(collected), expectation, {
@@ -651,6 +677,14 @@ export async function generateForImport(
     needsInput: result.needsInput,
     ...(result.needsInputReason === undefined ? {} : { needsInputReason: result.needsInputReason }),
   })
+}
+
+/** 与 `runtime.ts` 的 `postKindOf` 同一规则：只有嵌套回复才是 `nested`。 */
+function postKindOf(collected: CollectedThread, postId: string): 'floor' | 'nested' {
+  for (const entry of collected.floors) {
+    if (entry.nested.some((reply) => reply.postId === postId)) return 'nested'
+  }
+  return 'floor'
 }
 
 /** 与 `runtime.ts` 的私有实现同一规则：取最大值 + 1。 */
