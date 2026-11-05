@@ -79,6 +79,21 @@ export interface WeiboCliReadiness {
    * list of steps rather than one long sentence.
    */
   readonly steps: readonly string[]
+  /**
+   * `doctor` 的三行报告，原样带出来（v0.2.30）。
+   *
+   * ## 为什么不能只带一个 `status`
+   *
+   * `doctor` 打印的是**三步**：注册或登录 / 完成开发者认证 / 开通服务。
+   * 这个函数过去把它们压成一个 `status`，于是「没登录」和「没开通服务」在
+   * 面板上长得一样——而它们对应完全不同的下一步动作（登录 vs 去控制台开通）。
+   *
+   * 带出原始三行，让八项诊断能把三项分开报。`undefined` 表示 `doctor` 没跑；
+   * 空数组表示跑了但没有可识别的步骤行——两者都是「没有证据」，不是「全部通过」。
+   */
+  readonly doctorSteps?: readonly DoctorStep[]
+  /** `doctor` 的退出码，用于「解析不出步骤」时的兜底措辞。 */
+  readonly doctorExitCode?: number
 }
 
 /** One JSON payload the CLI printed. */
@@ -857,6 +872,8 @@ export async function probeWeiboCli(): Promise<WeiboCliReadiness> {
       version: versionText,
       canRead: false,
       steps: doctorNextSteps(doctorSteps),
+      doctorSteps,
+      doctorExitCode: doctor.code,
     }
   }
 
@@ -869,6 +886,8 @@ export async function probeWeiboCli(): Promise<WeiboCliReadiness> {
     version: versionText,
     canRead: true,
     steps: [],
+    doctorSteps,
+    doctorExitCode: doctor.code,
   }
 }
 

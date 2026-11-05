@@ -100,6 +100,18 @@ export interface WeiboDiagnostics {
   }
   /** One line per aspect, for direct rendering. */
   readonly lines: readonly WeiboDiagnosticLine[]
+  /**
+   * 八项授权就绪诊断（v0.2.30 §三）。
+   *
+   * ## 为什么不是一个布尔
+   *
+   * `cliInstalled` / `oauthLoggedIn` / `serviceActive` 这三个布尔合起来仍然
+   * 分不清「没登录」和「没开通服务」——它们对应完全不同的下一步动作。
+   * 八项把 `doctor` 的三行拆开报，并各自给出「你现在能做什么」。
+   *
+   * 可选：没有这个字段的旧构造仍然合法，页面按「没有八项」渲染而不是按「全部通过」。
+   */
+  readonly readiness?: import('./readiness.js').ReadinessSnapshot
 }
 
 /** Mutable diagnostics recorder, kept per adapter instance. */
