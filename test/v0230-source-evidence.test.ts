@@ -196,6 +196,7 @@ test('证据 7：主人不在这份内容里时拒绝，并说清是谁', () => 
 
 test('证据 8：同名发言被合并成一个人，但必须说出来', () => {
   const parsed = parseText(`原帖：x\n---\n甲：我说一句\n甲：我也说一句\n乙：你们两个别吵了`)
+  assert.ok(parsed.discussion !== undefined)
   const collected = toCollectedThread(parsed.discussion)
   // 导入内容里没有账号 id，两条同名的发言会被当成同一个人——这不一定错
   // （可能真是同一个人），但用户必须知道这个假设。

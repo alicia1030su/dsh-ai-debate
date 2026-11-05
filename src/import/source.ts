@@ -36,6 +36,8 @@ export type DataSource = 'official_read' | 'manual_import'
 /** 来源的完整描述，页面直接渲染它。 */
 export interface SourceDescriptor {
   readonly source: DataSource
+  /** 与 `source` 同值的别名，供只需要判别分支的消费方使用。 */
+  readonly kind: DataSource
   /** 短标签，一行能放下。 */
   readonly label: string
   /** 一句话说清「这份内容是谁给的」。 */
@@ -63,6 +65,7 @@ export interface SourceDescriptor {
 /** 官方接口读取来的。 */
 export const OFFICIAL_READ: SourceDescriptor = {
   source: 'official_read',
+  kind: 'official_read',
   label: '官方接口读取',
   provenance: '内容由平台接口返回，读取过程有请求与响应的记录。',
   canProveCompleteness: true,
@@ -74,6 +77,7 @@ export const OFFICIAL_READ: SourceDescriptor = {
 /** 人工导入的。 */
 export const MANUAL_IMPORT: SourceDescriptor = {
   source: 'manual_import',
+  kind: 'manual_import',
   label: '人工导入 · 未经平台核验',
   provenance: '内容由你粘贴或从本地文件导入，插件没有向平台核对过其中任何一条。',
   canProveCompleteness: false,

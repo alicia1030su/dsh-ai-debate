@@ -295,6 +295,51 @@ window.__ModuleLoader__.load({
       recordsNotLoading: '点击刷新读取',
 
       approveTitle: '发表授权',
+      // v0.2.30：离线讨论导入与工作流。
+      manualTitle: '离线讨论导入',
+      manualIntro:
+        '官方接口读不到时（未登录、认证或服务未开通），可以把一段讨论粘进来，' +
+        '用同一套分析器还原争论并起草回复。内容来自剪贴板，未经平台核验。',
+      manualSourceOfficial: '来源：官方接口读取',
+      manualSourceManual: '来源：人工导入 · 未经平台核验',
+      manualKindText: '粘贴文本',
+      manualKindJson: '结构化 JSON',
+      manualKindFile: '本地文件',
+      manualKindHint:
+        '文本格式：先写原帖「作者：内容」，再写一行 ---，之后每条评论一行「作者：内容」。' +
+        '「作者 回复 某人：内容」会被解析成回复关系。',
+      manualPlaceholder: '原帖作者：我觉得这个价格翻倍是合理的……\n---\n路人甲：你先把数据拿出来。',
+      manualTitleField: '标题（可选）',
+      manualUrlField: '原帖链接（可选，只作展示，插件不会去读它）',
+      manualPreview: '预览解析结果',
+      manualConfirm: '确认导入并分析',
+      manualWorking: '处理中…',
+      manualPreviewTitle: '解析结果',
+      manualRootAuthor: '原帖作者',
+      manualComments: '条发言',
+      manualParticipants: '出现的人',
+      manualIssues: '解析提示',
+      manualOwnerPick: '哪个是你（用于判断争论对象）',
+      manualTargetPick: '要回复哪一条',
+      manualPersonaPick: '人格',
+      manualGenerate: '生成候选回复',
+      manualEdit: '正文（可以直接改）',
+      manualSave: '保存并重新评估',
+      manualApprove: '人工确认',
+      manualCopied: '已复制到剪贴板',
+      manualCopy: '复制回复',
+      manualCopyBlocked: '还不能复制',
+      manualCopyTarget: '这段话是回给',
+      manualSecurityAllow: '安全评估：通过',
+      manualSecurityReview: '安全评估：需要你看过再决定',
+      manualSecurityBlock: '安全评估：阻止',
+      manualSecurityUnknown: '安全评估：无记录',
+      manualStepNow: '当前步骤',
+      manualNoPublish:
+        '离线流程不提供发表：这里的终点是复制正文，由你自己贴到平台上。' +
+        '插件不会把剪贴板内容当成一条真实帖子去发。',
+      manualNoBuild: '当前构建没有接上离线工作流。',
+      manualEmpty: '还没有导入任何内容。',
       // v0.2.22: the publish workbench.
       workbenchTitle: '发表工作台',
       workbenchHint:
@@ -675,6 +720,51 @@ window.__ModuleLoader__.load({
       recordsNotLoading: 'Refresh to read',
 
       approveTitle: 'Publishing authorisation',
+      // v0.2.30: offline discussion import and workflow.
+      manualTitle: 'Offline discussion import',
+      manualIntro:
+        'When the official API is unavailable (not logged in, certification or service inactive), paste a discussion here. ' +
+        'The same analyzer reconstructs the dispute. Content comes from your clipboard and is not verified against the platform.',
+      manualSourceOfficial: 'Source: official API read',
+      manualSourceManual: 'Source: manual import · not verified by the platform',
+      manualKindText: 'Paste text',
+      manualKindJson: 'Structured JSON',
+      manualKindFile: 'Local file',
+      manualKindHint:
+        'Text format: the opening post as "author: text", then a --- line, then one comment per line as "author: text". ' +
+        '"author reply someone: text" becomes a reply relation.',
+      manualPlaceholder: 'Author: I think doubling the price is fair…\n---\nPasserby: show me the data first.',
+      manualTitleField: 'Title (optional)',
+      manualUrlField: 'Original link (optional, display only — the plugin never fetches it)',
+      manualPreview: 'Preview parse',
+      manualConfirm: 'Import and analyse',
+      manualWorking: 'Working…',
+      manualPreviewTitle: 'Parse result',
+      manualRootAuthor: 'Opening post by',
+      manualComments: 'comments',
+      manualParticipants: 'People seen',
+      manualIssues: 'Parse notes',
+      manualOwnerPick: 'Which one is you (decides the opponent)',
+      manualTargetPick: 'Which comment to answer',
+      manualPersonaPick: 'Persona',
+      manualGenerate: 'Generate candidate',
+      manualEdit: 'Text (editable)',
+      manualSave: 'Save and re-assess',
+      manualApprove: 'Confirm by hand',
+      manualCopied: 'Copied to clipboard',
+      manualCopy: 'Copy reply',
+      manualCopyBlocked: 'Not ready to copy',
+      manualCopyTarget: 'This answers',
+      manualSecurityAllow: 'Security: passed',
+      manualSecurityReview: 'Security: needs your review',
+      manualSecurityBlock: 'Security: blocked',
+      manualSecurityUnknown: 'Security: no record',
+      manualStepNow: 'Current step',
+      manualNoPublish:
+        'The offline flow has no publish step: it ends at the copied text, which you paste yourself. ' +
+        'The plugin will not treat clipboard content as a real post.',
+      manualNoBuild: 'This build has no offline workflow.',
+      manualEmpty: 'Nothing imported yet.',
       // v0.2.22: the publish workbench.
       workbenchTitle: 'Publish workbench',
       workbenchHint:
@@ -1191,6 +1281,13 @@ window.__ModuleLoader__.load({
         this.workbench = null
         this.workbenchState = { state: 'idle' }
         this.workbenchEdit = null
+        /**
+         * 离线动作的进行状态（v0.2.30）。
+         *
+         * 与 `workbenchState` 分开：离线预览不落盘、不刷新工作台，而工作台动作
+         * 每次都要重读视图。共用一个状态会让「预览」把页面上已显示的会话换掉。
+         */
+        this.manualState = { state: 'idle' }
         this.listeners = new Set()
         this.store = createSnapshotStore(this.projection())
       }
@@ -1241,6 +1338,7 @@ window.__ModuleLoader__.load({
           workbench: this.workbench,
           workbenchState: this.workbenchState,
           workbenchEdit: this.workbenchEdit,
+          manualState: this.manualState,
         }
       }
 
@@ -1453,6 +1551,34 @@ window.__ModuleLoader__.load({
        * There is no retry here and no retry button anywhere in the panel: an action whose
        * outcome is unknown must be resolved by a human, not by sending it again.
        */
+      /**
+       * 跑一个离线动作（v0.2.30）。
+       *
+       * ## 与 `runWorkbenchAction` 分开
+       *
+       * 两者的收尾不同：工作台动作之后要重读工作台视图，而离线动作有时不需要
+       * （预览不落盘）。共用一个方法会让「预览」也去刷一次工作台，把页面上
+       * 已经显示的会话状态换成一个空视图。
+       */
+      async runManualAction(action, payload) {
+        this.manualState = { state: 'running', action }
+        this.publish()
+        try {
+          const answer = await callJson(ROUTE_ACTION, {
+            method: 'POST',
+            body: JSON.stringify({ action, ...payload }),
+          })
+          this.manualState = { state: 'ready', action }
+          this.publish()
+          return answer
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error)
+          this.manualState = { state: 'failed', action, reason }
+          this.publish()
+          return { ok: false, reason }
+        }
+      }
+
       async runWorkbenchAction(action, payload) {
         this.workbenchState = { state: 'running', action }
         this.publish()
@@ -3846,6 +3972,434 @@ window.__ModuleLoader__.load({
      * only `upgraded` says the capability is verified. Rendering one as the other is the exact
      * dishonesty this version exists to remove.
      */
+    /**
+     * 离线讨论导入与工作流（v0.2.30 §一/§二）。
+     *
+     * ## 为什么这是一个独立分区，而不是在工作台里加一个分支
+     *
+     * 两条路的终点不同：真实平台到「发表一次 + 回读确认」，离线流程到「复制正文」。
+     * 把它们塞进同一个组件，就会出现一个必须靠 `if (source === 'manual')` 才能读懂
+     * 的界面，而那种界面最容易在某次修改后显示出「离线会话也能发表」。
+     *
+     * ## 这个组件不做的事
+     *
+     * 它不判断「能不能复制」——那是服务端 `copyAllowed` 说的，理由是后端知道评估
+     * 结果与候选版本。它也不判断「要不要显示发表按钮」——它根本不渲染那类按钮。
+     */
+    function ManualSection(props) {
+      const { t, state, store } = props
+      const [kind, setKind] = useState('text')
+      const [content, setContent] = useState('')
+      const [title, setTitle] = useState('')
+      const [url, setUrl] = useState('')
+      const [ownerName, setOwnerName] = useState('')
+      const [targetPostId, setTargetPostId] = useState('')
+      const [persona, setPersona] = useState('tieba_veteran')
+      const [fileHint, setFileHint] = useState('')
+      const [preview, setPreview] = useState(null)
+      const [error, setError] = useState('')
+      const [draft, setDraft] = useState('')
+      const [copied, setCopied] = useState('')
+      const running = state.manualState && state.manualState.state === 'running'
+      const view = state.workbench
+      const flow = view && view.manualFlow
+      const source = view && view.source
+      const sessionId = view && view.sessionId
+
+      const run = async (action, payload) => {
+        setError('')
+        setCopied('')
+        const answer = await store.runManualAction(action, payload)
+        if (answer && answer.ok === false) {
+          setError([answer.reason || '', ...(answer.next || [])].filter(Boolean).join(' ｜ '))
+        }
+        return answer
+      }
+
+      const pickFile = (event) => {
+        const file = event.target.files && event.target.files[0]
+        if (!file) return
+        const reader = new FileReader()
+        reader.onload = () => {
+          setContent(String(reader.result || ''))
+          setKind(/\.json$/i.test(file.name) ? 'json' : 'text')
+          setFileHint(file.name)
+        }
+        reader.readAsText(file)
+      }
+
+      /**
+       * 复制。
+       *
+       * ## 先向服务端要，再写剪贴板
+       *
+       * 页面上的正文可能已经被编辑过而 state 还没刷新。直接复制 textarea 的内容会
+       * 复制出用户没在服务端确认过的东西——所以这里取服务端返回的那一份，
+       * 并把页面上的正文一并送去比对，不一致时服务端会拒绝。
+       */
+      const copyNow = async (candidateId, visibleText) => {
+        const answer = await run('manual-copy', {
+          sessionId,
+          candidateId,
+          ...(typeof visibleText === 'string' ? { visibleText } : {}),
+        })
+        if (!answer || answer.ok !== true || typeof answer.text !== 'string') return
+        try {
+          await navigator.clipboard.writeText(answer.text)
+          setCopied(t('manualCopied'))
+        } catch {
+          setCopied(answer.text)
+        }
+      }
+
+      // `source` 在没有会话时是 null（`view` 本身是 null），不是 undefined ——
+      // 判空用 `== null` 同时覆盖两种。只判 undefined 会让首屏直接抛错，
+      // 而那个错会把整个页面堆叠炸掉（批准区也跟着不渲染）。
+      const sourceLine =
+        source == null
+          ? null
+          : h(
+              'p',
+              {
+                className:
+                  source.kind === 'manual_import'
+                    ? 'dsd-hint dsd-hint-error'
+                    : 'dsd-hint',
+              },
+              h('strong', null, source.label),
+              ` —— ${source.provenance}`,
+              source.kind === 'manual_import' ? ` ${source.caution}` : '',
+            )
+
+      const header = h(
+        'div',
+        { className: 'dsd-sect-head' },
+        h('span', { className: 'dsd-sect-title', style: { margin: 0 } }, t('manualTitle')),
+      )
+
+      const kindPicker = h(
+        'div',
+        { className: 'dsd-inline', style: { marginBottom: 8 } },
+        ...[
+          ['text', t('manualKindText')],
+          ['json', t('manualKindJson')],
+          ['file', t('manualKindFile')],
+        ].map((entry) =>
+          h(
+            'button',
+            {
+              key: entry[0],
+              type: 'button',
+              className: kind === entry[0] ? 'dsd-btn' : 'dsd-btn dsd-btn-ghost',
+              disabled: running,
+              onClick: () => setKind(entry[0]),
+            },
+            entry[1],
+          ),
+        ),
+      )
+
+      const form = h(
+        'div',
+        { className: 'dsd-sect' },
+        h('p', { className: 'dsd-hint' }, t('manualIntro')),
+        h('p', { className: 'dsd-hint' }, t('manualKindHint')),
+        kindPicker,
+        kind === 'file'
+          ? h('input', { type: 'file', accept: '.txt,.json,.md', disabled: running, onChange: pickFile })
+          : null,
+        kind === 'file' && fileHint !== ''
+          ? h('p', { className: 'dsd-hint' }, `${fileHint} · ${content.length} 字符`)
+          : null,
+        h('textarea', {
+          className: 'dsd-field',
+          style: { minHeight: 140, fontFamily: 'monospace', fontSize: 12 },
+          value: content,
+          disabled: running || kind === 'file',
+          placeholder: t('manualPlaceholder'),
+          onChange: (event) => setContent(event.target.value),
+        }),
+        h('input', {
+          type: 'text',
+          className: 'dsd-field',
+          value: title,
+          disabled: running,
+          placeholder: t('manualTitleField'),
+          onChange: (event) => setTitle(event.target.value),
+        }),
+        h('input', {
+          type: 'text',
+          className: 'dsd-field',
+          value: url,
+          disabled: running,
+          placeholder: t('manualUrlField'),
+          onChange: (event) => setUrl(event.target.value),
+        }),
+        h(
+          'div',
+          { className: 'dsd-inline' },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsd-btn dsd-btn-ghost',
+              disabled: running || content.trim() === '',
+              onClick: async () => {
+                const answer = await run('manual-preview', {
+                  kind,
+                  content,
+                  ...(title.trim() === '' ? {} : { title: title.trim() }),
+                  ...(url.trim() === '' ? {} : { url: url.trim() }),
+                  ...(fileHint === '' ? {} : { fileName: fileHint }),
+                })
+                setPreview(answer && answer.ok === true ? answer : null)
+              },
+            },
+            running ? t('manualWorking') : t('manualPreview'),
+          ),
+        ),
+      )
+
+      const previewBlock =
+        preview === null || preview.discussion === undefined
+          ? null
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h('strong', null, t('manualPreviewTitle')),
+              h('p', null, `${preview.discussion.title} · ${t('manualRootAuthor')}：${preview.discussion.author}`),
+              h('p', { className: 'dsd-hint' }, preview.discussion.text),
+              h('p', null, `${preview.discussion.comments.length} ${t('manualComments')} · ${t('manualParticipants')}：${(preview.discussion.participants || []).join('、')}`),
+              (preview.issues || []).length === 0
+                ? null
+                : h(
+                    'div',
+                    { className: 'dsd-hint' },
+                    h('strong', null, t('manualIssues')),
+                    h('ul', null, (preview.issues || []).map((issue, index) => h('li', { key: `${issue.code}-${index}` }, issue.message))),
+                  ),
+              h(
+                'p',
+                { className: 'dsd-hint dsd-hint-error' },
+                '这份内容来自你的剪贴板，插件没有向平台核对过其中任何一条。确认之后才能分析。',
+              ),
+              h(
+                'div',
+                { className: 'dsd-inline' },
+                h('input', {
+                  type: 'text',
+                  className: 'dsd-field',
+                  value: ownerName,
+                  placeholder: t('manualOwnerPick'),
+                  onChange: (event) => setOwnerName(event.target.value),
+                }),
+                h('input', {
+                  type: 'text',
+                  className: 'dsd-field',
+                  value: targetPostId,
+                  placeholder: `${t('manualTargetPick')}（id）`,
+                  onChange: (event) => setTargetPostId(event.target.value),
+                }),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn',
+                    disabled: running,
+                    onClick: async () => {
+                      const answer = await run('manual-confirm', {
+                        kind,
+                        content,
+                        ...(title.trim() === '' ? {} : { title: title.trim() }),
+                        ...(url.trim() === '' ? {} : { url: url.trim() }),
+                        ...(fileHint === '' ? {} : { fileName: fileHint }),
+                        ...(ownerName.trim() === '' ? {} : { ownerName: ownerName.trim() }),
+                        ...(targetPostId.trim() === '' ? {} : { targetPostId: targetPostId.trim() }),
+                        persona,
+                      })
+                      if (answer && answer.ok === true) {
+                        setPreview(null)
+                        await store.loadWorkbench(answer.sessionId)
+                      }
+                    },
+                  },
+                  t('manualConfirm'),
+                ),
+              ),
+            )
+
+      const stepBlock =
+        flow == null
+          ? h('p', { className: 'dsd-hint' }, t('manualEmpty'))
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h('p', null, `${t('manualStepNow')}：${flow.stepTitle}`),
+              h(
+                'p',
+                { className: 'dsd-hint' },
+                (flow.steps || [])
+                  .map((step) => `${step.done ? '✔' : step.current ? '▶' : '·'} ${step.title}`)
+                  .join('  '),
+              ),
+              (flow.participants || []).length === 0
+                ? null
+                : h(
+                    'p',
+                    { className: 'dsd-hint' },
+                    `${t('manualParticipants')}：` +
+                      flow.participants
+                        .map((person) => `${person.name}（${person.postCount}${person.isOwner ? '，你' : person.isOpponent ? '，对手' : ''}）`)
+                        .join('、'),
+                  ),
+              h(
+                'div',
+                { className: 'dsd-inline' },
+                h(
+                  'select',
+                  {
+                    className: 'dsd-field',
+                    value: persona,
+                    onChange: (event) => setPersona(event.target.value),
+                  },
+                  ...(flow.personas || []).map((option) =>
+                    h('option', { key: option.id, value: option.id }, `${option.name} —— ${option.summary}`),
+                  ),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn',
+                    disabled: running,
+                    onClick: async () => {
+                      const answer = await run('manual-generate', {
+                        sessionId,
+                        persona,
+                        ...(targetPostId.trim() === '' ? {} : { targetPostId: targetPostId.trim() }),
+                      })
+                      if (answer && answer.ok === true) {
+                        setDraft(answer.text || '')
+                        await store.loadWorkbench(sessionId)
+                      }
+                    },
+                  },
+                  t('manualGenerate'),
+                ),
+              ),
+            )
+
+      const candidates = (view && view.candidates) || []
+      const latest = candidates.length === 0 ? null : candidates[candidates.length - 1]
+      const decisionLabel = {
+        allow: t('manualSecurityAllow'),
+        review: t('manualSecurityReview'),
+        block: t('manualSecurityBlock'),
+      }
+
+      const candidateBlock =
+        latest === null
+          ? null
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h(
+                'p',
+                { className: 'dsd-hint' },
+                decisionLabel[latest.securityDecision] || t('manualSecurityUnknown'),
+                (latest.securityReasons || []).length === 0 ? '' : `：${latest.securityReasons.join('；')}`,
+              ),
+              h('p', null, t('manualEdit')),
+              h('textarea', {
+                className: 'dsd-field',
+                style: { minHeight: 110, fontFamily: 'monospace', fontSize: 12 },
+                value: draft === '' ? latest.text : draft,
+                disabled: running,
+                onChange: (event) => setDraft(event.target.value),
+              }),
+              h(
+                'div',
+                { className: 'dsd-inline' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn dsd-btn-ghost',
+                    disabled: running,
+                    onClick: async () => {
+                      const text = draft === '' ? latest.text : draft
+                      const answer = await run('manual-edit', {
+                        sessionId,
+                        candidateId: latest.replyId,
+                        text,
+                      })
+                      if (answer && answer.ok === true) await store.loadWorkbench(sessionId)
+                    },
+                  },
+                  t('manualSave'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn',
+                    disabled: running || latest.approved === true,
+                    onClick: async () => {
+                      const text = draft === '' ? latest.text : draft
+                      const answer = await run('manual-approve', {
+                        sessionId,
+                        candidateId: latest.replyId,
+                        approvedText: text,
+                      })
+                      if (answer && answer.ok === true) await store.loadWorkbench(sessionId)
+                    },
+                  },
+                  latest.approved === true ? '已确认' : t('manualApprove'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn',
+                    disabled: running || !flow || flow.copyAllowed !== true,
+                    onClick: () => copyNow(latest.replyId, draft === '' ? latest.text : draft),
+                  },
+                  flow && flow.copyAllowed === true ? t('manualCopy') : t('manualCopyBlocked'),
+                ),
+              ),
+              flow && flow.copyTarget
+                ? h(
+                    'p',
+                    { className: 'dsd-hint' },
+                    `${t('manualCopyTarget')}：${flow.copyTarget.author || '（未知）'} · ${flow.copyTarget.excerpt}`,
+                  )
+                : null,
+              flow && (flow.copyBlockers || []).length > 0
+                ? h(
+                    'div',
+                    { className: 'dsd-hint dsd-hint-error' },
+                    h('ul', null, flow.copyBlockers.map((line) => h('li', { key: line }, line))),
+                  )
+                : null,
+              copied === ''
+                ? null
+                : h('p', { className: 'dsd-hint' }, copied),
+              h('p', { className: 'dsd-hint' }, t('manualNoPublish')),
+            )
+
+      return h(
+        'div',
+        { className: 'dsd-sect' },
+        header,
+        sourceLine,
+        error === '' ? null : h('p', { className: 'dsd-hint dsd-hint-error' }, error),
+        form,
+        previewBlock,
+        stepBlock,
+        candidateBlock,
+      )
+    }
+
     function VerifySection(props) {
       const { t, state, store } = props
       const read = state.verificationState || { state: 'idle' }
@@ -4702,6 +5256,7 @@ window.__ModuleLoader__.load({
         // supported" on one screen and never see that nothing was ever actually published.
         if (state.tab === 'verify') return h(VerifySection, shared)
         if (state.tab === 'workbench') return h(WorkbenchSection, shared)
+        if (state.tab === 'manual') return h(ManualSection, shared)
         if (state.tab === 'security') return h(SecuritySection, shared)
         if (state.tab === 'status') return h(StatusSection, shared)
         return h(AccountSection, shared)
@@ -4912,6 +5467,9 @@ window.__ModuleLoader__.load({
           // connection between "manual review mode" and "here is something to review"
           // visible without reading either panel's prose.
           h('section', { className: 'dsd-page-sect' }, h(ApproveSection, shared)),
+          // 离线导入紧跟在工作台之后：它们是同一件事的两条路——官方接口读不到时的
+          // 备用路径。放在一起，用户读到的顺序就是「先试官方，不行粘进来」。
+          h('section', { className: 'dsd-page-sect' }, h(ManualSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(PlatformsSection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(SecuritySection, shared)),
           h('section', { className: 'dsd-page-sect' }, h(StatusSection, shared)),

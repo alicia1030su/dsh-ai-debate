@@ -240,6 +240,8 @@ export declare function manualSource(): typeof MANUAL_IMPORT;
  * 这与 `workbench.ts` 的 `deriveWorkbenchState` 是同一条理由。
  */
 export declare function stepOf(session: StoredSession | undefined): ManualStep;
+/** 十一步的固定顺序，页面按它画进度。 */
+export declare const MANUAL_STEP_ORDER: readonly ManualStep[];
 /** 十一步里，前六步在会话存在之前就完成了；提供它们的完成标记。 */
 export declare function completedSteps(session: StoredSession | undefined): readonly ManualStep[];
 //# sourceMappingURL=workflow.d.ts.map

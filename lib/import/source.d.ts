@@ -32,6 +32,8 @@ export type DataSource = 'official_read' | 'manual_import';
 /** 来源的完整描述，页面直接渲染它。 */
 export interface SourceDescriptor {
     readonly source: DataSource;
+    /** 与 `source` 同值的别名，供只需要判别分支的消费方使用。 */
+    readonly kind: DataSource;
     /** 短标签，一行能放下。 */
     readonly label: string;
     /** 一句话说清「这份内容是谁给的」。 */

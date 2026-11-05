@@ -163,17 +163,17 @@ const REAL_AVAILABLE_EMPTY = JSON.stringify({
 test('真实契约 7：available_count 为 0 时命令数组为空——不是解析失败', () => {
   const parsed = parseCliJson<{ commands?: unknown[]; total?: number }>(REAL_AVAILABLE_EMPTY)
   assert.equal(parsed.ok, true, '这是一个合法的 JSON 信封')
-  assert.deepEqual(parsed.data?.commands, [], '空数组是真实结果，不是读不到')
-  assert.equal(parsed.data?.total, 75, 'total 是目录总数，与可用数不是一件事')
+  assert.deepEqual((parsed as { data?: { commands?: unknown[] } }).data?.commands, [], '空数组是真实结果，不是读不到')
+  assert.equal((parsed as { data?: { total?: number } }).data?.total, 75, 'total 是目录总数，与可用数不是一件事')
 })
 
 test('真实契约 8：目录 75 条与可用 0 条必须能被分开读', () => {
   const parsed = parseCliJson<{ available_count?: number; total?: number }>(REAL_AVAILABLE_EMPTY)
-  assert.equal(parsed.data?.available_count, 0)
-  assert.equal(parsed.data?.total, 75)
+  assert.equal((parsed as { data?: { available_count?: number } }).data?.available_count, 0)
+  assert.equal((parsed as { data?: { total?: number } }).data?.total, 75)
   assert.notEqual(
-    parsed.data?.available_count,
-    parsed.data?.total,
+    (parsed as { data?: { available_count?: number } }).data?.available_count,
+    (parsed as { data?: { total?: number } }).data?.total,
     '这两个数一旦被混用，用户会以为 75 条都能调',
   )
 })
@@ -218,15 +218,15 @@ test('真实契约 9：schema 外层有 command 包装，解析器要能拿到�
     REAL_SCHEMA_ENVELOPE,
   )
   assert.equal(parsed.ok, true)
-  assert.equal(parsed.data?.command?.name, 'statuses show_batch/biz')
-  assert.equal(Array.isArray(parsed.data?.command?.flags), true)
+  assert.equal((parsed as { data?: { command?: { name?: string } } }).data?.command?.name, 'statuses show_batch/biz')
+  assert.equal(Array.isArray((parsed as { data?: { command?: { flags?: unknown[] } } }).data?.command?.flags), true)
 })
 
 test('真实契约 10：批量正文读取的必填参数是 ids，一次最多 50 个', () => {
   const parsed = parseCliJson<{
     command: { required_fields: string[]; flags: { name: string; required?: boolean }[] }
   }>(REAL_SCHEMA_ENVELOPE)
-  const command = parsed.data!.command
+  const command = (parsed as never as { data: { command: { required_fields: string[]; flags: { name: string; required?: boolean }[]; input_schema: Record<string, string> } } }).data.command
   assert.deepEqual(command.required_fields, ['ids'])
   const required = command.flags.filter((flag) => flag.required === true).map((flag) => flag.name)
   assert.deepEqual(required, ['ids'])
@@ -236,8 +236,8 @@ test('真实契约 11：参数名大小写不一致时，小写化后仍能对�
   const parsed = parseCliJson<{
     command: { flags: { name: string }[]; input_schema: Record<string, string> }
   }>(REAL_SCHEMA_ENVELOPE)
-  const fromFlags = parsed.data!.command.flags.map((flag) => flag.name.toLowerCase())
-  const fromSchema = Object.keys(parsed.data!.command.input_schema).map((name) => name.toLowerCase())
+  const fromFlags = (parsed as never as { data: { command: { required_fields: string[]; flags: { name: string; required?: boolean }[]; input_schema: Record<string, string> } } }).data.command.flags.map((flag) => flag.name.toLowerCase())
+  const fromSchema = Object.keys((parsed as never as { data: { command: { required_fields: string[]; flags: { name: string; required?: boolean }[]; input_schema: Record<string, string> } } }).data.command.input_schema).map((name) => name.toLowerCase())
   assert.deepEqual(fromFlags.sort(), fromSchema.sort(), '两个来源的小写形式必须一致')
 })
 

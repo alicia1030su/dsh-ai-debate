@@ -44,10 +44,10 @@ const SAMPLE = `# 价格翻倍合理吗
 test('文本 1：标题行不算一条发言', () => {
   const parsed = parseText(SAMPLE)
   assert.ok(parsed.discussion !== undefined, '应当解析出讨论')
-  assert.equal(parsed.discussion.title, '价格翻倍合理吗')
+  assert.equal(parsed.discussion!.title, '价格翻倍合理吗')
   // 这条回归在第一次实现里是坏的：`# 标题` 没有冒号，落到了「匿名发言」那一支。
   assert.equal(
-    parsed.discussion.comments.some((comment) => comment.author === '匿名'),
+    parsed.discussion!.comments.some((comment) => comment.author === '匿名'),
     false,
     '标题行不该变成一条匿名发言',
   )
@@ -55,17 +55,17 @@ test('文本 1：标题行不算一条发言', () => {
 
 test('文本 2：分隔线之前是原帖，之后是评论', () => {
   const parsed = parseText(SAMPLE)
-  assert.equal(parsed.discussion.root.author, '原帖作者')
-  assert.match(parsed.discussion.root.text, /价格翻倍是合理/)
+  assert.equal(parsed.discussion!.root.author, '原帖作者')
+  assert.match(parsed.discussion!.root.text, /价格翻倍是合理/)
   assert.deepEqual(
-    parsed.discussion.comments.map((comment) => comment.author),
+    parsed.discussion!.comments.map((comment) => comment.author),
     ['路人甲', '路人乙', '路人丙'],
   )
 })
 
 test('文本 3：`A 回复 B：` 的作者是 A，不是「A 回复 B」', () => {
   const parsed = parseText(SAMPLE)
-  const c = parsed.discussion.comments.find((comment) => comment.text.includes('行业平均'))
+  const c = parsed.discussion!.comments.find((comment) => comment.text.includes('行业平均'))
   assert.ok(c !== undefined)
   assert.equal(c.author, '路人乙')
   assert.equal(c.replyTo, '路人甲')
@@ -74,21 +74,22 @@ test('文本 3：`A 回复 B：` 的作者是 A，不是「A 回复 B」', () =>
 
 test('文本 4：没有分隔线时第一条是原帖', () => {
   const parsed = parseText('甲：第一句\n乙：第二句\n丙：第三句')
-  assert.equal(parsed.discussion.root.author, '甲')
+  assert.equal(parsed.discussion!.root.author, '甲')
   assert.deepEqual(
-    parsed.discussion.comments.map((comment) => comment.author),
+    parsed.discussion!.comments.map((comment) => comment.author),
     ['乙', '丙'],
   )
 })
 
 test('文本 5：续行接到上一条发言后面', () => {
   const parsed = parseText('甲：第一行\n第二行\n乙：另一条')
-  assert.equal(parsed.discussion.root.text, '第一行\n第二行')
+  assert.equal(parsed.discussion!.root.text, '第一行\n第二行')
 })
 
 test('文本 6：正文里的「回复 @某人」也算回复关系', () => {
   const parsed = parseText('甲：原帖\n---\n乙：我不同意\n丙：回复 @乙：你说的不对')
-  const c = parsed.discussion.comments.find((comment) => comment.author === '丙')
+  const c = parsed.discussion!.comments.find((comment) => comment.author === '丙')
+  assert.ok(c !== undefined)
   assert.equal(c.replyTo, '乙')
 })
 
@@ -107,15 +108,15 @@ test('文本 8：只有分隔线时拒绝，并说明原因', () => {
 
 test('文本 9：网页复制带的 `>` 与「【】」被剥掉', () => {
   const parsed = parseText('> 甲：带引用符号的一行\n> 【楼主】乙：带标签的一行')
-  assert.equal(parsed.discussion.root.author, '甲')
-  assert.equal(parsed.discussion.comments[0].author, '乙')
+  assert.equal(parsed.discussion!.root.author, '甲')
+  assert.equal(parsed.discussion!.comments[0].author, '乙')
 })
 
 test('文本 10：`2024 年 1 月：` 这种正文不被误判成作者行', () => {
   // 前导空格是关键：没有它，任何带冒号的正文都会被当成「某某：」。
   const parsed = parseText('甲：先说一句\n 2024 年 1 月：这个时间点很重要')
-  assert.equal(parsed.discussion.root.author, '甲')
-  assert.match(parsed.discussion.root.text, /2024 年 1 月/)
+  assert.equal(parsed.discussion!.root.author, '甲')
+  assert.match(parsed.discussion!.root.text, /2024 年 1 月/)
 })
 
 // ---------------------------------------------------------------------------
@@ -135,10 +136,10 @@ test('JSON 1：{ root, comments } 正常解析', () => {
     }),
   )
   assert.ok(parsed.discussion !== undefined)
-  assert.equal(parsed.discussion.title, '一个标题')
-  assert.equal(parsed.discussion.url, 'https://weibo.com/1/abc')
-  assert.equal(parsed.discussion.comments[1].replyTo, 'c1')
-  assert.equal(parsed.discussion.comments[1].replyToKind, 'id')
+  assert.equal(parsed.discussion!.title, '一个标题')
+  assert.equal(parsed.discussion!.url, 'https://weibo.com/1/abc')
+  assert.equal(parsed.discussion!.comments[1].replyTo, 'c1')
+  assert.equal(parsed.discussion!.comments[1].replyToKind, 'id')
 })
 
 test('JSON 2：顶层是数组时第一条当原帖', () => {
@@ -148,9 +149,9 @@ test('JSON 2：顶层是数组时第一条当原帖', () => {
       { author: '乙', text: '评论' },
     ]),
   )
-  assert.equal(parsed.discussion.root.author, '甲')
+  assert.equal(parsed.discussion!.root.author, '甲')
   assert.deepEqual(
-    parsed.discussion.comments.map((comment) => comment.author),
+    parsed.discussion!.comments.map((comment) => comment.author),
     ['乙'],
   )
 })
@@ -159,7 +160,7 @@ test('JSON 3：没有 id 的评论用 local: 编号', () => {
   const parsed = parseJson(
     JSON.stringify({ root: { author: '甲', text: 'x' }, comments: [{ author: '乙', text: 'y' }] }),
   )
-  assert.equal(parsed.discussion.comments[0].id, 'local:1')
+  assert.equal(parsed.discussion!.comments[0].id, 'local:1')
 })
 
 test('JSON 4：重复 id 被改名并说明', () => {
@@ -172,7 +173,7 @@ test('JSON 4：重复 id 被改名并说明', () => {
       ],
     }),
   )
-  assert.notEqual(parsed.discussion.comments[0].id, parsed.discussion.comments[1].id)
+  assert.notEqual(parsed.discussion!.comments[0].id, parsed.discussion!.comments[1].id)
   assert.ok(parsed.issues.some((issue) => issue.code === 'json_duplicate_id'))
 })
 
@@ -200,7 +201,7 @@ test('JSON 8：缺正文的评论被跳过并逐条说明', () => {
       comments: [{ author: '乙', text: '' }, { author: '丙', text: 'ok' }],
     }),
   )
-  assert.equal(parsed.discussion.comments.length, 1)
+  assert.equal(parsed.discussion!.comments.length, 1)
   assert.ok(parsed.issues.some((issue) => issue.code === 'json_comment_text'))
 })
 
@@ -213,12 +214,12 @@ test('分派 1：粘贴内容以 { 开头时按 JSON 解析', () => {
     kind: 'text',
     content: JSON.stringify({ root: { author: '甲', text: 'x' }, comments: [] }),
   })
-  assert.equal(parsed.discussion.source, 'json')
+  assert.equal(parsed.discussion!.source, 'json')
 })
 
 test('分派 2：表单填的标题优先于正文推断', () => {
   const parsed = parseImport({ kind: 'text', content: '甲：第一行', title: '我填的标题' })
-  assert.equal(parsed.discussion.title, '我填的标题')
+  assert.equal(parsed.discussion!.title, '我填的标题')
 })
 
 test('分派 3：文件模式带 .json 扩展名时按 JSON 解析', () => {
@@ -228,7 +229,7 @@ test('分派 3：文件模式带 .json 扩展名时按 JSON 解析', () => {
     content: JSON.stringify({ root: { author: '甲', text: 'x' }, comments: [] }),
   })
   assert.ok(parsed.discussion !== undefined)
-  assert.equal(parsed.discussion.source, 'file')
+  assert.equal(parsed.discussion!.source, 'file')
 })
 
 test('标题 1：首句超过 40 字时截断', () => {
@@ -248,7 +249,7 @@ test('标题 2：正文为空时退回作者名', () => {
 function collectedOf(text: string) {
   const parsed = parseText(text)
   assert.ok(parsed.discussion !== undefined)
-  return toCollectedThread(parsed.discussion)
+  return toCollectedThread(parsed.discussion!)
 }
 
 test('投影 1：平台是 manual，不是 weibo', () => {
@@ -332,7 +333,7 @@ test('投影 7：结构化 JSON 的 id 关系是 stated，不标 uncertain', () 
       ],
     }),
   )
-  const collected = toCollectedThread(parsed.discussion)
+  const collected = toCollectedThread(parsed.discussion!)
   const nested = collected.floors.flatMap((entry) => entry.nested)
   assert.equal(nested.length, 1)
   assert.equal(nested[0].replyToPostId, 'c1')
@@ -376,8 +377,8 @@ test('投影 11：不同内容得到不同的线程 id', () => {
 
 test('落盘 1：往返之后线程 id 不变', () => {
   const parsed = parseText(SAMPLE)
-  const stored = toStoredImport(parsed.discussion, new Date().toISOString())
-  assert.equal(threadIdOf(stored), toCollectedThread(parsed.discussion).thread.id)
+  const stored = toStoredImport(parsed.discussion!, new Date().toISOString())
+  assert.equal(threadIdOf(stored), toCollectedThread(parsed.discussion!).thread.id)
 })
 
 test('落盘 2：超过上限的评论被丢弃并计数，不静默', () => {
@@ -389,7 +390,7 @@ test('落盘 2：超过上限的评论被丢弃并计数，不静默', () => {
   const parsed = parseJson(
     JSON.stringify({ root: { author: '原帖', text: 'x' }, comments }),
   )
-  const stored = toStoredImport(parsed.discussion, new Date().toISOString())
+  const stored = toStoredImport(parsed.discussion!, new Date().toISOString())
   assert.equal(stored.droppedComments, 0)
   assert.equal(stored.comments.length, 5)
 })
@@ -401,26 +402,26 @@ test('落盘 3：超长正文被截断并计数', () => {
       comments: [{ author: '甲', text: 'あ'.repeat(9000) }],
     }),
   )
-  const stored = toStoredImport(parsed.discussion, new Date().toISOString())
+  const stored = toStoredImport(parsed.discussion!, new Date().toISOString())
   assert.equal(stored.truncatedComments, 1)
   assert.ok(stored.comments[0].text.length < 9000)
 })
 
 test('落盘 4：往返之后内容等价', () => {
   const parsed = parseText(SAMPLE)
-  const stored = toStoredImport(parsed.discussion, new Date().toISOString())
+  const stored = toStoredImport(parsed.discussion!, new Date().toISOString())
   const back = fromStoredImport(stored)
-  assert.equal(back.title, parsed.discussion.title)
-  assert.equal(back.root.author, parsed.discussion.root.author)
+  assert.equal(back.title, parsed.discussion!.title)
+  assert.equal(back.root.author, parsed.discussion!.root.author)
   assert.deepEqual(
     back.comments.map((comment) => comment.author),
-    parsed.discussion.comments.map((comment) => comment.author),
+    parsed.discussion!.comments.map((comment) => comment.author),
   )
 })
 
 test('统计 1：participants 去重且含原帖作者', () => {
   const parsed = parseText(SAMPLE)
-  const stats = statsOf(parsed.discussion)
+  const stats = statsOf(parsed.discussion!)
   assert.ok(stats.participants.includes('原帖作者'))
   assert.equal(new Set(stats.participants).size, stats.participants.length)
 })

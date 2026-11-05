@@ -1041,23 +1041,25 @@ export function stepOf(session: StoredSession | undefined): ManualStep {
   return 'copy'
 }
 
+/** 十一步的固定顺序，页面按它画进度。 */
+export const MANUAL_STEP_ORDER: readonly ManualStep[] = [
+  'import',
+  'preview',
+  'confirm',
+  'analyze',
+  'select',
+  'persona',
+  'generate',
+  'edit',
+  'assess',
+  'approve',
+  'copy',
+]
+
 /** 十一步里，前六步在会话存在之前就完成了；提供它们的完成标记。 */
 export function completedSteps(session: StoredSession | undefined): readonly ManualStep[] {
   if (session === undefined) return []
   const step = stepOf(session)
-  const order: readonly ManualStep[] = [
-    'import',
-    'preview',
-    'confirm',
-    'analyze',
-    'select',
-    'persona',
-    'generate',
-    'edit',
-    'assess',
-    'approve',
-    'copy',
-  ]
-  const at = order.indexOf(step)
-  return order.slice(0, at)
+  const at = MANUAL_STEP_ORDER.indexOf(step)
+  return MANUAL_STEP_ORDER.slice(0, at)
 }
