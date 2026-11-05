@@ -21,7 +21,7 @@ import { mkdir, link, open, readFile, rename, stat, unlink, writeFile } from 'no
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 
-import type { TargetSnapshot } from './types.js'
+import type { NumericUidNamespace, TargetSnapshot } from './types.js'
 import type { CapabilityName } from './platforms/contracts.js'
 import type { ApprovalRecord } from './security/approvals.js'
 import { pruneApprovals } from './security/approvals.js'
@@ -185,7 +185,7 @@ export interface StoredComment {
   readonly authorHandle?: string
   /** Numeric account id and the namespace that number belongs to. */
   readonly authorNumericUid?: string
-  readonly authorNumericUidKind?: 'user_id' | 'tieba_uid'
+  readonly authorNumericUidKind?: NumericUidNamespace
   /**
    * Whether this author's identity is established.
    *
@@ -294,6 +294,26 @@ export const MAX_STORED_COMMENT_CHARS = 600
    * "this session has no comment list" — never as an empty discussion.
    */
   readonly comments?: readonly StoredComment[]
+  /**
+   * The post the owner last chose to answer in this session (v0.2.28).
+   *
+   * ## Why the choice has to be stored, not just passed through
+   *
+   * `triggerPostId` is the post that summoned the analysis, and it never changes. A
+   * generation without an explicit `targetPostId` therefore reverts to it — correct
+   * for a session nobody has re-aimed, wrong for one where the owner has. Without a
+   * record of the choice, the second 「生成候选」 on a re-aimed session re-derives the
+   * opponent from the *old* trigger, gets a different person from the one now stored
+   * on the session, and refuses as `opponent_drift`. That is the same defect the
+   * re-aim fix removes, one turn later.
+   *
+   * Storing it also makes the page's 「目标：」 line and the next generate agree by
+   * construction rather than by both happening to compute the same thing.
+   *
+   * Absent on sessions written before this release; those fall back to
+   * `triggerPostId`, exactly as they behaved before.
+   */
+  readonly selectedTargetPostId?: string
   /**
    * What the read achieved, recorded when the session was created (v0.2.24).
    *

@@ -107,6 +107,25 @@ export type EvalCheck =
 export interface EvalCase {
   /** Stable id: `group/nn`. Used in reports and in failure output. */
   readonly id: string
+  /**
+   * Which platform's shape this thread has (v0.2.28).
+   *
+   * Absent means Tieba: the body *is* 1 楼, so the opening post lives in `floors[0]`.
+   * A case that sets `'weibo'` must supply `body`, because on a microblog the opening
+   * post is a separate node that none of the comments carries.
+   *
+   * The cases are not platform-"flavoured" for decoration: the four defects this release
+   * fixed were all invisible in a Tieba-shaped corpus, and a case that cannot express the
+   * microblog shape cannot fail on it.
+   */
+  readonly platform?: 'tieba' | 'weibo'
+  /**
+   * The opening post, when the platform models it as its own node.
+   *
+   * Required with `platform: 'weibo'`; ignored otherwise. `floors[0]` is then the first
+   * *comment*, not the post.
+   */
+  readonly body?: EvalPost
   /** Short human title, in Chinese, matching the project's docs. */
   readonly title: string
   /** Which behaviour this case models, for a reader deciding whether it is still relevant. */

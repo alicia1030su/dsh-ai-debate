@@ -244,6 +244,23 @@ export interface WorkbenchState {
    * observed; nothing is computed to fill a gap.
    */
   readonly readQuality?: ReadQualityView
+  /**
+   * The last thing that went wrong, in the pipeline's own words (v0.2.28).
+   *
+   * ## Why the session's own status line had to be surfaced
+   *
+   * Every failure in `runAnalysis` and `runGeneration` writes a precise reason into
+   * `session.statusText` — 「平台返回的微博不是请求的那一条…」, 「回复目标无法确认…」 —
+   * and the workbench view never read the field. So a generation that failed for a
+   * concrete, actionable reason rendered as a page where nothing happened: the owner
+   * pressed 「生成候选」, got no error, and had no way to tell a refusal from a
+   * network blip. On a platform whose read path is newly connected, that is exactly
+   * the information the owner needs most.
+   *
+   * It is a separate field rather than appended to `blockers` because it describes
+   * something that *already happened*, not something that stops the next action.
+   */
+  readonly lastError?: string
   /** The target the current candidate would land on, when one is fixed. */
   readonly target?: {
     readonly threadId: string
@@ -325,6 +342,27 @@ const STEP_TITLES: Record<WorkbenchStep, string> = {
  * cannot publish before the approval matches the bytes, and you cannot call it done before the
  * platform was read back.
  */
+/**
+ * The last failure worth showing, or `undefined` when nothing failed.
+ *
+ * `statusText` is a *status* line, so it also carries success text such as
+ * 「已发表并回读确认」. Rendering it unconditionally under an error heading would cry
+ * wolf on every successful run, which trains the reader to ignore the one line that
+ * matters. So it is only read when the session is actually in a blocked or failed
+ * state; a recorded `error` is authoritative whenever it exists.
+ */
+function lastErrorOf(session: {
+  readonly state: string
+  readonly statusText: string
+  readonly error?: string
+}): string | undefined {
+  const recorded = session.error?.trim()
+  if (recorded !== undefined && recorded !== '') return recorded
+  if (session.state !== 'FAILED' && session.state !== 'NEEDS_CONFIRMATION') return undefined
+  const status = session.statusText.trim()
+  return status === '' ? undefined : status
+}
+
 export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
   const { session, capability, lastAttempt } = input
   const candidates = session?.candidates ?? []
@@ -464,6 +502,7 @@ export function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState {
     },
     missingEvidence: gaps,
     outcome,
+    ...(lastErrorOf(session) === undefined ? {} : { lastError: lastErrorOf(session) }),
     counts: {
       // Counts come from what the collection actually read, never from `declaredReplyCount` —
       // the platform's claim and our coverage are different facts, and showing the claim as

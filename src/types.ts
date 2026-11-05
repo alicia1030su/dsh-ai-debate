@@ -55,6 +55,28 @@ export interface ForumRef {
 }
 
 /**
+ * Which of Tieba's two numeric id spaces a value came from.
+ *
+ * `user_id` (published by `/p/totalComment`) and `tieba_uid` (the newer numeric
+ * account id) are separate namespaces: equal values in different namespaces are
+ * **not** the same account.
+ *
+ * Lives in `types.ts` from v0.2.28 because the *data* shape needs it — a record
+ * has to carry the namespace next to the number, and a data type that depends on
+ * the comparison module would make a cycle.
+ */
+export type NumericUidKind = 'user_id' | 'tieba_uid'
+
+/**
+ * Every numeric-id namespace this build can name.
+ *
+ * Tieba's two are spelled explicitly. A platform with exactly one numeric account
+ * id uses `platform:<id>`, which is what keeps a Weibo uid from being described as
+ * either Tieba space — and what makes a configured uid comparable at all.
+ */
+export type NumericUidNamespace = NumericUidKind | `platform:${string}`
+
+/**
  * Which platform surface an author field came from.
  *
  * v0.2.23: kept in `types.ts` rather than `identity.ts` so the data shape does
@@ -90,8 +112,12 @@ export interface AuthorFields {
    * `user_id` (from `/p/totalComment`) and `tieba_uid` are separate id spaces;
    * equal numbers in different spaces are different accounts. Without this tag a
    * uid cannot be compared against anything.
+   *
+   * v0.2.28 widened this from the two Tieba kinds to every nameable namespace: a
+   * single-id platform records `platform:<id>`, and the narrower type was what
+   * forced its projection to leave the field out altogether.
    */
-  readonly authorNumericUidKind?: 'user_id' | 'tieba_uid'
+  readonly authorNumericUidKind?: NumericUidNamespace
   /** Which surface produced the author fields above. */
   readonly authorSource?: IdentitySource
   /**
@@ -116,6 +142,35 @@ export interface AuthorFields {
   }
 }
 
+/**
+ * How a platform represents the opening post relative to its reply list.
+ *
+ * ## Why the core has to be told this (v0.2.28)
+ *
+ * The core used to assume one shape: `Thread.content` is a copy of the first
+ * reply's text, so the opening post is already on the timeline and nothing more is
+ * needed. That is true of a forum (Tieba's 1 楼 *is* the 主题帖) and false of a
+ * microblog (a Weibo 微博 is a post of its own; the comments hang under it and
+ * none of them carries its text).
+ *
+ * Under the old assumption a microblog thread had two silent faults:
+ *
+ * - the opening post never entered the timeline, so its author was not a
+ *   participant — a thread the owner had clearly spoken in was reported as
+ *   「在帖子里没有找到主人的发言」;
+ * - the body could not be addressed at all, because `floorOf()` only looked at
+ *   replies, so pointing at it produced 「不属于任何已采集楼层」.
+ *
+ * Neither is a Weibo quirk to patch; both are consequences of an unstated
+ * assumption in the core. Stating it lets each adapter answer for its own shape
+ * without the analyzer naming a platform.
+ */
+export type ThreadBodyNode =
+  /** The body **is** the first reply (Tieba's 1 楼). Nothing extra to add. */
+  | 'first_floor'
+  /** The body is a node of its own; replies are separate posts under it. */
+  | 'standalone'
+
 /** The thread (主题帖) under discussion. */
 export interface Thread extends AuthorFields {
   readonly platform: PlatformId
@@ -125,6 +180,15 @@ export interface Thread extends AuthorFields {
   readonly title: string
   /** Plain-text body of the first post. */
   readonly content: string
+  /**
+   * Whether `content` is also the first reply's text (v0.2.28).
+   *
+   * Absent means `'first_floor'` — the shape every adapter produced before this
+   * field existed, so leaving it out keeps historical behaviour byte for byte.
+   * A platform whose body is its own post states `'standalone'` and
+   * {@link buildTimeline} then emits it as a `root` entry.
+   */
+  readonly bodyNode?: ThreadBodyNode
   /** Author's stable platform user id, when the platform exposes one. */
   readonly authorId?: string
   readonly authorName?: string

@@ -59,12 +59,40 @@ test('选中的评论就是发表目标，不再回退到作者最新发言', ()
 
 test('父楼层跟着选中的评论走', () => {
   const source = runtimeSource()
-  // A nested reply must attach under its own floor. Using the dispute's floor for a
-  // pick from another floor would post the reply under the wrong floor.
+  // A reply must attach under its own container, not under whatever floor the summons
+  // happened to sit in.
+  //
+  // v0.2.28 introduced `selected?.parentPostId ?? dispute.floorPostId` here to fix that,
+  // and the assertion used to encode that exact expression. It was the wrong fix: the
+  // shape is Tieba's. On Weibo a comment *is* the first-level post and the container is
+  // the opening post, so `getReplyContext` returns the comment as `floor`; comparing it
+  // against `dispute.floorPostId` (the body) could never match and every Weibo generation
+  // died as `wrong_floor`.
+  //
+  // Both bugs have the same cure: ask `containerOf`, which is the per-platform answer to
+  // "what contains this post". Asserting the *property* instead of the expression keeps
+  // the next fix from having to rewrite the test again.
   assert.match(
     source,
+    /floorPostId: containerOfTarget\?\.postId \?\? dispute\.floorPostId/,
+    '容器由 containerOf 决定，只有它答不出来时才回退到分析的容器',
+  )
+  assert.match(
+    source,
+    /const containerOfTarget = containerOf\(collected, publishTargetPostId\)/,
+    '容器必须从真正要回复的那条算起，否则选中与未选中会走两套推理',
+  )
+  assert.doesNotMatch(
+    source,
     /floorPostId: selected\?\.parentPostId \?\? dispute\.floorPostId/,
-    '楼中楼必须挂在自己的父楼层下',
+    '不得回退到触发楼层：那会把选中的另一层楼发到错误的楼层下',
+  )
+  // The fallback must not be the *only* path: a version that drops containerOf entirely
+  // would satisfy the negative assertion above while reintroducing the Weibo bug.
+  assert.doesNotMatch(
+    source,
+    /floorPostId: selected \? \(selected\.parentPostId \?\? selected\.postId\)/,
+    '不得再用 parentPostId 当容器：微博评论没有父楼层，一级帖子也不是自己的容器',
   )
 })
 

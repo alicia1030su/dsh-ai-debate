@@ -441,6 +441,35 @@ export interface PendingApprovalExpectation {
  * with a real adapter is a different object from a manifest describing a plan,
  * and the two must never render identically.
  */
+/**
+ * How far a platform's read path has actually been proven.
+ *
+ * ## Why this is five values and not a boolean (v0.2.28)
+ *
+ * The page had one bit — `implemented` — and it was derived as "some capability row
+ * is `supported` **or** `unverified`". For Weibo every read row is `unverified` (the
+ * code exists, no live call ever succeeded here), so the platform rendered as green
+ * 「已接入」 next to Tieba, which really has been run. The owner could not tell
+ * "works" from "written but untested", and the one state the read path is actually
+ * in was the one the page could not say.
+ *
+ * The five states are the five different things the owner might have to do:
+ *
+ * - `verified` — proven against the real platform; nothing to do;
+ * - `untested` — implemented and structurally sound, never called for real;
+ * - `needs_login` — the CLI is installed but no account is logged in;
+ * - `needs_permission` — logged in, but the read scope is not granted;
+ * - `unavailable` — nothing will make it work; the platform does not offer it.
+ *
+ * They are ordered by "how much work remains", so the page can sort on them.
+ */
+export type PlatformReadiness =
+  | 'verified'
+  | 'untested'
+  | 'needs_login'
+  | 'needs_permission'
+  | 'unavailable'
+
 export interface PlatformView {
   readonly id: string
   readonly displayName: string
@@ -449,6 +478,20 @@ export interface PlatformView {
   readonly implemented: boolean
   /** True when this is the platform the plugin currently talks to. */
   readonly active: boolean
+  /**
+   * How far the read path has been proven (v0.2.28).
+   *
+   * Derived from the capability matrix by the host, never restated by the page: a
+   * badge computed in two places is how the two ends up disagreeing.
+   *
+   * Optional so a caller written before this field — and every older test that builds a
+   * `PlatformView` by hand — keeps compiling. The page renders the badge only when it is
+   * present, so an absent value degrades to the previous one-badge display instead of
+   * inventing a readiness state the host never claimed.
+   */
+  readonly readiness?: PlatformReadiness
+  /** One line explaining `readiness`, in the platform's own words. */
+  readonly readinessReason?: string
   /** Research stage, for the not-yet-implemented ones. */
   readonly research?: string
   /** Capability rows, already flattened for the page. */

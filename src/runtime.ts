@@ -35,6 +35,7 @@ import {
   assertCollected,
   buildTimeline,
   collectThread,
+  containerOf,
   floorLabel,
   type CollectedThread,
   type TimelineEntry,
@@ -473,8 +474,13 @@ export async function runAnalysis(
   // inside one platform, so this must run after the URL resolved to one.
   const owner = ownerIdentity(config, ref.platform)
   if (!owner.userId && !owner.handle && !owner.userName) {
+    // Named without assuming Tieba (v0.2.28). The old wording told every user to fill in
+    // 「贴吧登录名（un）」, which is a field that does not exist on any other platform and
+    // sends a Weibo owner looking for something they cannot provide.
     throw new Error(
-      '还没有绑定主人：请先调用 debate_bind_owner，或在插件设置里填写主人的数字 ID / 贴吧登录名（un）',
+      `还没有绑定主人（平台「${ref.platform}」）：请先调用 debate_bind_owner，` +
+        '或在插件设置的账号绑定里填写这个平台的主人账号。' +
+        '不同平台的账号互不通用：插件不会拿贴吧的身份去读微博的帖子。',
     )
   }
 
@@ -1054,7 +1060,11 @@ export async function runGeneration(
       )
     }
   }
-  const targetPostId = requestedTarget ?? session.triggerPostId
+  const targetPostId = requestedTarget ?? session.selectedTargetPostId ?? session.triggerPostId
+  // True when the owner's stored choice is what drove this generation, not the summon.
+  // The two drift branches below treat them differently, so the distinction is made
+  // once here rather than re-derived at each branch.
+  const usingStoredChoice = requestedTarget === undefined && session.selectedTargetPostId !== undefined
 
   const dispute = analyzeDispute(collected, owner, {
     postId: targetPostId,
@@ -1068,7 +1078,33 @@ export async function runGeneration(
   // somebody the owner never saw, or reuse the old opponent's ids and floor while
   // the text answers a new person. The original approved candidates also stop
   // being valid, because they were reviewed against the old target.
-  const opponentDrift = detectOpponentDrift(session, dispute)
+  //
+  // ## …unless the owner just said who they mean (v0.2.28)
+  //
+  // The check asked only "did the opponent change", which cannot tell two very
+  // different situations apart:
+  //
+  //   1. The platform moved on and a fresh read now points at someone new. Nobody
+  //      asked for that, so continuing would answer a person the owner never chose.
+  //   2. The owner clicked 「用这条」 on somebody. The opponent *must* change — that
+  //      is what the button does. Refusing here makes the button unusable in exactly
+  //      the case it exists for, and it did: a Weibo thread where the body mentions
+  //      three people gives them equal evidence, the first analysis is ambiguous, and
+  //      the owner's correction to «后说话的» was greeted with 「争论对象已变化」
+  //      followed by four failed browser stages and no candidate at all.
+  //
+  // Case 2 is the owner resolving an ambiguity, which is the *point* of the manual
+  // step, so an explicit `targetPostId` suppresses the drift stop. What still
+  // protects the owner is unchanged and lives further down: the target must be in
+  // the stored comment list, its author must match, and every existing candidate is
+  // un-approved because it was reviewed against the old person.
+  //
+  // The drift check therefore only fires when the target came from what the session
+  // already holds — and it still fires there, on purpose. Once `selectedTargetPostId`
+  // is stored, `opponentKey` describes *that* post's opponent (both are written by the
+  // same `mutate`), so a fresh read of the same post producing a different person is a
+  // real platform change and must stop exactly as before.
+  const opponentDrift = requestedTarget === undefined ? detectOpponentDrift(session, dispute) : undefined
   if (opponentDrift) {
     await runtime.store.mutate((data) => ({
       ...data,
@@ -1087,6 +1123,22 @@ export async function runGeneration(
     }))
     throw new Error(
       `${opponentDrift}。已停止生成：请重新分析这个帖子并确认争论对象，旧的候选回复不再可发表。`,
+    )
+  }
+
+  // A changed opponent under a deliberate target is a legitimate re-aim, not drift —
+  // but it does invalidate approvals, for the same reason drift does: those candidates
+  // were written against a different person. Record it so the page can say why the
+  // previously approved text is no longer approved.
+  const reaimed =
+    (requestedTarget !== undefined || usingStoredChoice) &&
+    session.opponentKey !== undefined &&
+    dispute.opponent !== undefined &&
+    dispute.opponent.key !== session.opponentKey
+  if (reaimed) {
+    progress(
+      `按选择的目标重新定向：上次是「${session.opponentName ?? session.opponentKey}」，` +
+        `本次是「${dispute.opponent?.displayName ?? ''}」，旧候选的批准已作废`,
     )
   }
 
@@ -1109,12 +1161,54 @@ export async function runGeneration(
 
   // Resolve and verify the target *before* calling the model, so the text is
   // written against a snapshot that a human will review alongside it.
+  /**
+   * The container the reply lands in — asked of the platform, not assumed.
+   *
+   * ## Two rounds of the same bug, and why this is the third shape
+   *
+   * v0.2.28 shipped `selected?.parentPostId ?? dispute.floorPostId` here. It fixed one
+   * bug and carried another.
+   *
+   * Fixed: `parentPostId` exists only on a nested reply, so choosing a *楼层* fell back
+   * to `dispute.floorPostId` — the floor the **trigger** happened to be in, not the one
+   * that was selected. Select floor 7 while the summons sat in floor 3 and the reply was
+   * addressed to floor 3, which the target check then refused as `wrong_floor`: an error
+   * that reads like the platform moved the post.
+   *
+   * Carried: the whole expression is Tieba's model. There, a *floor* is the container and
+   * nested replies hang under it, so `context.floor.postId` and the expectation are two
+   * names for one thing. On Weibo the container is always the opening post, and
+   * `getReplyContext` returns the **comment itself** as `floor` — it has no floor number
+   * to give. Comparing a Weibo comment id against `dispute.floorPostId` (the body) can
+   * never match, so every Weibo generation died as `wrong_floor` with the body id in the
+   * message. The page said "目标回复现在挂在 6003（6003）下，与分析的楼层 5021243409116023
+   * 不一致" for a target the owner had just clicked, and no candidate could ever appear.
+   *
+   * The third shape asks `containerOf` — the same function the analyzer uses — because
+   * "what contains this post" is exactly the question that differs per platform:
+   *
+   *   - Tieba floor 7        → 7
+   *   - Tieba reply in floor 7 → 7      (matches `parentPostId`)
+   *   - Weibo comment 6003   → 6003     (matches what `getReplyContext` returns)
+   *   - Weibo body           → body id (a container with no floor number)
+   *
+   * Resolved from `publishTargetPostId`, not from `selected`, so the fallback path
+   * (no explicit pick, reply to the opponent's newest post) is covered by the same
+   * reasoning instead of by a second hand-written guess.
+   */
+  const containerOfTarget = containerOf(collected, publishTargetPostId)
   const targetExpectation: TargetExpectation = {
     threadId: session.threadId,
-    floorPostId: selected?.parentPostId ?? dispute.floorPostId,
+    floorPostId: containerOfTarget?.postId ?? dispute.floorPostId,
     targetPostId: publishTargetPostId,
     targetKind: selected
-      ? selected.kind
+      ? // A reply to a thread body lands as a first-level comment under it, which is
+        // the same wire shape as a 楼层 reply — the core's word for "top level here".
+        // Mapping it explicitly keeps `targetKind`'s two values honest instead of
+        // quietly widening the type every adapter and the publisher also switch on.
+        selected.kind === 'root'
+        ? 'floor'
+        : selected.kind
       : dispute.opponent
         ? postKindOf(collected, dispute.opponent.lastPostId ?? '')
         : session.targetKind ?? 'nested',
@@ -1206,6 +1300,8 @@ export async function runGeneration(
     threadId: session.threadId,
     collected,
     dispute,
+    // The same id the prompt names and the validator checks, so the three cannot disagree.
+    targetPostId: publishTargetPostId,
   })
   const briefProblems = validateBrief(briefBuild.brief, briefBuild.sources)
   if (briefProblems.length > 0) {
@@ -1421,7 +1517,53 @@ export async function runGeneration(
         ...entry,
         state: moved.state,
         statusText,
-        candidates: [...entry.candidates, candidate],
+        /**
+         * A re-aim un-approves what came before, for the same reason drift does.
+         *
+         * Those candidates were written to answer a different person. Their approval
+         * records name the old target, and the publish path would refuse them anyway —
+         * but a page showing 「已批准」 next to text aimed at somebody else is exactly
+         * the kind of two-truths-at-once that a review step exists to prevent.
+         */
+        candidates: [
+          ...(reaimed ? entry.candidates.map((row) => ({ ...row, approved: false })) : entry.candidates),
+          candidate,
+        ],
+        /**
+         * The session's idea of the opponent follows a deliberate re-aim (v0.2.28).
+         *
+         * `detectOpponentDrift` compares the fresh analysis against this field. Leaving
+         * the old person here after the owner explicitly chose somebody else would make
+         * the *next* generate — the one with no `targetPostId`, i.e. a plain 「生成候选」
+         * — refuse as drift, on a session that is internally consistent. That is the
+         * same bug one turn later.
+         *
+         * Only when `dispute.opponent` exists: a session whose fresh read found nobody
+         * keeps its record rather than being blanked, so the page can still say who it
+         * used to be arguing with.
+         */
+        ...(reaimed && dispute.opponent !== undefined
+          ? {
+              opponentKey: dispute.opponent.key,
+              opponentName: dispute.opponent.displayName,
+              ...(dispute.opponent.userId === undefined
+                ? {}
+                : { opponentUserId: dispute.opponent.userId }),
+            }
+          : {}),
+        /**
+         * Remember the choice, so the *next* generate aims at the same post (v0.2.28).
+         *
+         * Without this, the second press of 「生成候选」 — the one carrying no explicit
+         * id — goes back to `triggerPostId`, re-derives a different opponent, and is
+         * refused as drift. Storing the choice is what makes 「用这条」 sticky, which is
+         * what the button has always claimed to do.
+         *
+         * Written on every successful generate, explicit or resumed: a generation that
+         * used the stored choice confirms it, so this is idempotent rather than a slow
+         * drift of the field.
+         */
+        ...(requestedTarget === undefined ? {} : { selectedTargetPostId: requestedTarget }),
         updatedAt: new Date().toISOString(),
       }
     })
@@ -1989,11 +2131,33 @@ export function describeFailure(error: unknown): { message: string; pause: boole
  * `resolveTarget` gets an empty id and refuses — which is the correct outcome, since
  * a reply cannot land on a post that is not there.
  */
+/**
+ * The post the owner picked, described the way the target resolver needs it.
+ *
+ * v0.2.28: also recognises the thread body itself, because on a platform whose body
+ * is its own post (`bodyNode: 'standalone'`) the body is a legitimate thing to answer
+ * — it is the thing the whole comment list hangs under. Without this branch the
+ * workbench showed the body as a selectable row and then refused the selection.
+ */
 function selectedComment(
   collected: CollectedThread,
   postId: string | undefined,
-): { postId: string; kind: 'floor' | 'nested'; parentPostId?: string; authorNumericUid?: string } | undefined {
+): {
+  postId: string
+  kind: 'root' | 'floor' | 'nested'
+  parentPostId?: string
+  authorNumericUid?: string
+} | undefined {
   if (postId === undefined || postId === '') return undefined
+  if (collected.thread.bodyNode === 'standalone' && postId === collected.thread.id) {
+    return {
+      postId,
+      kind: 'root',
+      ...(collected.thread.authorNumericUid === undefined
+        ? {}
+        : { authorNumericUid: collected.thread.authorNumericUid }),
+    }
+  }
   for (const entry of collected.floors) {
     if (entry.floor.postId === postId) {
       return {

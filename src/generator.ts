@@ -168,10 +168,32 @@ export function buildGenerationPrompt(options: GenerateOptions): string {
   const opponent = dispute.opponent
   const lines: string[] = []
 
+  /**
+   * The id the model is told to answer must be the id it will be *judged* against.
+   *
+   * ## This used to say `opponent.lastPostId` (fixed in v0.2.28)
+   *
+   * The prompt and the validator read two different sources. The prompt named the
+   * opponent's *newest* post; `validate` compared the model's answer against
+   * `expectedTargetPostId` — the post the owner actually picked. v0.2.25 introduced
+   * picking, so the two stopped agreeing whenever the owner chose anything but that
+   * person's latest post: the model was instructed to answer X, is judged on Y, and
+   * the candidate comes back carrying `wrong_target` with both ids in the message —
+   * 「模型选择的回复对象是 9100000002，但当前对手的发言是 9200000001」 — while the
+   * page has already shown the owner a target line naming 9200000001.
+   *
+   * That candidate cannot be published, so picking a nested reply used to make the
+   * whole flow unusable … and the failure looked like the *model* disobeying.
+   *
+   * Reading the same option in both places makes the instruction and the check one
+   * fact. `opponent.lastPostId` stays as the fallback for callers that have no
+   * selection, which is the same rule `validate` applies.
+   */
+  const promptTarget = options.expectedTargetPostId ?? opponent?.lastPostId
   lines.push('## 任务')
   lines.push(
     `替主人回复「${opponent?.displayName ?? '未知对手'}」。` +
-      `回复对象的 post id 应为 ${opponent?.lastPostId ?? '（未确定）'}。`,
+      `回复对象的 post id 应为 ${promptTarget ?? '（未确定）'}。`,
   )
   if (options.ownerInstruction) {
     lines.push(`主人的附加要求：${options.ownerInstruction}`)

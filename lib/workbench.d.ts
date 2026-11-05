@@ -224,6 +224,23 @@ export interface WorkbenchState {
      * observed; nothing is computed to fill a gap.
      */
     readonly readQuality?: ReadQualityView;
+    /**
+     * The last thing that went wrong, in the pipeline's own words (v0.2.28).
+     *
+     * ## Why the session's own status line had to be surfaced
+     *
+     * Every failure in `runAnalysis` and `runGeneration` writes a precise reason into
+     * `session.statusText` — 「平台返回的微博不是请求的那一条…」, 「回复目标无法确认…」 —
+     * and the workbench view never read the field. So a generation that failed for a
+     * concrete, actionable reason rendered as a page where nothing happened: the owner
+     * pressed 「生成候选」, got no error, and had no way to tell a refusal from a
+     * network blip. On a platform whose read path is newly connected, that is exactly
+     * the information the owner needs most.
+     *
+     * It is a separate field rather than appended to `blockers` because it describes
+     * something that *already happened*, not something that stops the next action.
+     */
+    readonly lastError?: string;
     /** The target the current candidate would land on, when one is fixed. */
     readonly target?: {
         readonly threadId: string;
@@ -289,13 +306,6 @@ export interface WorkbenchInput {
         };
     };
 }
-/**
- * Derive the workbench state.
- *
- * The ordering below is the entire product rule: you cannot approve before there is text, you
- * cannot publish before the approval matches the bytes, and you cannot call it done before the
- * platform was read back.
- */
 export declare function deriveWorkbenchState(input: WorkbenchInput): WorkbenchState;
 /**
  * Say what is known about the *author* of the target — and, just as important, what is not.

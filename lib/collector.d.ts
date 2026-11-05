@@ -13,7 +13,7 @@
  * partial-result reporting for free, and cannot quietly implement "read page 1
  * and call it done".
  */
-import { type Floor, type IdentitySource, type NestedReply, type PlatformAdapter, type PlatformId, type ReplyContext, type Thread, type ThreadRef } from './types.js';
+import { type Floor, type IdentitySource, type NestedReply, type NumericUidNamespace, type PlatformAdapter, type PlatformId, type ReplyContext, type Thread, type ThreadRef } from './types.js';
 import { type CorroborationReason, type CorroborationVerdict, type IdentityObservation, type IdentityAssurance, type IdentityConflictReport } from './identity.js';
 /** How much of a thread to collect. */
 export interface CollectOptions {
@@ -294,7 +294,15 @@ export declare function collectThread(adapter: PlatformAdapter, ref: ThreadRef, 
 export declare function locateReply(adapter: PlatformAdapter, ref: ThreadRef, postId: string, signal?: AbortSignal): Promise<ReplyContext>;
 /** Flatten a collected thread into one ordered timeline of posts. */
 export interface TimelineEntry {
-    readonly kind: 'floor' | 'nested';
+    /**
+     * What kind of node this is.
+     *
+     * - `root` — the thread's opening post, present only when the platform reports
+     *   the body as a post of its own ({@link ThreadBodyNode}). It is a participant
+     *   like any other: on a microblog the owner usually speaks *only* here.
+     * - `floor` / `nested` — the reply hierarchy, as before.
+     */
+    readonly kind: 'root' | 'floor' | 'nested';
     readonly postId: string;
     /**
      * Which platform this entry came from (v0.2.23).
@@ -332,7 +340,7 @@ export interface TimelineEntry {
      * Carried onto the timeline so the identity key can place the number. Tieba has
      * two unrelated numeric namespaces; a number without one cannot be compared.
      */
-    readonly authorNumericUidNamespace?: 'user_id' | 'tieba_uid';
+    readonly authorNumericUidNamespace?: NumericUidNamespace;
     /** Which surface produced the author fields above (v0.2.23). */
     readonly authorSource?: IdentitySource;
     /** Display order within the floor; floors use 0. */
@@ -342,7 +350,22 @@ export interface TimelineEntry {
     readonly replyToName?: string;
     readonly relationUncertain?: boolean;
 }
-/** Build the ordered timeline the analyzer reads. */
+/**
+ * Build the ordered timeline the analyzer reads.
+ *
+ * ## The root entry (v0.2.28)
+ *
+ * When the platform reports its body as a post of its own (`bodyNode:
+ * 'standalone'`), the body is emitted first as a `root` entry. Without it a
+ * microblog thread has no record of the person who wrote the post being discussed:
+ * on Tieba the opening post is 1 楼 and therefore already on the timeline, but a
+ * Weibo 微博 is not any of its comments, so the owner — usually the *only* person
+ * who posted it — was reported as absent from their own thread.
+ *
+ * The entry is emitted only when the adapter says so, which keeps Tieba's timeline
+ * byte-identical: there the body and 1 楼 are the same post, and adding it again
+ * would count the owner's single statement twice.
+ */
 export declare function buildTimeline(collected: CollectedThread): readonly TimelineEntry[];
 /**
  * How to name a floor in human-facing text.
@@ -355,7 +378,28 @@ export declare function buildTimeline(collected: CollectedThread): readonly Time
 export declare function floorLabel(floorNumber: number | undefined, postId: string): string;
 /** Find an entry in a timeline by post id. */
 export declare function findInTimeline(timeline: readonly TimelineEntry[], postId: string): TimelineEntry | undefined;
-/** The floor that contains a timeline entry. */
+/**
+ * The discussion container a post belongs to.
+ *
+ * Renamed from `floorOf` in v0.2.28 because the answer is no longer always a 楼层.
+ * A microblog has none: its opening post is the container every comment hangs
+ * under, and before this the analyzer could only say 「触发回复 … 不属于任何已采集楼层」
+ * when the owner pointed at it.
+ *
+ * Returned shape is deliberately a small value object rather than a `Floor`:
+ * inventing a floor number (or a fake `Floor`) for a post that has none is the
+ * mistake v0.2.1 had to undo.
+ */
+export interface DiscussionContainer {
+    /** The post id that groups this discussion. */
+    readonly postId: string;
+    /** The number the platform displays for it, when it displays one. */
+    readonly floorNumber?: number;
+    /** True when the container is the thread body rather than one of its replies. */
+    readonly isThreadBody: boolean;
+}
+export declare function containerOf(collected: CollectedThread, postId: string): DiscussionContainer | undefined;
+/** The floor that contains a timeline entry, when the platform has floors. */
 export declare function floorOf(collected: CollectedThread, postId: string): FloorWithNested | undefined;
 /** Throw a normalized error when a thread could not be read at all. */
 export declare function assertCollected(collected: CollectedThread): void;

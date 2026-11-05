@@ -37,6 +37,22 @@ export interface BuildBriefInput {
     readonly threadId: string;
     readonly collected: CollectedThread;
     readonly dispute: Dispute;
+    /**
+     * The post the reply actually lands on, when the caller knows it (v0.2.28).
+     *
+     * ## Why the brief cannot keep guessing
+     *
+     * `renderBrief` prints 「回复目标：<id>」 and the model reads it as the target. The
+     * value used to be `dispute.opponent?.lastPostId` — that person's newest post — while
+     * the generation prompt named the post the owner *picked*, and the validator checked
+     * against the latter. Three places, two answers: on a thread where the opponent had
+     * spoken more than once the brief told the model one id, the task line told it
+     * another, and whichever it chose could be marked wrong.
+     *
+     * Passing it in makes the brief state a fact instead of an inference. Absent keeps
+     * the old derivation, so callers with no selection are unchanged.
+     */
+    readonly targetPostId?: string;
 }
 /**
  * Build the brief.

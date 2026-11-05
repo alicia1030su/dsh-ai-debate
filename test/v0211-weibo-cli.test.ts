@@ -59,12 +59,14 @@ test('调用 CLI 时不得经过 shell：源码里不出现 shell:true 或字符
     '不能用 exec（只能用 execFile）',
   )
   // v0.2.12 renamed the first argument so tests can point the layer at a fake binary. The
-  // property that matters is the *form* — a file expression plus an array literal — so the
-  // assertion checks that instead of the old literal name.
+  // property that matters is the *form* — a file expression plus an array in the argv
+  // slot — so the assertion checks that instead of the old literal name. v0.2.28 moved
+  // the call into a local helper whose parameters are `(file, argv)`, so the check now
+  // reads the shape of the call rather than the name of any particular variable.
   assert.match(
     CODE,
-    /execFile\(\s*\n?\s*[\w.]*[Ff]ile,\s*\n?\s*\[/,
-    '必须用文件表达式 + 参数数组调用 execFile',
+    /execFile\(\s*\n?\s*[\w.]*[Ff]ile,\s*\n?\s*[A-Za-z_$][\w$]*\s*,/,
+    '必须用文件表达式 + 参数数组变量调用 execFile',
   )
 })
 
@@ -95,14 +97,33 @@ test('可执行文件名默认写死为 weibo-cli，外部无法通过配置改�
 })
 
 test('参数以数组传给 execFile，而不是拼成一个字符串', () => {
-  // An array literal in the argv position is what makes shell metacharacters inert — even
-  // when the array is assembled by spreading. A joined string (`args.join(' ')`) is not.
-  assert.match(
-    CODE,
-    /execFile\(\s*\n?\s*[\w.]*[Ff]ile,\s*\n?\s*\[[^\]]*\.\.\.args/,
-    'argv 必须是包含 ...args 的数组字面量',
-  )
+  // An array in the argv position is what makes shell metacharacters inert; a joined
+  // string (`args.join(' ')`) is not.
+  //
+  // v0.2.28: the call site became `execFile(file, argv, …)` inside a local `attempt`
+  // helper (the Windows shim fallback retries with a different program), so the old
+  // assertion — "the literal `...args` must appear in the argv slot" — started failing
+  // on code that is *more* careful, not less. Asserting the property instead of the
+  // spelling: every `execFile(` call must pass an identifier or an array literal as
+  // its second argument. A string literal or a template literal there is the bug.
+  const callSites = [...CODE.matchAll(/execFile\(\s*([^,]+),([^,]+),/g)]
+  assert.ok(callSites.length > 0, '源码里应当至少有一处 execFile 调用')
+  for (const [, , argv] of callSites) {
+    const slot = argv!.trim()
+    const isArray = slot.startsWith('[')
+    const isIdentifier = /^[A-Za-z_$][\w$]*$/.test(slot)
+    assert.ok(
+      isArray || isIdentifier,
+      `execFile 的第二个参数必须是数组或数组变量，实际是 ${JSON.stringify(slot)}`,
+    )
+  }
   assert.equal(/args\.join\(/.test(CODE), false, '不能把参数 join 成字符串')
+  // No template literal may reach the argv slot either.
+  assert.equal(
+    /execFile\(\s*[^,]+,\s*`/.test(CODE),
+    false,
+    '不能用模板字符串拼命令行',
+  )
 })
 
 // ---------------------------------------------------------------------------

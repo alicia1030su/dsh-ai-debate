@@ -21,10 +21,14 @@ import { test } from 'node:test'
 import { ALL_CASES } from './evaluation/index.ts'
 import { groupSummary, runDeterministic } from './evaluation/evaluate-deterministic.ts'
 
-test('评测集至少有 60 个案例，且每组都有明确覆盖', () => {
+test('评测集覆盖每一组，且组内数量够用', () => {
   // A count is a weak assertion on its own, so it is paired with the group breakdown: the
-  // task book asks for breadth across named situations, not for 60 variations of one.
-  assert.ok(ALL_CASES.length >= 60, `案例太少：${ALL_CASES.length}`)
+  // task book asks for breadth across named situations, not for N variations of one.
+  //
+  // v0.2.28 added the `weibo` group. The count is not the point — the point is that a
+  // corpus made only of forum-shaped threads cannot fail on a microblog-shaped thread,
+  // which is exactly how four read-path defects shipped while 64 cases were green.
+  assert.ok(ALL_CASES.length >= 70, `案例太少：${ALL_CASES.length}`)
   const groups = groupSummary({
     total: ALL_CASES.length,
     passedCases: ALL_CASES.length,
@@ -53,7 +57,7 @@ test('每个案例都有出处与预期，没有空壳', () => {
   }
 })
 
-test('确定性评测：64 个案例全部通过', async () => {
+test('确定性评测：全部案例通过', async () => {
   const report = await runDeterministic()
   const failures = report.checks.filter((c) => !c.passed)
   const lines = failures.map((f) => `  ✖ ${f.caseId} [${f.check}] ${f.detail}`)
