@@ -313,7 +313,7 @@ try {
   await sleep(2600)
 
   const tabs = await evaluate<string[]>(`[...document.querySelectorAll('[role=tab]')].map(t => t.textContent.trim())`)
-  stage('十个页签渲染', tabs.length === 10 ? 'passed' : 'failed', `实际 ${tabs.length} 个：${tabs.join('/')}`)
+  stage('十一个页签渲染', tabs.length === 11 ? 'passed' : 'failed', `实际 ${tabs.length} 个：${tabs.join('/')}`)
 
   // ## Bind the owner first
   //

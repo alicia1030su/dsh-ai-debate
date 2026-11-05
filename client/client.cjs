@@ -341,6 +341,7 @@ window.__ModuleLoader__.load({
       manualNoBuild: '当前构建没有接上离线工作流。',
       manualEmpty: '还没有导入任何内容。',
       // v0.2.22: the publish workbench.
+      tabManual: '离线导入',
       workbenchTitle: '发表工作台',
       workbenchHint:
         '从一条讨论链接走到发表确认。每一步都由持久记录推导，刷新页面会回到同一个位置，不会重放任何不可逆的操作。',
@@ -766,6 +767,7 @@ window.__ModuleLoader__.load({
       manualNoBuild: 'This build has no offline workflow.',
       manualEmpty: 'Nothing imported yet.',
       // v0.2.22: the publish workbench.
+      tabManual: 'Offline import',
       workbenchTitle: 'Publish workbench',
       workbenchHint:
         'From a discussion link to a confirmed publish. Every step is derived from durable records, so reloading lands on the same place and never replays an irreversible action.',
@@ -1020,6 +1022,9 @@ window.__ModuleLoader__.load({
       { id: 'verify', label: 'tabVerify' },
       // v0.2.22: the publish workbench, after verification — capability first, then the flow.
       { id: 'workbench', label: 'tabWorkbench' },
+      // v0.2.30: 离线导入紧随工作台之后。它是官方接口读不到时的备用路径，
+      // 所以排在同一件事的后面：先试官方，不行粘进来。
+      { id: 'manual', label: 'tabManual' },
       { id: 'security', label: 'tabSecurity' },
       { id: 'status', label: 'tabStatus' },
     ]

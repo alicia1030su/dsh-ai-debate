@@ -127,13 +127,38 @@ function capabilityFor(
   platform: string,
   name: 'comment.publish' | 'comment.reply' = 'comment.publish',
 ): { declared: string; effective: string; reason: string } {
-  const matrix = runtime.platforms?.capabilitiesOf(platform)
+  /**
+   * ## 未注册的平台不是错误，是「没有这个平台」
+   *
+   * `capabilitiesOf` 对未注册的 id **抛错**（`PlatformNotRegisteredError`），而这里是
+   * 给页面算一个展示用的能力快照。v0.2.30 人工导入的会话平台是 `manual` —— 它按设计
+   * 就不在注册表里（没有发表路径）。于是一读工作台就抛，页面拿到的是
+   * 「读取工作台状态失败：平台「manual」没有注册」，**整条离线流程在页面上根本
+   * 显示不出来**：步骤、候选、复制按钮全部消失，只剩下这句看起来像故障的话。
+   *
+   * 这不是「注册表缺了一项」，是这个会话本来就没有可发表的平台。所以接住它，
+   * 返回 `unavailable` 并说明原因。发表路径本身不依赖这个返回值：那条路
+   * `adapterFor` 会抛，是另一道结构性闸门。
+   */
+  let matrix: ReturnType<NonNullable<Runtime['platforms']>['capabilitiesOf']> | undefined
+  let missingPlatform = false
+  try {
+    matrix = runtime.platforms?.capabilitiesOf(platform)
+  } catch {
+    matrix = undefined
+    missingPlatform = true
+  }
   const declared = matrix === undefined ? 'unavailable' : stateOf(matrix, name).state
   if (declared === 'unavailable' || declared === 'permission_required' || declared === 'supported') {
     return {
       declared,
       effective: declared,
-      reason: matrix === undefined ? `${platform} 没有声明任何能力` : stateOf(matrix, name).reason,
+      reason:
+        matrix === undefined
+          ? missingPlatform
+            ? `${platform} 不是一个已注册的平台，这个会话没有可发表的平台`
+            : `${platform} 没有声明任何能力`
+          : stateOf(matrix, name).reason,
     }
   }
   const accountId = configuredAccountOf(runtime.config(), platform) ?? ''
@@ -1952,6 +1977,22 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     },
     editCandidate: async (input) => editCandidate(runtimeView, input),
     workbench: async ({ sessionId }: { readonly sessionId?: string }) => {
+      /**
+       * ## 先等 store 加载完再回答
+       *
+       * `DebateStore` 是懒加载的：`getSession` / `latestSession` 读的是内存缓存，
+       * 而缓存在 `ready()` 之前是空文档。这条路由原先没有 await，于是
+       * **进程起来之后第一次读工作台，永远读到「还没有会话」**——页面显示
+       * 「粘贴讨论链接」，而磁盘上明明躺着刚导入的那一条。
+       *
+       * 更糟的是它看起来像时序玄学：先访问一次别的页（`/status` 之类会 await 的
+       * 路由），再回来刷新就好了。第一遍白屏、第二遍正常，是最容易被当成缓存
+       * 或者浏览器问题的形状。
+       *
+       * 这也解释了为什么实测时它只在「刷新页面后立刻看工作台」时出现：正常流程
+       * 里确认导入那一步自己写过 store，缓存已经热了。
+       */
+      await runtimeView.store.ready()
       const session =
         sessionId === undefined
           ? runtimeView.store.latestSession()
