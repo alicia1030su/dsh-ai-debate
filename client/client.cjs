@@ -314,6 +314,7 @@ window.__ModuleLoader__.load({
       workbenchCounts: '已读取',
       workbenchCountsLine: '楼层 {floors} 条 · 楼中楼 {nested} 条 · 候选 {candidates} 条',
       // v0.2.24: the comment list, so choosing a target no longer needs a postId.
+      workbenchLastError: '上一次操作失败',
       workbenchComments: '评论列表',
       workbenchCommentsHint: '选中一条评论作为回复对象；换一条会让原来的批准失效。',
       workbenchCommentsEmpty: '这次读取没有产生可选择的评论。',
@@ -323,6 +324,7 @@ window.__ModuleLoader__.load({
       workbenchCommentsPicked: '已选为目标',
       workbenchCommentFloor: '第 {floor} 楼',
       workbenchCommentNested: '楼中楼',
+      workbenchCommentPost: '主帖/评论',
       workbenchCommentUnder: '属于 {parent}',
       workbenchCommentTruncated: '正文过长，已截断',
       workbenchIdentityVerified: '身份已核验',
@@ -476,10 +478,15 @@ window.__ModuleLoader__.load({
 
       platformsTitle: '平台',
       platformsIntro:
-        '「已接入」是代码真的在跑的平台；「计划中」只有一份清单，没有任何适配器，也没有取得平台授权。',
+        '每个平台单独标注它走到了哪一步：已验证（真实平台跑通过）、未实测（代码写好了但没跑过）、需登录、需权限、不可用。计划中的平台只有一份清单，没有任何适配器。',
       platformsImplemented: '已接入',
       platformsPlanned: '计划中',
       platformsActive: '当前使用',
+      platformsReadinessVerified: '已验证',
+      platformsReadinessUntested: '未实测',
+      platformsReadinessNeedsLogin: '需登录',
+      platformsReadinessNeedsPermission: '需权限',
+      platformsReadinessUnavailable: '不可用',
       platformsResearch: '研究阶段',
       platformsAuth: '认证方式',
       platformsUrls: '支持的链接',
@@ -684,6 +691,7 @@ window.__ModuleLoader__.load({
       workbenchMissing: 'Missing evidence',
       workbenchCounts: 'Read',
       workbenchCountsLine: '{floors} floors · {nested} nested replies · {candidates} candidates',
+      workbenchLastError: 'Last attempt failed',
       workbenchComments: 'Comments',
       workbenchCommentsHint: 'Pick one comment to answer. Picking a different one retires the previous approval.',
       workbenchCommentsEmpty: 'This read produced no selectable comments.',
@@ -693,6 +701,7 @@ window.__ModuleLoader__.load({
       workbenchCommentsPicked: 'Selected as target',
       workbenchCommentFloor: 'Floor {floor}',
       workbenchCommentNested: 'Nested reply',
+      workbenchCommentPost: 'Post/comment',
       workbenchCommentUnder: 'under {parent}',
       workbenchCommentTruncated: 'Body truncated',
       workbenchIdentityVerified: 'identity verified',
@@ -852,6 +861,11 @@ window.__ModuleLoader__.load({
       platformsImplemented: 'Implemented',
       platformsPlanned: 'Planned',
       platformsActive: 'In use',
+      platformsReadinessVerified: 'Verified',
+      platformsReadinessUntested: 'Untested',
+      platformsReadinessNeedsLogin: 'Sign-in needed',
+      platformsReadinessNeedsPermission: 'Permission needed',
+      platformsReadinessUnavailable: 'Unavailable',
       platformsResearch: 'Research stage',
       platformsAuth: 'Authentication',
       platformsUrls: 'Supported links',
@@ -3313,6 +3327,30 @@ window.__ModuleLoader__.load({
         refused: 'workbenchOutcomeRefused',
         unknown: 'workbenchOutcomeUnknown',
       }
+
+      /**
+       * How to label one row's position in the thread.
+       *
+       * ## Why this is not `${comment.floorNumber ?? 0}`
+       *
+       * That expression, in the old inline template, printed 「第 0 楼」 for every Weibo
+       * comment: a microblog has no 楼层, so `floorNumber` is absent and the fallback
+       * produced a number that the platform never had — while the real id, the only
+       * thing that can be acted on, was not shown at all.
+       *
+       * The rule is the collector's own (`floorLabel`): use the number when the platform
+       * displays one, and the post id when it does not. A nested reply is always a reply
+       * to something, so it says so and names its parent's post id.
+       */
+      const commentLocation = (comment) => {
+        const id = String(comment.postId ?? '')
+        if (comment.kind === 'nested') {
+          return `${t('workbenchCommentNested')} · ${id}`
+        }
+        return typeof comment.floorNumber === 'number'
+          ? t('workbenchCommentFloor').replace('{floor}', String(comment.floorNumber))
+          : `${t('workbenchCommentPost')} · ${id}`
+      }
       // What the page is allowed to claim about the author of the target. Three of the
       // four states are "we have not checked"; only a `blocking` state makes a claim,
       // and that claim is "publishing will be refused", which the gate already enforces.
@@ -3359,6 +3397,24 @@ window.__ModuleLoader__.load({
               { className: 'dsd-hint dsd-hint-error' },
               h('strong', null, t('workbenchBlocked')),
               h('ul', null, wb.blockers.map((line) => h('li', { key: line }, line))),
+            )
+          : null
+
+      /**
+       * The last failure, in the pipeline's own words (v0.2.28).
+       *
+       * Rendered separately from `blockers` because it describes something that already
+       * happened. Without it, a generation that stopped for a concrete reason (the read
+       * found nothing, the target could not be confirmed, the brief failed its evidence
+       * check) looked identical to a button that did nothing at all — which is the state
+       * the Weibo read path used to be stuck in.
+       */
+      const lastError =
+        typeof wb.lastError === 'string' && wb.lastError !== ''
+          ? h(
+              'p',
+              { className: 'dsd-hint dsd-hint-error', role: 'alert' },
+              `${t('workbenchLastError')}：${wb.lastError}`,
             )
           : null
 
@@ -3487,16 +3543,18 @@ window.__ModuleLoader__.load({
             h(
               'ul',
               null,
-              ...shown.map((comment) =>
-                h(
+              ...shown.map((comment) => {
+                // Compared against the Host's record of the target, so the badge and the
+                // 「目标：」 line below can never disagree with each other.
+                const isCurrentTarget =
+                  wb.target !== null && wb.target !== undefined && wb.target.postId === comment.postId
+                return h(
                   'li',
                   { key: comment.postId },
                   h(
                     'span',
                     null,
-                    `${comment.kind === 'nested'
-                      ? t('workbenchCommentNested')
-                      : t('workbenchCommentFloor').replace('{floor}', String(comment.floorNumber ?? 0))}` +
+                    `${commentLocation(comment)}` +
                       ` · ${comment.authorName ?? '—'}` +
                       (comment.authorHandle === undefined ? '' : ` (${comment.authorHandle})`) +
                       ` · ${comment.identity === 'conflicted'
@@ -3510,11 +3568,27 @@ window.__ModuleLoader__.load({
                   ),
                   h('div', null, comment.text),
                   comment.truncated === true ? h('em', null, t('workbenchCommentTruncated')) : null,
+                  /**
+                   * Mark the row that is currently the target (v0.2.28).
+                   *
+                   * 「已选为目标」 existed as a string since v0.2.24 and was never
+                   * rendered, so the only feedback for 「用这条」 was the 「目标：」 line
+                   * further down — which the Host only emits once a *candidate* exists.
+                   * Before generating there was therefore no visible answer to "which
+                   * one did I just pick?", and a row that looks identical whether or not
+                   * it is the target is how an owner ends up generating twice.
+                   *
+                   * `wb.target` is the Host's own record, not local state, so this
+                   * marker cannot disagree with what the next generate will use.
+                   */
+                  isCurrentTarget
+                    ? h('span', { className: 'dsd-badge dsd-badge-ok' }, t('workbenchCommentsPicked'))
+                    : null,
                   h(
                     'button',
                     {
                       type: 'button',
-                      disabled: wb.sessionId === undefined,
+                      disabled: wb.sessionId === undefined || isCurrentTarget,
                       onClick: () =>
                         store.runWorkbenchAction('generate-candidates', {
                           sessionId: wb.sessionId,
@@ -3523,8 +3597,8 @@ window.__ModuleLoader__.load({
                     },
                     t('workbenchCommentsPick'),
                   ),
-                ),
-              ),
+                )
+              }),
             ),
           )
         })(),
@@ -3736,6 +3810,7 @@ window.__ModuleLoader__.load({
         facts,
         approvalScope,
         blockers,
+        lastError,
         notices,
         gaps,
         readback,
@@ -4376,6 +4451,30 @@ window.__ModuleLoader__.load({
         if (value === 'unavailable') return 'dsd-badge-bad'
         return 'dsd-badge-warn'
       }
+      /**
+       * The "how far has this been proven" badge.
+       *
+       * Kept as a local helper next to `stateLabel`/`toneOf` so the tone table lives in
+       * one place. A missing `readiness` (an older Host) renders nothing rather than
+       * guessing a state — the platform row then shows only 「已接入」, exactly as before
+       * this release, which is the honest fallback.
+       */
+      const readinessBadge = (row) => {
+        const value = row.readiness
+        if (typeof value !== 'string' || value === '') return null
+        const table = {
+          verified: { label: 'platformsReadinessVerified', tone: 'dsd-badge-ok' },
+          untested: { label: 'platformsReadinessUntested', tone: 'dsd-badge-warn' },
+          needs_login: { label: 'platformsReadinessNeedsLogin', tone: 'dsd-badge-warn' },
+          needs_permission: { label: 'platformsReadinessNeedsPermission', tone: 'dsd-badge-warn' },
+          unavailable: { label: 'platformsReadinessUnavailable', tone: 'dsd-badge-bad' },
+        }
+        const entry = table[value]
+        // An unknown value is shown as-is rather than coerced: a newer Host that adds a
+        // state must not have it silently relabelled as one of these five.
+        if (entry === undefined) return h('span', { className: 'dsd-badge' }, String(value))
+        return h('span', { className: 'dsd-badge ' + entry.tone }, t(entry.label))
+      }
 
       return h(
         Fragment,
@@ -4397,6 +4496,15 @@ window.__ModuleLoader__.load({
                 },
                 t(row.implemented ? 'platformsImplemented' : 'platformsPlanned'),
               ),
+              /**
+               * How far the read path actually got (v0.2.28).
+               *
+               * Separate from 「已接入」 on purpose: that badge answers "is there code",
+               * which for a platform written-but-never-run is yes. This one answers "has
+               * it been proven", which is the question the owner acts on. Rendering only
+               * the first is what let an untested platform look finished.
+               */
+              readinessBadge(row),
               row.active
                 ? h('span', { className: 'dsd-badge dsd-badge-ok' }, t('platformsActive'))
                 : null,
@@ -4404,6 +4512,9 @@ window.__ModuleLoader__.load({
                 ? h('span', { className: 'dsd-badge' }, `${t('platformsResearch')}：${researchLabel(row.research)}`)
                 : null,
             ),
+            row.readinessReason
+              ? h('p', { className: 'dsd-hint' }, row.readinessReason)
+              : null,
             row.authModel
               ? h('p', { className: 'dsd-hint' }, `${t('platformsAuth')}：${row.authModel}`)
               : null,

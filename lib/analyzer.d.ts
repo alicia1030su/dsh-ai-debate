@@ -15,7 +15,7 @@
  */
 import type { NestedReply, PlatformId } from './types.js';
 import type { CollectedThread, TimelineEntry } from './collector.js';
-import type { IdentitySource, OwnerIdentityEvidence } from './identity.js';
+import type { IdentitySource, NumericUidNamespace, OwnerIdentityEvidence } from './identity.js';
 /** How the owner was identified. */
 export type OwnerMatchKind = 'id' | 'name';
 /** A person in the conversation. */
@@ -34,8 +34,7 @@ export interface Participant {
      */
     readonly userId?: string;
     /** Login name (`un` / `username`), the strongest identity a WAP read offers. */
-    readonly handle?: string;
-    /**
+    readonly handle?: string; /**
      * A pre-v0.2.23 account string whose namespace was never recorded (v0.2.23).
      *
      * On Tieba, v0.2.22 documented `authorId` as the `un` login name, so this is
@@ -54,7 +53,7 @@ export interface Participant {
      * not, and the evidence then recorded the *configured* namespace — producing a
      * record that looked consistent with a match that never happened.
      */
-    readonly userIdNamespace?: 'user_id' | 'tieba_uid';
+    readonly userIdNamespace?: NumericUidNamespace;
     /** The platform the numeric uid was read from, for the same reason. */
     readonly platform?: string;
     /**
@@ -206,8 +205,12 @@ export interface OwnerIdentity {
      * A bare number is not an identity: Tieba publishes both a `user_id` and a
      * `tieba_uid`, in unrelated namespaces. Recording which one the config meant
      * lets the gate refuse a numeric claim that cannot be placed.
+     *
+     * v0.2.28: widened to accept `platform:<id>`, which is the *only* namespace a
+     * single-id platform has. Keeping the narrower type here is what made the
+     * derived value (`platform:weibo`) fail to satisfy it in the first place.
      */
-    readonly userIdNamespace?: 'user_id' | 'tieba_uid';
+    readonly userIdNamespace?: NumericUidNamespace;
     /**
      * Login name (`un`) as published by the platform (v0.2.23).
      *

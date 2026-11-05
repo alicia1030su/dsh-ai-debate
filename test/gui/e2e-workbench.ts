@@ -198,13 +198,43 @@ async function typeText(text: string): Promise<void> {
   }
 }
 
+/**
+ * Clear whatever is between us and the sidebar.
+ *
+ * Three kinds of blocker show up on a fresh document, and they do **not** share a
+ * dismissal: the onboarding 「继续」 button, the plain Escape-dismissible popover, and
+ * the 「开始使用」 dialog. That last one is a `role="dialog" aria-modal="true"` whose
+ * mask covers the whole viewport and *swallows every click aimed at the sidebar* while
+ * Escape does nothing at all — it only closes via its own 关闭 button.
+ *
+ * Not knowing about it cost a full debugging round: after the reload the sidebar button
+ * was there, had a non-zero box, `elementFromPoint` at its centre returned the mask, and
+ * the click simply vanished. The resulting failure read 「刷新后插件行出现 — 60 秒内
+ * 插件列表没有渲染出 dsh-ai-debate 这一行」, which blames the Host's inventory endpoint
+ * for what was really a modal in front of the button.
+ */
 async function dismissOverlays(): Promise<void> {
   for (let round = 0; round < 4; round += 1) {
-    const clicked = await clickByLabel('继续')
-    if (clicked) {
+    const clickedContinue = await clickByLabel('继续')
+    if (clickedContinue) {
       await sleep(1200)
       continue
     }
+
+    // A modal mask is the one blocker Escape cannot clear, so close it explicitly. The
+    // click is dispatched through the element (the button is inside the dialog the mask
+    // belongs to), and the mask leaving the DOM is the evidence it worked.
+    const closedDialog = await evaluate<boolean>(`(() => {
+      const button = document.querySelector('[role="dialog"] button[aria-label="关闭"]')
+      if (button === null) return false
+      button.click()
+      return true
+    })()`)
+    if (closedDialog) {
+      await sleep(800)
+      continue
+    }
+
     for (const type of ['keyDown', 'keyUp']) {
       await send('Input.dispatchKeyEvent', {
         type,
@@ -216,6 +246,14 @@ async function dismissOverlays(): Promise<void> {
     }
     await sleep(800)
   }
+}
+
+/** True while a modal mask is still covering the page. */
+async function overlayIsBlocking(): Promise<boolean> {
+  return evaluate<boolean>(`(() => {
+    const dialog = document.querySelector('[role="dialog"][aria-modal="true"]')
+    return dialog !== null && dialog.getBoundingClientRect().width > 0
+  })()`)
 }
 
 function finish(): never {
@@ -237,6 +275,11 @@ function finish(): never {
 try {
   await send('Page.enable')
   await send('Runtime.enable')
+  // Claim the foreground up front. `clickByLabel` dispatches synthesized mouse events,
+  // and those are discarded without a word when the target is not in front — see the
+  // comment at the reload below for how that failure reads.
+  await send('Page.bringToFront')
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true })
   stage('连接浏览器', 'passed', `CDP ${port}，页面 ${page.url.slice(0, 40)}`)
 
   await dismissOverlays()
@@ -555,6 +598,23 @@ try {
   stage('填写验收表单', filled ? 'passed' : 'failed', filled ? '六项都已填入' : '有字段没找到')
   await screenshot('05b-verify-form')
 
+  /**
+   * Baseline *before* the verification publishes.
+   *
+   * `验收本身恰好发表 1 次` below used to assert the absolute count was 1, which is
+   * only true against an empty log. On a re-run against the same isolated tree the log
+   * already held one, so the count read 2 and the stage failed on a run where the
+   * verification had published exactly once — the assertion was measuring the
+   * environment's history, not this run's behaviour.
+   *
+   * Taking the baseline first makes it a delta, which is what the sentence claims.
+   */
+  const countPublishes = (): number =>
+    publishLog !== '' && existsSync(publishLog)
+      ? (JSON.parse(readFileSync(publishLog, 'utf8')) as { publishes: unknown[] }).publishes.length
+      : 0
+  const verifyBaseline = countPublishes()
+
   const submitted = await clickByLabel('发表并回读')
   stage('提交验收', submitted ? 'passed' : 'failed', submitted ? '已点击真实按钮' : '找不到提交按钮')
   if (submitted) {
@@ -572,14 +632,12 @@ try {
   // Everything after this line is the workbench's own work, so "it published exactly once"
   // must be measured from here. Measuring from zero made a correct run look like a double
   // publish, and would have masked a real one.
-  const publishBaseline =
-    publishLog !== '' && existsSync(publishLog)
-      ? (JSON.parse(readFileSync(publishLog, 'utf8')) as { publishes: unknown[] }).publishes.length
-      : 0
+  const publishBaseline = countPublishes()
+  const verifyPublished = publishBaseline - verifyBaseline
   stage(
     '验收本身恰好发表 1 次',
-    publishBaseline === 1 ? 'passed' : 'failed',
-    `验收阶段模拟平台收到 ${publishBaseline} 次`,
+    verifyPublished === 1 ? 'passed' : 'failed',
+    `验收阶段模拟平台收到 ${verifyPublished} 次（本轮之前 ${verifyBaseline} 次，现在 ${publishBaseline} 次）`,
   )
 
   // Back to the workbench for the rest of the flow.
@@ -827,35 +885,124 @@ try {
   // document, the approval must read as spent and the candidate must come back from the
   // store, not from a deleted React tree.
   await send('Page.reload', { ignoreCache: true })
-  await sleep(9000)
+  /**
+   * A reload takes the page target out of the foreground, and CDP input is dropped
+   * silently while that is true.
+   *
+   * This is the part that made the next three stages lie. `Input.dispatchMouseEvent`
+   * returns `{}` — no error, no warning — but nothing arrives: not on the button, not
+   * even on a capture-phase listener attached to `document`. So the click looked
+   * dispatched, the sidebar never opened, and the report said 「60 秒内插件列表没有
+   * 渲染出 dsh-ai-debate 这一行」. The plugin list was fine the whole time; the input
+   * was going nowhere.
+   *
+   * `Page.bringToFront` restores it. It has to be after the reload, because the reload
+   * is what loses it.
+   */
+  await send('Page.bringToFront')
+  await send('Emulation.setFocusEmulationEnabled', { enabled: true })
+  /**
+   * Wait for the shell to be *interactive*, not merely for a fixed delay.
+   *
+   * `sleep(9000)` was a guess about how long a reload takes. When the guess was wrong
+   * the click below landed on a document whose React tree had not hydrated, the click
+   * was swallowed, and the next two minutes were spent waiting for a plugin list that
+   * nobody had asked the page to open. The failure then read 「详情=false 配置=false
+   * 工作台=false」 — indistinguishable from a product that had lost its settings page.
+   *
+   * A sidebar button that exists and has a non-zero box is the evidence that the shell
+   * is mounted; only then is a click meaningful.
+   */
+  const shellReady = await waitFor(async () => {
+    return evaluate<boolean>(`(() => {
+      const nodes = [...document.querySelectorAll('button, [role=tab], a')]
+      const node = nodes.find((n) => (n.textContent || '').trim() === '插件')
+      if (!node) return false
+      const r = node.getBoundingClientRect()
+      return r.width > 0 && r.height > 0
+    })()`)
+  }, 30_000)
+  if (!shellReady) stage('刷新后界面可交互', 'failed', '30 秒内侧边栏没有可点的「插件」')
   await dismissOverlays()
 
+  // If a mask is still up after four dismissal rounds, say so *here*. The next stage's
+  // failure would otherwise blame the plugin inventory for a modal sitting in front of
+  // the button — same symptom, completely different owner.
+  const stillBlocked = await overlayIsBlocking()
+  if (stillBlocked) {
+    stage('刷新后没有模态遮罩挡住侧边栏', 'failed', '遮罩仍在，后续点击会被吞掉')
+  }
+
   const reopenedPlugins = await clickByLabel('插件')
-  if (reopenedPlugins) {
-    // Same race as the first navigation: wait for the row, not for a fixed delay.
-    await waitFor(async () => {
+  const pluginsPageOpened = reopenedPlugins
+    ? await waitFor(async () => {
+        return evaluate<boolean>(`document.body.innerText.includes('安装、启用和配置插件')`)
+      }, 15_000)
+    : false
+  if (reopenedPlugins && !pluginsPageOpened) {
+    stage('刷新后点开插件页', 'failed', '点击后 15 秒内没有进入「安装、启用和配置插件」')
+  }
+  /**
+   * The plugin inventory is re-fetched after a reload, and it is not always fast.
+   *
+   * The budget here was 20 s. On a cold host the inventory call can take far longer —
+   * measured at ~40 s on this machine, and it is the *Host's* endpoint, not this
+   * plugin's. The result was a stage that failed with 「详情=false 配置=false
+   * 工作台=false」 on a product that was entirely healthy, and because the wait's
+   * return value was discarded there was no way to tell a timeout from a missing row.
+   *
+   * So: wait longer, and keep the answer. A timeout now says "the list never
+   * appeared", which is a different sentence from "the row was there but 配置 was not",
+   * and only one of those is worth investigating in the product.
+   */
+  const waitForRow = async (ms: number): Promise<boolean> =>
+    waitFor(async () => {
       return evaluate<boolean>(`document.querySelector('[aria-label="查看 dsh-ai-debate"]') !== null`)
-    }, 20_000)
+    }, ms)
+  let reloadRowsAppeared = pluginsPageOpened ? await waitForRow(30_000) : false
+  if (pluginsPageOpened && !reloadRowsAppeared) {
+    // One retry. A swallowed click is not a missing row, and the two cannot be told
+    // apart from inside the page — re-clicking costs a second and removes the ambiguity.
+    await dismissOverlays()
+    await clickByLabel('插件')
+    reloadRowsAppeared = await waitForRow(30_000)
+  }
+  if (pluginsPageOpened && !reloadRowsAppeared) {
+    stage('刷新后插件行出现', 'failed', '60 秒内插件列表没有渲染出 dsh-ai-debate 这一行')
   }
   const reopenedDetail = await evaluate<boolean>(`(() => {
     const b = document.querySelector('[aria-label="查看 dsh-ai-debate"]')
     if (!b) return false
     b.click(); return true
   })()`)
-  if (reopenedDetail) await sleep(2200)
+  if (reopenedDetail) {
+    // The detail view fetches its own summary; clicking 配置 before it renders is the
+    // same silent no-op the first navigation had to learn about.
+    await waitFor(async () => {
+      return evaluate<boolean>(`document.querySelector('[aria-label="配置 dsh-ai-debate"]') !== null`)
+    }, 30_000)
+  }
   const reopenedConfig = await evaluate<boolean>(`(() => {
     const b = document.querySelector('[aria-label="配置 dsh-ai-debate"]')
     if (!b) return false
     b.click(); return true
   })()`)
-  if (reopenedConfig) await sleep(2600)
+  if (reopenedConfig) {
+    // Wait for the settings shell rather than a fixed delay: the ten tabs are what the
+    // next click addresses, and they arrive with the settings payload.
+    await waitFor(async () => {
+      return evaluate<boolean>(
+        `[...document.querySelectorAll('button, [role=tab], a')].some(n => (n.textContent || '').trim() === '工作台')`,
+      )
+    }, 30_000)
+  }
 
   const reopenedWorkbench = await clickByLabel('工作台')
   if (reopenedWorkbench) await sleep(3000)
   stage(
     '刷新后能重新进入工作台',
-    reopenedPlugins && reopenedDetail && reopenedConfig && reopenedWorkbench ? 'passed' : 'failed',
-    `插件=${reopenedPlugins} 详情=${reopenedDetail} 配置=${reopenedConfig} 工作台=${reopenedWorkbench}`,
+    pluginsPageOpened && reloadRowsAppeared && reopenedConfig && reopenedWorkbench ? 'passed' : 'failed',
+    `插件页=${pluginsPageOpened} 插件行=${reloadRowsAppeared} 详情=${reopenedDetail} 配置=${reopenedConfig} 工作台=${reopenedWorkbench}`,
   )
 
   const afterReloadText = await evaluate<string>(`document.body.innerText`)

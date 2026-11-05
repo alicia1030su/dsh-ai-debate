@@ -84,6 +84,39 @@ export function authorOf(user: unknown): { readonly id?: string; readonly name?:
 }
 
 /**
+ * The identity fields for a Weibo author, when one was stated.
+ *
+ * One helper rather than three inline copies so the namespace spelling cannot
+ * drift between the status, the comment and the nested reply. `platform:weibo` is
+ * the whole of this platform's numeric identity space: unlike Tieba, Weibo has a
+ * single account id, and it is unique across the site.
+ *
+ * ## Why the source is recorded (v0.2.28)
+ *
+ * `platform_contract` is the value that means "the adapter's own promise is the
+ * provenance" — this payload's `user.idstr` is the account id because Weibo says
+ * so, not because a parser guessed. Leaving it out made the workbench label every
+ * Weibo author 「身份未核验」 even when the row carried a numeric account id: the
+ * comment list requires a declared source before it will call an identifier
+ * verified, and that rule is right — a number with unknown provenance proves
+ * nothing. The fix belongs on the write side, where the provenance is known.
+ */
+function weiboIdentity(
+  id: string | undefined,
+): {
+  readonly authorNumericUid?: string
+  readonly authorNumericUidKind?: 'platform:weibo'
+  readonly authorSource?: 'platform_contract'
+} {
+  if (id === undefined || id === '') return {}
+  return {
+    authorNumericUid: id,
+    authorNumericUidKind: 'platform:weibo',
+    authorSource: 'platform_contract',
+  }
+}
+
+/**
  * Image URLs, only when the payload actually carried them.
  *
  * Weibo returns either `pic_urls: [{thumbnail_pic}]` or `pic_ids: [string]`. A bare
@@ -144,8 +177,26 @@ export function projectThread(payload: WeiboStatusPayload, threadId: string, url
     // core already handles a thread whose title is empty.
     title: '',
     content: body,
+    /**
+     * A 微博 is a post in its own right: its comments hang under it and none of them
+     * carries its text. Saying so is what puts the author on the timeline and makes
+     * the body addressable — without it the core treated this platform's opening
+     * post as if it were 1 楼 and therefore already present, which it is not.
+     */
+    bodyNode: 'standalone',
     ...(author.id === undefined ? {} : { authorId: author.id }),
     ...(author.name === undefined ? {} : { authorName: author.name }),
+    /**
+     * The platform's own account id, stated as a number (v0.2.28).
+     *
+     * `user.idstr` is the same account id as `user.id`, in exact string form. It is
+     * also the namespace's only member: a Weibo account id is globally unique on
+     * Weibo, so `platform:weibo` is a complete namespace and no `user_id` /
+     * `tieba_uid` split exists here. Recording it is what lets an owner configured
+     * by numeric uid be matched *provably* instead of through the handle fallback.
+     */
+    ...weiboIdentity(author.id),
+
     ...(createdAt === undefined ? {} : { createdAt }),
     url,
     ...(declared === undefined ? {} : { declaredReplyCount: declared }),
@@ -199,6 +250,7 @@ export function projectCommentAsFloor(payload: WeiboCommentPayload): Floor | und
     postId,
     ...(author.id === undefined ? {} : { authorId: author.id }),
     ...(author.name === undefined ? {} : { authorName: author.name }),
+    ...weiboIdentity(author.id),
     content: body,
     ...(createdAt === undefined ? {} : { createdAt }),
     images: imagesOf(payload),
@@ -233,6 +285,7 @@ export function projectCommentAsNested(
     parentPostId,
     ...(author.id === undefined ? {} : { authorId: author.id }),
     ...(author.name === undefined ? {} : { authorName: author.name }),
+    ...weiboIdentity(author.id),
     content: body,
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(replyToPostId === undefined ? {} : { replyToPostId }),

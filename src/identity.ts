@@ -40,9 +40,9 @@
  * caller must treat it that way.
  */
 
-import type { IdentitySource, PlatformId } from './types.js'
+import type { IdentitySource, NumericUidKind, NumericUidNamespace, PlatformId } from './types.js'
 
-export type { IdentitySource }
+export type { IdentitySource, NumericUidKind, NumericUidNamespace }
 
 /**
  * Which numeric-id namespace a uid belongs to.
@@ -53,7 +53,6 @@ export type { IdentitySource }
  * to the value is what makes "never mix the two" enforceable rather than
  * aspirational.
  */
-export type NumericUidKind = 'user_id' | 'tieba_uid'
 
 /**
  * How strongly the evidence ties this author to an account.
@@ -79,8 +78,15 @@ export interface AuthorIdentity {
   readonly platform: PlatformId
   /** Numeric account id, **only** when the surface stated one as a number. */
   readonly numericUid?: string
-  /** Which numeric namespace `numericUid` lives in. Required whenever it is set. */
-  readonly numericUidKind?: NumericUidKind
+  /**
+   * Which numeric namespace `numericUid` lives in. Required whenever it is set.
+   *
+   * v0.2.28 widened from the two Tieba kinds to every nameable namespace. A
+   * single-id platform states `platform:<id>`, which `compareIdentities` treats as
+   * an ordinary namespace: equal values inside it are the same account, and values
+   * from two different platforms never meet.
+   */
+  readonly numericUidKind?: NumericUidNamespace
   /**
    * Login name (`un` on WAP, `username` on the comment page).
    *
@@ -116,9 +122,9 @@ export interface AuthorIdentity {
  */
 export type IdentityComparison =
   /** Same numeric namespace, same value. The only non-spoofable agreement. */
-  | { readonly kind: 'same_numeric_uid'; readonly namespace: NumericUidKind }
+  | { readonly kind: 'same_numeric_uid'; readonly namespace: NumericUidNamespace }
   /** Same numeric namespace, different values. Two accounts, proven. */
-  | { readonly kind: 'different_numeric_uid'; readonly namespace: NumericUidKind }
+  | { readonly kind: 'different_numeric_uid'; readonly namespace: NumericUidNamespace }
   /** Same login name. Same handle *now* — not proof of the same permanent uid. */
   | { readonly kind: 'same_handle' }
   /** Different login names. Two accounts (a handle cannot be re-registered). */
@@ -778,7 +784,31 @@ export function describeAssurance(assurance: IdentityAssurance): string {
  * there the platform *is* the namespace — spelling it as `platform:<id>` keeps the
  * record honest without inventing an equivalence to Tieba's fields.
  */
-export type NumericUidNamespace = NumericUidKind | `platform:${string}`
+
+/**
+ * The namespace a platform's own numeric account id belongs to.
+ *
+ * ## Why this is one function and not an inline expression (v0.2.28)
+ *
+ * The analyzer built this string inline in the owner-config branch and never
+ * anywhere else, so the identifier a *record* carried had no namespace while the
+ * identifier the *configuration* stated had one. The comparison then required
+ * `participant.userIdNamespace === ownerNamespace`, which is `undefined ===
+ * 'platform:weibo'` — permanently false. A Weibo owner configured by numeric uid
+ * could therefore never be found in their own thread, on any thread, ever; the
+ * only symptom was 「在帖子里没有找到主人的发言」.
+ *
+ * Two call sites now derive it the same way: the write side (a projection that
+ * states a numeric id) and the read side (owner resolution). A single spelling is
+ * what stops the two from drifting apart again.
+ *
+ * Tieba is excluded on purpose: it has *two* numeric spaces and neither is
+ * implied by the platform name, so a Tieba number without an explicit kind stays
+ * unplaced rather than being guessed.
+ */
+export function namespaceForPlatform(platform: PlatformId): NumericUidNamespace | undefined {
+  return platform === 'tieba' ? undefined : (`platform:${platform}` as const)
+}
 
 export interface OwnerIdentityEvidence {
   /**

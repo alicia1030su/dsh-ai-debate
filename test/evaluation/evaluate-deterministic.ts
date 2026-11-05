@@ -79,21 +79,49 @@ function contractOf(c: EvalCase, targetPostId: string): string {
 
 /** Turn the corpus shape into the collector's shape. */
 function collected(c: EvalCase): CollectedThread {
+  const platform = c.platform ?? 'tieba'
+  /**
+   * The thread, in the shape its platform actually has.
+   *
+   * v0.2.28: the corpus could only express a forum, so every case had the opening post
+   * as `floors[0]`. A microblog case that was shaped that way would "pass" while saying
+   * nothing about whether the real microblog shape — body as its own node, no 楼层
+   * numbers — is handled. `bodyNode` and the missing `floorNumber` are what make these
+   * cases able to fail.
+   */
   const thread: Thread = {
-    platform: 'tieba',
-    forum: { platform: 'tieba', id: '1', name: '评测吧' },
+    platform,
+    forum: { platform, ...(platform === 'tieba' ? { id: '1' } : {}), name: platform === 'tieba' ? '评测吧' : '' },
     id: 'eval-thread',
     title: `评测：${c.title}`,
-    content: c.floors[0]?.author.content ?? '',
-    url: 'https://tieba.baidu.com/p/900200300',
+    content: platform === 'weibo' ? (c.body?.content ?? '') : (c.floors[0]?.author.content ?? ''),
+    ...(platform === 'weibo' ? { bodyNode: 'standalone' as const } : {}),
+    ...(platform === 'weibo' && c.body !== undefined
+      ? {
+          ...(c.body.handle === undefined ? {} : { authorId: c.body.handle }),
+          authorName: c.body.authorName,
+          // The real projection states its provenance: Weibo's payload *is* the account
+          // id's source. Omitting it would make the fixture a "legacy" row, and a legacy
+          // row's `authorId` is read as the identifier — so the uid would never match.
+          authorSource: 'platform_contract' as const,
+          ...(c.body.numericUid === undefined
+            ? {}
+            : { authorNumericUid: c.body.numericUid, authorNumericUidKind: 'platform:weibo' as const }),
+        }
+      : {}),
+    url:
+      platform === 'tieba'
+        ? 'https://tieba.baidu.com/p/900200300'
+        : 'https://m.weibo.cn/detail/900200300',
     images: [],
   }
   const floors: Floor[] = c.floors.map((f) => ({
-    platform: 'tieba',
+    platform,
     threadId: thread.id,
-    forumId: '1',
-    forumName: '评测吧',
-    floorNumber: f.floorNumber,
+    ...(platform === 'tieba' ? { forumId: '1', forumName: '评测吧' } : {}),
+    // A microblog does not number its comments, so the field is left out rather than set
+    // to the corpus's ordinal — that ordinal exists for grouping and for a human reader.
+    ...(platform === 'tieba' ? { floorNumber: f.floorNumber } : {}),
     // A floor's addressable post id is its author's post — the `floorPostId` in the corpus is
     // only the grouping key that nested replies hang from.
     postId: f.author.postId,
@@ -103,12 +131,18 @@ function collected(c: EvalCase): CollectedThread {
     createdAt: '2026-11-01T00:00:00.000Z',
     images: [],
     nestedCount: f.nested.length,
+    ...(platform === 'weibo' ? { authorSource: 'platform_contract' as const } : {}),
+    ...(f.author.numericUid === undefined
+      ? {}
+      : platform === 'weibo'
+        ? { authorNumericUid: f.author.numericUid, authorNumericUidKind: 'platform:weibo' as const }
+        : {}),
     ...(f.author.numericUid === undefined ? {} : { authorUid: f.author.numericUid }),
   }))
   const nested: Record<string, NestedReply[]> = {}
   for (const f of c.floors) {
     nested[f.floorPostId] = f.nested.map((reply) => ({
-      platform: 'tieba',
+      platform,
       postId: reply.postId,
       parentPostId: f.floorPostId,
       authorId: reply.handle ?? '',
@@ -116,7 +150,19 @@ function collected(c: EvalCase): CollectedThread {
       content: reply.content,
       createdAt: '2026-11-01T00:00:00.000Z',
       replyToPostId: reply.repliesTo,
-      replyToName: undefined,
+      // Only a platform that states the answered *user* fills this. Tieba's adapter derives
+      // it from the rendered 「回复 X:」 prefix; Weibo states it structurally. Both end up as
+      // a display name, which is why the analyzer resolves it through its own directory
+      // rather than comparing it against an identity key.
+      ...(reply.repliesTo === undefined
+        ? {}
+        : { replyToName: pickedAuthorOf(c, reply.repliesTo) }),
+      ...(platform === 'weibo' ? { authorSource: 'platform_contract' as const } : {}),
+      ...(reply.numericUid === undefined
+        ? {}
+        : platform === 'weibo'
+          ? { authorNumericUid: reply.numericUid, authorNumericUidKind: 'platform:weibo' as const }
+          : {}),
     }))
   }
   // Index-aligned with `floors`, not looked up by id: a floor's addressable id is its
@@ -143,6 +189,10 @@ function collected(c: EvalCase): CollectedThread {
 /** Every post id in the case, for traceability checks. */
 function allPostIds(c: EvalCase): Set<string> {
   const ids = new Set<string>()
+  // The opening post is a real addressable node on a microblog, so it belongs in the set.
+  // Leaving it out would make "the target is in this thread" false for exactly the case the
+  // body-as-its-own-node work exists to support.
+  if (c.body !== undefined) ids.add(c.body.postId)
   for (const f of c.floors) {
     ids.add(f.floorPostId)
     ids.add(f.author.postId)
@@ -153,8 +203,10 @@ function allPostIds(c: EvalCase): Set<string> {
 
 /** Whether a post id can actually be replied to (a floor post or a nested reply). */
 function isTargetable(c: EvalCase, postId: string): boolean {
+  if (c.body !== undefined && c.body.postId === postId) return true
   for (const f of c.floors) {
     if (f.floorPostId === postId) return true
+    if (f.author.postId === postId) return true
     if (f.nested.some((r) => r.postId === postId)) return true
   }
   return false
@@ -194,11 +246,35 @@ async function runCase(c: EvalCase): Promise<{ results: CheckResult[]; refused: 
   // The analyzer is run with the picked post as the trigger, which is what the workbench
   // does. Its answer about who the opponent is must be the picked post's author — not the
   // owner, and not "whoever spoke last".
-  const ownerKey =
-    c.floors.flatMap((f) => [f.author, ...f.nested]).find((p) => p.role === 'owner')?.handle ?? 'owner_un'
+  /**
+   * Who the owner is, in the shape this platform identifies people by.
+   *
+   * ## Why this is not a hardcoded handle (v0.2.28)
+   *
+   * It used to be `…?.handle ?? 'owner_un'`, which is a Tieba login name. On a microblog
+   * the owner is normally the *author of the body*, not of any comment — so the lookup
+   * found nothing, fell back to `owner_un`, and every Weibo case died with
+   * 「帖子里没有这个 ID 的发言」. The corpus could not express the platform, so the
+   * harness silently assumed one.
+   *
+   * Precedence now: the body's author (a microblog owner usually only posted that), then
+   * whoever is tagged `role: 'owner'` among the comments, then the Tieba identity for a
+   * forum-shaped case that predates this. A numeric uid is preferred when the fixture
+   * models one, because that is the identifier the platform actually guarantees.
+   */
+  const ownerPost =
+    c.body?.role === 'owner'
+      ? c.body
+      : c.floors.flatMap((f) => [f.author, ...f.nested]).find((p) => p.role === 'owner')
+  const ownerIdentity =
+    ownerPost?.numericUid !== undefined
+      ? { userId: ownerPost.numericUid, ...(c.platform === undefined ? {} : { platform: c.platform }) }
+      : ownerPost?.handle !== undefined
+        ? { userId: ownerPost.handle }
+        : { userId: 'owner_un' }
   let dispute
   try {
-    dispute = analyzeDispute(data, { userId: ownerKey }, { postId: c.pickedPostId })
+    dispute = analyzeDispute(data, ownerIdentity, { postId: c.pickedPostId })
   } catch (error) {
     push('target_locked', false, `分析器抛错：${error instanceof Error ? error.message : String(error)}`)
     return { results, refused: false }
@@ -363,6 +439,7 @@ async function runCase(c: EvalCase): Promise<{ results: CheckResult[]; refused: 
 
 /** The author name of the picked post. */
 function pickedAuthorOf(c: EvalCase, postId: string): string | undefined {
+  if (c.body !== undefined && c.body.postId === postId) return c.body.authorName
   for (const f of c.floors) {
     if (f.floorPostId === postId || f.author.postId === postId) return f.author.authorName
     const hit = f.nested.find((r) => r.postId === postId)

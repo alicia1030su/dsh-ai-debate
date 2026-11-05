@@ -132,6 +132,29 @@ export declare function parseCliJson<T>(stdout: string): {
  * `cli_missing` must not advertise any read as `supported`.
  */
 export declare function probeWeiboCli(): Promise<WeiboCliReadiness>;
+/** One line of `doctor`'s readiness report. */
+export interface DoctorStep {
+    readonly label: string;
+    readonly ok: boolean;
+}
+/**
+ * Parse `doctor`'s human-readable readiness report.
+ *
+ * The report is the only place the real verdict appears — the exit code says nothing (see
+ * above). The marker is wrapped in ANSI colour, which is the detail that broke the first
+ * version of this parser:
+ *
+ *     "\u001b[33m×\u001b[0m 注册或登录"
+ *
+ * An anchored `^[×...]` therefore never matched, the step list came back empty, and the
+ * caller treated "cannot confirm" as "ready" — the same false pass, one layer down. Stripping
+ * the escape sequences before matching is what makes the existing `^` correct rather than
+ * lucky.
+ *
+ * A body with no recognisable step line returns `[]`, which the caller must treat as
+ * "cannot confirm readiness" rather than "ready".
+ */
+export declare function parseDoctorReport(output: string): readonly DoctorStep[];
 /**
  * One row of `commands list --available`.
  *

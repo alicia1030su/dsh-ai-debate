@@ -259,6 +259,36 @@ test('the prompt carries the opponent id, persona and context, and no raw HTML',
   assert.ok(!prompt.includes('j_floor_panel'))
 })
 
+/**
+ * The instruction and the check must name the same post (v0.2.28).
+ *
+ * This is the bug that made picking a comment unusable on the browser run: the prompt
+ * said 「回复对象的 post id 应为 <opponent.lastPostId>」 while `validate` compared
+ * against `expectedTargetPostId` — the post the owner picked. Whenever those differed
+ * (any time the pick was not the opponent's newest post) the model was told to answer
+ * one id, judged on another, and the candidate came back carrying `wrong_target`.
+ *
+ * A single assertion is enough because the property is exactly "one value, two readers".
+ */
+test('the prompt tells the model to answer the same post the validator checks', () => {
+  const { options } = setup()
+  // The owner picked g2, which happens to be the opponent's last post here — so make the
+  // two disagree on purpose, which is the only setup that can fail.
+  const picked = 'g1'
+  assert.notEqual(picked, options.dispute.opponent?.lastPostId, '前置条件：选中的必须不是对手最新那条')
+
+  const prompt = buildGenerationPrompt({ ...options, expectedTargetPostId: picked })
+  assert.match(
+    prompt,
+    new RegExp(`回复对象的 post id 应为 ${picked}`),
+    '提示词必须说选中的那条',
+  )
+  assert.ok(
+    !prompt.includes(`post id 应为 ${options.dispute.opponent?.lastPostId}`),
+    '提示词不能还说对手最新那条：那正是模型被判 wrong_target 的原因',
+  )
+})
+
 test('the system prompt states the honesty escape hatches and the prohibitions', () => {
   assert.match(SYSTEM_PROMPT, /needs_more_context/)
   assert.match(SYSTEM_PROMPT, /needs_confirmation/)

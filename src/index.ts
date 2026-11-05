@@ -42,7 +42,7 @@ import { tiebaProvider } from './platforms/tieba/provider.js'
 import { weiboProvider } from './platforms/weibo/provider.js'
 import { PLATFORM_MANIFESTS } from './platforms/manifests.js'
 import { CAPABILITY_NAMES, markOf, stateOf } from './platforms/contracts.js'
-import type { PlatformCapabilityMatrix } from './platforms/contracts.js'
+import type { CapabilityName, PlatformCapabilityMatrix } from './platforms/contracts.js'
 import { AdapterManager } from './platforms/adapter-manager.js'
 import { platformSettingsOf } from './runtime.js'
 
@@ -213,6 +213,73 @@ async function liveAccountOf(
 }
 
 /**
+ * Decide how far a platform's read path has been proven, from its own declarations.
+ *
+ * ## Why `implemented` alone was not enough (v0.2.28)
+ *
+ * `implemented` is `supported || unverified`, which for Weibo is true on day one:
+ * the adapter exists and every row honestly says "written, never run". The page then
+ * painted 「已接入」 green next to Tieba, which has been run against the real site.
+ * Two very different situations, one badge — and the one that needed the owner's
+ * attention was the one that looked finished.
+ *
+ * The rules below read the capability matrix, which is the only place that knows:
+ *
+ * - any read row `supported` → `verified`;
+ * - any read row `degraded` → `verified`, with the reason carried (it ran, partly);
+ * - any read row `permission_required` → `needs_permission`;
+ * - any read row `unverified` → `untested`;
+ * - nothing readable at all → `unavailable`.
+ *
+ * `needs_login` is not derivable from a static declaration — it is a runtime fact the
+ * probe reports — so it is not produced here. Saying so beats inventing a state the
+ * host cannot actually observe.
+ */
+function readinessOf(matrix: PlatformCapabilityMatrix): {
+  readiness: PlatformReadiness
+  reason: string
+} {
+  const READ_ROWS: readonly CapabilityName[] = [
+    'thread.read',
+    'comment.list',
+    'comment.paginate',
+    'comment.nested',
+    'comment.locate',
+  ]
+  const rows = READ_ROWS.map((name) => ({ name, declaration: stateOf(matrix, name) }))
+  const supported = rows.find((row) => row.declaration.state === 'supported')
+  if (supported !== undefined) {
+    return { readiness: 'verified', reason: `${supported.name}：${supported.declaration.reason}` }
+  }
+  const degraded = rows.find((row) => row.declaration.state === 'degraded')
+  if (degraded !== undefined) {
+    return {
+      readiness: 'verified',
+      reason: `${degraded.name} 能在真实平台跑通但有降级：${degraded.declaration.reason}`,
+    }
+  }
+  const needsPermission = rows.find((row) => row.declaration.state === 'permission_required')
+  if (needsPermission !== undefined) {
+    return {
+      readiness: 'needs_permission',
+      reason: `${needsPermission.name} 需要授权：${needsPermission.declaration.reason}`,
+    }
+  }
+  const untested = rows.find((row) => row.declaration.state === 'unverified')
+  if (untested !== undefined) {
+    return {
+      readiness: 'untested',
+      reason: `${untested.name} 已实现但从未在真实平台跑通：${untested.declaration.reason}`,
+    }
+  }
+  return {
+    readiness: 'unavailable',
+    reason:
+      rows[0]?.declaration.reason ?? '这个平台没有声明任何可用的读取能力。',
+  }
+}
+
+/**
  * Flatten a capability matrix into the row shape the settings page renders.
  *
  * Iterating {@link CAPABILITY_NAMES} rather than the matrix's own keys means a
@@ -246,6 +313,7 @@ import {
   type PauseOutcome,
   type PendingApprovalView,
   type PendingApprovalsView,
+  type PlatformReadiness,
   type PlatformView,
   type RequestAuthorizer,
   type SettingsRouteDeps,
@@ -708,7 +776,22 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
   }
 
   const describePlatforms = (): readonly PlatformView[] => {
-    const activeId = runtime.adapter.id
+    /**
+     * Which platform is "in use".
+     *
+     * v0.2.28: this used to be `runtime.adapter.id`, which is the *default* adapter —
+     * the one a single-platform deployment was built for. With two providers
+     * registered it names Tieba forever, so a Weibo session never showed 「当前使用」
+     * even when the owner was working in one.
+     *
+     * The honest answer is "the platform of the newest session", because that is what
+     * the plugin is demonstrably talking to. When there is no session yet, the default
+     * adapter is the only thing that can answer, and using it is not a claim about
+     * anything having run.
+     */
+    const sessions = runtime.store.snapshot().sessions
+    const current = [...sessions].sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]
+    const activeId = current?.platform ?? runtime.adapter.id
     const rows: PlatformView[] = []
     for (const provider of platforms.list()) {
       const matrix = provider.describeCapabilities()
@@ -724,12 +807,15 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
       const implemented = Object.values(matrix.capabilities).some(
         (capability) => capability.state === 'supported' || capability.state === 'unverified',
       )
+      const { readiness, reason } = readinessOf(matrix)
       rows.push({
         id: provider.id,
         displayName: provider.displayName,
         shape: provider.shape,
         implemented,
         active: provider.id === activeId,
+        readiness,
+        readinessReason: reason,
         capabilities: flattenCapabilities(matrix),
       })
     }
@@ -758,6 +844,13 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
         shape: manifest.shape,
         implemented: false,
         active: false,
+        // A manifest describes a plan, so "nothing to do yet, and here is what would
+        // have to happen" is the honest reading. The reason is the manifest's own
+        // first prerequisite rather than a generic sentence.
+        readiness: 'unavailable',
+        readinessReason:
+          manifest.prerequisites[0] ??
+          '这个平台还只是调研记录，没有适配器可以实现它的任何能力。',
         research: manifest.research,
         capabilities: flattenCapabilities(manifest.capabilities),
         prerequisites: manifest.prerequisites,
