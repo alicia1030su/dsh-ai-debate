@@ -59,36 +59,76 @@
 | 平台 | 状态 | 说明 |
 | --- | --- | --- |
 | 百度贴吧 | ✅ **已实现；真实发表尚未完成闭环** | 帖子 / 楼层分页 / 部分楼中楼读取 / 分析 / 人工批准 / 发表接口 / 回读核对**都有实现和测试**；但本机 IP 对贴吧持续 403，**从未在真实已登录账号上完成一次受控发表** |
-| 微博 | 🟡 **适配层已接线；真实读取仍未验证** | URL 解析、ID 规范化、ConversationGraph 转换、官方 `weibo-cli` 适配层均已实现。v0.2.12 起 Provider 真正调用 CLI（探测 → `commands show` 校验参数 → 执行读取 → `projection.ts` 投影）。**v0.2.29 实测确认本机 `weibo-cli@0.9.8` 的三项准备全未完成**（未登录 / 无开发者认证 / 未开通服务），因此**一次真实读取都没跑过**——测试全部是命令级假 CLI 与投影层断言，不是端到端。真实读取需要主人本人完成一次授权登录，见下文「微博真实读取需要的授权」 |
+| 微博 | 🟡 **已登录，但开发者认证与服务未开通，可用命令 0 条** | URL 解析、ID 规范化、ConversationGraph 转换、官方 `weibo-cli` 适配层均已实现。v0.2.12 起 Provider 真正调用 CLI（探测 → `commands show` 校验参数 → 执行读取 → `projection.ts` 投影）。**v0.2.30 实测：登录已通过（`✓ 注册或登录: 一个天真的矿哥`），但 `developer_identity.status: unverified`、`service_status.kind: none`，因此 `commands list --available` 返回 `total: 75, available_count: 0`**，真实读取仍然一次都没跑成。测试全部是命令级假 CLI 与投影层断言，不是端到端。剩下的两步见下文「微博真实读取需要的授权」 |
 | 知乎 | ⬜ 规划阶段 | 只有能力清单，没有适配器 |
 | 小红书 | ⬜ 规划阶段 | 同上 |
 | 抖音 | ⬜ 规划阶段 | 同上 |
 
 **这张表里没有 `✅ 真实可用` 的微博。** 「写了适配代码」和「在真实平台上读到过」是两件事，前者只是后者的前提。
 
-### 微博真实读取需要的授权（v0.2.29 实测记录）
+### 微博真实读取需要的授权（v0.2.30 实测记录）
 
-本机装的是 `@weibo-ai/weibo-cli@0.9.8`。`weibo-cli doctor` 的输出：
+本机装的是 `@weibo-ai/weibo-cli@0.9.8`，**并且已经完成了一次真实登录**。
+`weibo-cli doctor` 的输出（v0.2.30 实测）：
 
 ```
 使用准备检查
 ------------------------------------------
-× 注册或登录
+✓ 注册或登录: 一个天真的矿哥
 × 完成开发者认证
 × 开通服务
 ```
 
-`weibo-cli auth whoami` 进一步说明：「缺少登录令牌」。三项都需要账号本人在微博客户端与开放平台完成，程序无法代办，也不应该代办：
+`weibo-cli auth whoami`：
 
-| 缺口 | 谁来做 | 怎么做 |
-| --- | --- | --- |
-| 登录 | 主人本人 | `weibo-cli auth login`（有图形界面），或 `auth login --device`（远程/无界面） |
-| 开发者认证 | 主人本人 | 微博开放平台控制台，需要扫脸 |
-| 开通服务 | 主人本人 | 免费 7 天体验，或购买积分包 |
+```
+developer_identity.status : unverified
+service_status.kind       : none
+balance                   : 0
+token.prefix              : at_***c9rQ
+```
+
+`weibo-cli commands list --available`：`total: 75, available_count: 0`。
+
+也就是说：**登录这一环过了，剩下两环没过，因此可用命令是 0 条。**
+`statuses show` 之类的读取命令会返回 `NOT_FOUND: CLI command not found`——
+不是命令名写错，是这个账号现在一条都调不了。
+
+三项都需要账号本人在微博客户端与开放平台完成，程序无法代办，也不应该代办：
+
+| 缺口 | 状态（v0.2.30） | 谁来做 | 怎么做 |
+| --- | --- | --- | --- |
+| 登录 | ✅ **已完成** | 主人本人 | `weibo-cli auth login`（有图形界面），或 `auth login --device` |
+| 开发者认证 | ❌ `unverified` | 主人本人 | 微博开放平台控制台，需要扫脸 |
+| 开通服务 | ❌ `service_status.kind: none`，balance 0 | 主人本人 | 免费 7 天体验，或购买积分包 |
 
 **不要把密码、Cookie、Token 贴进聊天记录或提交到仓库。** CLI 自己保存 OAuth 会话，本插件从不读取它。也可以在无人值守环境自行设置 `WEIBO_CLI_TOKEN` / `WEIBO_CLI_REFRESH_TOKEN` 环境变量——那是你自己的机器上的密钥，不要提交。
 
 三项齐备后，`weibo-cli doctor` 会全绿，插件的微博读取能力才会从 `unverified` 变成实测可用。
+
+插件会把这三项拆成**八个独立状态**显示在「诊断与状态」页：安装、版本、命令能力、
+登录、开发者认证、服务开通、额度、上次读取。它们不合并成一个布尔——「没装好」
+和「装了但没认证」需要完全不同的下一步，合并之后就只剩一句「不可用」。
+阻断项按**因果顺序**取：命令清单为空是认证缺失的**结果**，所以它指向的是
+「去完成开发者认证」，而不是「去查命令清单」。
+
+### 官方接口读不到时：离线讨论导入（v0.2.30）
+
+上面的授权链可能长期缺环。所以本版加了第二条路：**把一段讨论粘进来**，
+用同一套分析器还原争论、起草回复、做安全评估，最后由你自己复制走。
+
+这条路上有几件刻意做成的事实：
+
+| 事实 | 表现 |
+| --- | --- |
+| 内容来自剪贴板，未经平台核验 | 页面上固定显示「人工导入 · 未经平台核验」并说明它可能与平台实际不符 |
+| 没有平台核验的 id | 发言编为 `local:1`、`local:2`…；给了 id 的按原样保留 |
+| 无法证明完整 | 完整性一律 `false`，页面不会声称「读到了全部」 |
+| 只能复制，不能发表 | 没有发表按钮；服务端对这条会话的发表请求直接拒绝；平台 `manual` 在注册表里不存在，取适配器会抛错 |
+| 昵称重名时不猜 | 「A 回复 B」在有多个 B 时判歧义并写进提示，而不是随便挑一个 |
+
+入口：设置页 →「离线导入」页签。十一步是：
+导入 → 预览 → 确认 → 分析 → 选中 → 人格 → 生成 → 编辑 → 安全评估 → 人工确认 → 复制。
 
 贴吧能力的**逐项验证状态**（这个区分很重要，别把「写了代码」当成「验证过」）：
 
@@ -172,22 +212,22 @@
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.29
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.30
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.29) 下载
-`dsh-ai-debate-0.2.29.tgz`，或在仓库根目录自行构建：
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.30) 下载
+`dsh-ai-debate-0.2.30.tgz`，或在仓库根目录自行构建：
 
 ```bash
 node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.29.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.30.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.29.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.30.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
 Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
