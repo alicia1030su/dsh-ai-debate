@@ -634,6 +634,37 @@ export function toCollectedThread(discussion: ImportedDiscussion): CollectedThre
     const matches = discussion.comments.filter(
       (candidate) => candidate.id !== comment.id && candidate.author === claim,
     )
+
+    /**
+     * 「回复 楼主」——最常见的一种回复，原帖作者不在 `comments` 里。
+     *
+     * ## 这曾经被报成「那条评论不在这次导入里」
+     *
+     * `byId` 只索引了评论，原帖不在其中，于是按昵称找时 `matches` 是空的，
+     * 落到 `unresolved: not_found`，并在 `issues` 里写「那条评论不在这次导入里
+     * （local:1 → 楼主）。争论链在这里断了」。
+     *
+     * 那句话是错的：原帖就在这份内容的第一段。用户因此会以为自己的粘贴漏了
+     * 东西，而实际上插件只是没把原帖作者算进候选人。一个 200 层的深链测试里
+     * 第一层就撞上了它——这也说明它足够常见。
+     */
+    const rootAuthorMatches = discussion.root.author.trim() === claim
+    if (rootAuthorMatches) {
+      /**
+       * ## 原帖作者与某位评论者同名时，两边都可能
+       *
+       * 「回复 楼主」到底是回原帖、还是回三楼那位也自称「楼主」的人？
+       * 昵称本身分不出来，唯一能定的事是「它指向的是一种叫这个名字的东西」。
+       *
+       * 这里判歧义而**不是**挑那条评论：挑错的后果是分析器把一段话说成
+       * 别人的立场，而这类错误在后面的每一步都不会再被发现。
+       * 只有评论里没人叫这个名字（`matches` 为空）时才能安全地归到原帖。
+       */
+      if (matches.length > 0) {
+        return { kind: 'unresolved', reason: 'ambiguous', claim }
+      }
+      return { kind: 'root' }
+    }
     if (matches.length === 1) return { kind: 'comment', comment: matches[0]! }
     return { kind: 'unresolved', reason: matches.length === 0 ? 'not_found' : 'ambiguous', claim }
   }

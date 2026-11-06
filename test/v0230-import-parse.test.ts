@@ -425,3 +425,50 @@ test('统计 1：participants 去重且含原帖作者', () => {
   assert.ok(stats.participants.includes('原帖作者'))
   assert.equal(new Set(stats.participants).size, stats.participants.length)
 })
+
+// ---------------------------------------------------------------------------
+// 回复原帖的人（v0.2.30，规模测试抓到的真缺陷）
+// ---------------------------------------------------------------------------
+
+test('投影 12：「回复 楼主」归到原帖，不是「那条评论不在导入里」', () => {
+  // ## 这曾经报错，而且报错内容本身是假的
+  //
+  // `byId` 只索引评论，原帖不在其中。于是按昵称找「楼主」时匹配为空，落到
+  // `unresolved: not_found`，`issues` 写的是「那条评论不在这次导入里（local:1 → 楼主）。
+  // 争论链在这里断了」。
+  //
+  // 原帖就在这份内容的第一段。用户读到那句话只会以为自己粘贴漏了东西。
+  // 一个 200 层的深链基线第一层就撞上了它，说明「回复楼主」有多常见。
+  const collected = toCollectedThread(
+    parseText(`# 回复楼主
+
+楼主：这个价格翻倍是合理的。
+---
+甲：回复 楼主　你先把成本数据拿出来。
+乙：我也觉得不合理。`).discussion!,
+  )
+
+  assert.equal(collected.issues.length, 0, `不该有任何问题：${JSON.stringify(collected.issues)}`)
+  // 甲自己成层（原帖不是评论，没有可挂的父评论），乙也成层。
+  assert.equal(collected.floors.length, 2, '两条评论各自成层')
+  // 但「在回原帖」这件事必须被记下来，否则「争论从哪开始」就丢了。
+  assert.equal(collected.floors[0]!.nested.length, 0)
+})
+
+test('投影 13：评论里有人叫「楼主」时，按昵称的回复仍判歧义', () => {
+  // 上一条的特殊处理只该在**评论里没有同名的人**时生效。有人同名就必须继续
+  // 判歧义——那才是真的分不清，随便挑一个是本项目一直在防的那类错误。
+  const collected = toCollectedThread(
+    parseText(`# 同名
+
+楼主：这个价格翻倍是合理的。
+---
+甲：回复 楼主　你先把成本数据拿出来。
+楼主：我说的是成本上涨，不是价格。`).discussion!,
+  )
+
+  assert.ok(
+    collected.issues.some((line) => /无法确定在回谁|不止一个人/.test(line)),
+    `同名时必须判歧义：${JSON.stringify(collected.issues)}`,
+  )
+})
