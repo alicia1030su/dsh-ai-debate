@@ -312,7 +312,7 @@ node scripts/pack.mjs
 dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.31.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.30.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.31.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
 Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
