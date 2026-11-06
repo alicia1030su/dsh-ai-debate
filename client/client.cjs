@@ -327,6 +327,9 @@ window.__ModuleLoader__.load({
       manualSave: '保存并重新评估',
       manualApprove: '人工确认',
       manualCopied: '已复制到剪贴板',
+      // 剪贴板写不进去时（无权限 / 无手势 / 内嵌 webview），把正文摆出来让用户自己选。
+      // 这比「已复制」更诚实：那句话在写失败时是假的。
+      manualCopyManual: '这个环境不允许插件直接写剪贴板。以下是服务端给的那一段，请手动选中复制：',
       manualCopy: '复制回复',
       manualCopyBlocked: '还不能复制',
       manualCopyTarget: '这段话是回给',
@@ -753,6 +756,8 @@ window.__ModuleLoader__.load({
       manualSave: 'Save and re-assess',
       manualApprove: 'Confirm by hand',
       manualCopied: 'Copied to clipboard',
+      manualCopyManual:
+        'This environment does not let the plugin write to the clipboard. Below is the exact text the server returned — copy it by hand:',
       manualCopy: 'Copy reply',
       manualCopyBlocked: 'Not ready to copy',
       manualCopyTarget: 'This answers',
@@ -1431,6 +1436,21 @@ window.__ModuleLoader__.load({
         // approved, already-published reply. That is not a stale label; it is the page
         // forgetting what it promised. Re-reading on entry is what makes the sentence true.
         if (tab === 'workbench') this.loadWorkbench(this.workbenchSessionId())
+        /**
+         * 「离线导入」读的是同一份工作台视图，也需要同一个入口触发（v0.2.30）。
+         *
+         * ## 漏掉它会怎样
+         *
+         * `loadWorkbench` 只在 `load()` 里自动跑一次，而那次跑在「还没有会话」之前。
+         * 于是刷新页面后**直接**点「离线导入」——store 里明明躺着刚导入、刚确认过的
+         * 会话，页面却显示「还没有导入任何内容」，连步骤条都不画。用户看到的是
+         * 「我的内容没了」。
+         *
+         * 工作台页签早就补过这个问题（上一段注释讲的就是它），新加的页签照抄时漏了
+         * 那一行。这不是「两个页签共用状态」的细节，而是同一句承诺在第二个出口上
+         * 没有兑现。
+         */
+        if (tab === 'manual') this.loadWorkbench(this.workbenchSessionId())
       }
 
       /**
@@ -4041,6 +4061,20 @@ window.__ModuleLoader__.load({
        * 页面上的正文可能已经被编辑过而 state 还没刷新。直接复制 textarea 的内容会
        * 复制出用户没在服务端确认过的东西——所以这里取服务端返回的那一份，
        * 并把页面上的正文一并送去比对，不一致时服务端会拒绝。
+       *
+       * ## 剪贴板可能永远不回话（v0.2.30 实测）
+       *
+       * `navigator.clipboard.writeText` 在两种常见情形下**既不 resolve 也不 reject**，
+       * 而是永久挂起：没有剪贴板权限策略的 iframe / 内嵌 webview，以及部分
+       * 无手势上下文的程序化点击。原来写成 `await` 之后才 `setCopied`，于是
+       * **点了复制，页面什么也不显示**：用户无法判断是复制成功了、还是按钮坏了。
+       *
+       * 真实宿主里这件事第一次跑就撞上了——服务端已经返回 `ok: true` 与正文，
+       * 而页面一个字都没变。
+       *
+       * 修法不是「捕获错误」：挂起不会抛错。给写入加一个上限，超时就当写入不了，
+       * 把正文显示出来让用户自己选中复制。**服务端给的那一段永远是可信的**，
+       * 剪贴板只是一条可选的投递通道。
        */
       const copyNow = async (candidateId, visibleText) => {
         const answer = await run('manual-copy', {
@@ -4048,13 +4082,26 @@ window.__ModuleLoader__.load({
           candidateId,
           ...(typeof visibleText === 'string' ? { visibleText } : {}),
         })
-        if (!answer || answer.ok !== true || typeof answer.text !== 'string') return
-        try {
-          await navigator.clipboard.writeText(answer.text)
-          setCopied(t('manualCopied'))
-        } catch {
-          setCopied(answer.text)
+        if (!answer || answer.ok !== true || typeof answer.text !== 'string') {
+          // 服务端拒绝时 `run` 已经把原因写进 error；这里不能静默返回，
+          // 否则又是一次「点了没反应」。
+          return
         }
+        const text = answer.text
+        // 有的环境里 `navigator.clipboard` 整个不存在（非安全上下文、老 webview）。
+        // 那不是失败，是「这条路不走」。
+        const clipboard = navigator.clipboard
+        const written =
+          clipboard === undefined || typeof clipboard.writeText !== 'function'
+            ? false
+            : await Promise.race([
+                clipboard
+                  .writeText(text)
+                  .then(() => true)
+                  .catch(() => false),
+                new Promise((resolve) => setTimeout(() => resolve(false), 1500)),
+              ])
+        setCopied(written ? t('manualCopied') : `${t('manualCopyManual')}\n${text}`)
       }
 
       // `source` 在没有会话时是 null（`view` 本身是 null），不是 undefined ——
