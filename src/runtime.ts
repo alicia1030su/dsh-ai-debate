@@ -67,6 +67,8 @@ import { guardOutput, toStorageRecord, type ConversationPost } from './security/
 import { buildCommentList } from './comment-list.js'
 import { ownerFromBinding, type CandidateSecurityAssessment, type SecurityStrictness } from './security/security-policy.js'
 import { makeEvent, type SecurityEvent, type SecurityEventKind } from './security/security-events.js'
+import { MANUAL_PLATFORM } from './import/manual.js'
+import { collectedFromStored, localTargetResolver } from './import/session.js'
 
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
@@ -1028,22 +1030,49 @@ export async function runGeneration(
   // never be sent and leaves behind a candidate that looks actionable.
   assertSessionCanGenerate(session)
 
-  progress('正在重新读取帖子，确认目标仍然存在…')
-  const ref: ThreadRef = {
-    platform: session.platform,
-    threadId: session.threadId,
-    url: session.threadUrl,
-  }
-  // The session's stored platform decides which adapter re-reads the thread, so a
-  // resumed Weibo session cannot be served by the Tieba adapter.
-  const collected = await collectThread(adapterFor(runtime, session.platform), ref, {
-    maxPages: config.maxFloorPages,
-    signal: input.signal,
-    onProgress: (update) => progress(update.message),
-  })
+  /**
+   * ## 人工导入的会话不「重新读取」，它重建
+   *
+   * 真实会话的这一步是「再读一遍平台，确认目标还在」——因为平台上的东西会变。
+   * 人工导入的会话没有平台可读：内容是用户粘进来的，`platform` 是 `manual`，
+   * 注册表里没有它，`adapterFor` 会抛错。
+   *
+   * 这里的重建不是「退而求其次」，它就是这条路径的正确语义：唯一的真相是
+   * 存下来的那份导入内容。所以**任何适配器都不会被调用**，一次网络请求也不会发出。
+   */
+  const imported = session.imported
+  const collected = await (async (): Promise<CollectedThread> => {
+    if (imported !== undefined) {
+      progress('正在从导入的内容重建讨论…')
+      return collectedFromStored(imported)
+    }
+    progress('正在重新读取帖子，确认目标仍然存在…')
+    const ref: ThreadRef = {
+      platform: session.platform,
+      threadId: session.threadId,
+      url: session.threadUrl,
+    }
+    // The session's stored platform decides which adapter re-reads the thread, so a
+    // resumed Weibo session cannot be served by the Tieba adapter.
+    return collectThread(adapterFor(runtime, session.platform), ref, {
+      maxPages: config.maxFloorPages,
+      signal: input.signal,
+      onProgress: (update) => progress(update.message),
+    })
+  })()
   assertCollected(collected)
 
-  const owner = ownerIdentity(config, session.platform)
+  /**
+   * 主人身份：真实会话读配置，导入会话读会话里记录的昵称。
+   *
+   * 导入会话**不能**读配置：配置里的账号属于真实平台，把它套到一份粘贴内容上
+   * 会声称「这份剪贴板内容里的某个人就是配置里那个账号」。`ownerName` 来自
+   * 会话创建时对导入内容的选择，它本来就只是一个昵称。
+   */
+  const owner: OwnerIdentity =
+    imported !== undefined
+      ? { platform: MANUAL_PLATFORM, userName: session.ownerName ?? imported.root.author }
+      : ownerIdentity(config, session.platform)
   // ## Which comment this generation answers
   //
   // Default stays `triggerPostId` so resumed sessions behave exactly as before. An
@@ -1241,10 +1270,18 @@ export async function runGeneration(
   }
 
   progress('正在核对回复目标…')
-  const resolved = await resolveTarget(adapterFor(runtime, session.platform), targetExpectation, {
-    signal: input.signal,
-    platform: session.platform,
-  })
+  /**
+   * 导入会话用本地解析器，真实会话用平台适配器。
+   *
+   * `resolveTarget` 的每一项检查都保留：帖子对得上、楼层对得上、是楼层还是楼中楼、
+   * 作者还是不是同一个人、正文有没有被改过。它们保证「生成的回复是针对当前这份
+   * 内容写的」，而 `localTargetResolver` 只负责把 `ReplyContext` 从内存里拼出来。
+   */
+  const resolved = await resolveTarget(
+    imported !== undefined ? localTargetResolver(collected) : adapterFor(runtime, session.platform),
+    targetExpectation,
+    { signal: input.signal, platform: session.platform },
+  )
   if (!resolved.ok) {
     await runtime.store.mutate((data) => ({
       ...data,
@@ -1415,24 +1452,39 @@ export async function runGeneration(
   // The verdict is stored with the candidate so the publish path can re-check the
   // exact same prose, and so editing the text afterwards invalidates it.
   const ownerBinding = ownerFor(bindingsOf(config), session.platform)
+  /**
+   * 安全闸门眼里的「主人」。
+   *
+   * 真实会话读配置里的绑定；导入会话只能用会话里记下的昵称。这不是降级——
+   * 一份剪贴板内容里没有平台签发的账号，声称有才是错的。它会让
+   * `ownerIdentityValid` 这一项通过（有 displayName 就算有身份），但**发表**
+   * 永远不会发生：离线会话在 `runPublish` 里被直接拒绝。
+   */
+  const guardedOwner =
+    imported === undefined
+      ? ownerFromBinding({
+          platform: session.platform,
+          ...(ownerBinding?.primary.accountId !== undefined
+            ? { accountId: ownerBinding.primary.accountId }
+            : {}),
+          // v0.2.23: a handle-only binding is a real binding. Omitting it here made
+          // the security gate treat a valid owner as unbound.
+          ...(ownerBinding?.primary.handle !== undefined
+            ? { handle: ownerBinding.primary.handle }
+            : {}),
+          ...(ownerBinding?.primary.displayName !== undefined
+            ? { displayName: ownerBinding.primary.displayName }
+            : {}),
+        })
+      : ownerFromBinding({
+          platform: MANUAL_PLATFORM,
+          displayName: session.ownerName ?? imported.root.author,
+        })
   const guarded = guardOutput({
     reply: candidateText,
     targetPostId: verifiedTargetPostId,
     expectedTargetPostId: verifiedTargetPostId,
-    owner: ownerFromBinding({
-      platform: session.platform,
-      ...(ownerBinding?.primary.accountId !== undefined
-        ? { accountId: ownerBinding.primary.accountId }
-        : {}),
-      // v0.2.23: a handle-only binding is a real binding. Omitting it here made
-      // the security gate treat a valid owner as unbound.
-      ...(ownerBinding?.primary.handle !== undefined
-        ? { handle: ownerBinding.primary.handle }
-        : {}),
-      ...(ownerBinding?.primary.displayName !== undefined
-        ? { displayName: ownerBinding.primary.displayName }
-        : {}),
-    }),
+    owner: guardedOwner,
     ...(dispute.opponent?.displayName !== undefined
       ? { opponentName: dispute.opponent.displayName }
       : {}),
@@ -1651,6 +1703,28 @@ export async function runPublish(
         ok: false,
         status: 'refused',
         message: `找不到会话 ${input.sessionId}`,
+      }
+    }
+    /**
+     * ## 人工导入的会话永远不发表（v0.2.30 §二）
+     *
+     * 这是两道独立的门里的第二道。第一道是结构性的：离线会话的 `platform` 是
+     * `manual`，注册表里没有它，`adapterFor` 会抛错——它够不到任何真实平台。
+     *
+     * 但「够不到」和「明确说了不做」不是同一件事。一个注册了 `manual` 平台的
+     * 未来版本会让第一道门悄悄失效，而这条判断还在。拒绝发生在这里，**在任何
+     * 适配器被取到之前**，所以没有任何请求可能发出。
+     *
+     * 文案刻意说清「你可以复制」：这不是功能缺失，是这条路的终点。
+     */
+    if (session.imported !== undefined) {
+      return {
+        ok: false,
+        status: 'refused',
+        message:
+          '这条会话是人工导入的讨论，没有可发表的平台。' +
+          '请在离线工作台里复制回复正文，自己贴到微博或论坛上。' +
+          '插件不会把剪贴板内容当成一条真实帖子去发——那会把回复落到一个无法确认的目标上。',
       }
     }
     return await publishCandidate(

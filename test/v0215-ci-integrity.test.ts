@@ -40,12 +40,23 @@ const releaseText = () => readFileSync(RELEASE, 'utf8')
  * v0.2.18 在测试步骤上方加了一段解释管道吞码的注释，其中有个字面量
  * `gh release create`，于是「哪一步创建 Release」这条断言把注释所在的
  * 上一步当成了发布步骤。断言没问题，是切块时把散文当成了代码。
+ *
+ * v0.2.30 同一个坑换了个面：release.yml 的测试步骤上方写着「第一版用
+ * `tail -40 … || true` 收尾，守卫报得对」，而「没有吞掉失败的写法」那条
+ * 断言按原文匹配 `|| true`，于是**描述这次修复的注释把修复本身判红了**。
+ * 断言要防的是代码吞掉失败，不是散文提到它。所以这里统一先剥整行注释，
+ * 与 `scripts/ci-guard.mjs` 用的是同一套语义（那边也是为了同一个原因改的）。
+ *
+ * 剥注释不会放过真的问题：真写在 shell 里、YAML 里的 `|| true` 都不是整行注释，
+ * 仍然会被匹配到。反向验证过——往 run 块里塞一行真 `|| true`，这条照样红。
  */
-const releaseCode = () =>
-  releaseText()
+const codeOnly = (text: string): string =>
+  text
     .split(/\r?\n/)
     .filter((line) => !line.trim().startsWith('#'))
     .join('\n')
+
+const releaseCode = () => codeOnly(releaseText())
 
 const pkg = () => JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 
@@ -103,8 +114,11 @@ test('CI 完整性：工作流里没有吞掉失败的写法', () => {
     ['ci.yml', ciText()],
     ['release.yml', releaseText()],
   ]) {
-    assert.equal(/\|\|\s*true/.test(text), false, `${name} 里有 || true，会吞掉失败`)
-    assert.equal(/continue-on-error:\s*true/.test(text), false, `${name} 里有 continue-on-error`)
+    // 看剥掉注释之后的那份：注释里解释「这个写法为什么会吞掉失败」是好事，
+    // 不该因此把工作流判红。见 codeOnly() 的注释。
+    const code = codeOnly(text)
+    assert.equal(/\|\|\s*true/.test(code), false, `${name} 里有 || true，会吞掉失败`)
+    assert.equal(/continue-on-error:\s*true/.test(code), false, `${name} 里有 continue-on-error`)
   }
 })
 

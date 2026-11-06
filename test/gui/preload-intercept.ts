@@ -50,9 +50,28 @@ interface InterceptLog {
   readonly blockedWrites: string[]
   readonly publishes: PublishRecord[]
   passthrough: number
+  /**
+   * 任何指向真实微博的 HTTP 请求（v0.2.30）。
+   *
+   * ## 为什么单独计数
+   *
+   * 微博走的是 `weibo-cli` 子进程，不经过 `globalThis.fetch`——所以这个计数**不是**
+   * 「微博请求总数」，而是「有没有哪条代码路径绕开 CLI 直接用 fetch 打微博」。
+   * 它必须永远是 0：一旦非零，说明出现了第二套微博客户端，而那套没经过只读允许列表。
+   *
+   * `passthrough` 会把这类请求真的发出去（这是拦截器的设计：它只模拟贴吧），
+   * 所以这一项也是「离线流程有没有偷联网」的直接证据。
+   */
+  readonly weiboHttpCalls: string[]
 }
 
-const log: InterceptLog = { reads: [], blockedWrites: [], publishes: [], passthrough: 0 }
+const log: InterceptLog = {
+  reads: [],
+  blockedWrites: [],
+  publishes: [],
+  passthrough: 0,
+  weiboHttpCalls: [],
+}
 
 const realFetch = globalThis.fetch
 
@@ -271,6 +290,25 @@ if (fixturePath !== undefined && fixturePath !== '') {
     if (url.hostname === TIEBA) {
       const response = await handleTieba(url, bundle, init)
       if (response !== undefined) return response
+    }
+
+    /**
+     * 微博必须只经 CLI 子进程。这里记下来并**拒绝**，而不是放行。
+     *
+     * 放行就等于让一条绕开 CLI 的路径真的打到平台上——而那正是「真实写请求为零」
+     * 这条要求的反面。拒绝使它成为一个可测的断言（`weiboHttpCalls` 为空），
+     * 而不是一句承诺。
+     */
+    if (/(^|\.)weibo\.(com|cn)$/.test(url.hostname)) {
+      log.weiboHttpCalls.push(raw)
+      return json(
+        JSON.stringify({
+          ok: false,
+          reason:
+            'E2E 拦截器：微博只允许通过 weibo-cli 子进程访问，这条 HTTP 请求已被拒绝。',
+        }),
+        403,
+      )
     }
 
     log.passthrough += 1

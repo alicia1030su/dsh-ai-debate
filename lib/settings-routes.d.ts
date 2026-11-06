@@ -292,6 +292,135 @@ export interface SettingsRouteDeps {
      * silently "approves" nothing would teach the owner to trust a broken button.
      */
     approve?(input: Record<string, unknown>): Promise<ApprovalOutcome>;
+    /**
+     * 离线讨论的完整接口（v0.2.30 §一/§二）。
+     *
+     * ## 为什么整块作为一个依赖，而不是七个
+     *
+     * 这七步是**一条链**：预览的结果要原样交给确认，确认的会话要交给生成，
+     * 生成之后才有评估、确认与复制。拆成七个独立依赖会让装配方可以选择性实现，
+     * 而「只实现了生成、没实现确认」的组合是不成立的（复制前必须人工确认）。
+     * 一个对象意味着它要么整块在位，要么整块缺席——缺席时页面明确说这个构建
+     * 没有离线工作流，而不是让用户点到一个永远失败的按钮。
+     */
+    manualImport?: {
+        /** 解析并返回预览，不落盘、不建会话。 */
+        preview(input: {
+            readonly kind: 'text' | 'json' | 'file';
+            readonly content: string;
+            readonly title?: string;
+            readonly url?: string;
+            readonly fileName?: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+            readonly issues?: readonly {
+                readonly severity: string;
+                readonly code: string;
+                readonly message: string;
+            }[];
+            readonly discussion?: {
+                readonly title: string;
+                readonly author: string;
+                readonly text: string;
+                readonly comments: readonly {
+                    readonly id: string;
+                    readonly author: string;
+                    readonly text: string;
+                    readonly replyTo?: string;
+                }[];
+                readonly participants: readonly string[];
+            };
+        }>;
+        /** 确认导入：分析并建会话。 */
+        confirm(input: {
+            readonly kind: 'text' | 'json' | 'file';
+            readonly content: string;
+            readonly title?: string;
+            readonly url?: string;
+            readonly fileName?: string;
+            readonly ownerName?: string;
+            readonly targetPostId?: string;
+            readonly persona?: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly sessionId?: string;
+            readonly reason?: string;
+            readonly next?: readonly string[];
+            readonly participants?: readonly {
+                readonly name: string;
+                readonly postCount: number;
+                readonly isOwner: boolean;
+                readonly isOpponent: boolean;
+            }[];
+            readonly securityNotes?: readonly string[];
+        }>;
+        /** 换主人或换目标，重跑分析。 */
+        select(input: {
+            readonly sessionId: string;
+            readonly ownerName?: string;
+            readonly targetPostId?: string;
+            readonly persona?: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+            readonly next?: readonly string[];
+        }>;
+        /** 生成候选。 */
+        generate(input: {
+            readonly sessionId: string;
+            readonly targetPostId?: string;
+            readonly persona?: string;
+            readonly ownerInstruction?: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly candidateId?: string;
+            readonly text?: string;
+            readonly reason?: string;
+            readonly next?: readonly string[];
+            readonly securityDecision?: string;
+            readonly securityReasons?: readonly string[];
+        }>;
+        /** 编辑正文并重新评估。 */
+        edit(input: {
+            readonly sessionId: string;
+            readonly candidateId: string;
+            readonly text: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+            readonly candidateVersion?: number;
+        }>;
+        /** 人工确认。 */
+        approve(input: {
+            readonly sessionId: string;
+            readonly candidateId: string;
+            readonly approvedText: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+            readonly next?: readonly string[];
+        }>;
+        /** 取可复制的正文与目标。 */
+        copy(input: {
+            readonly sessionId: string;
+            readonly candidateId: string;
+            readonly visibleText?: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+            readonly next?: readonly string[];
+            readonly text?: string;
+            readonly target?: {
+                readonly author?: string;
+                readonly excerpt: string;
+                readonly postId: string;
+            };
+            readonly safe?: boolean;
+            readonly blockers?: readonly string[];
+            readonly persona?: string;
+        }>;
+    };
 }
 /** The status and body an approval attempt answers with. */
 export interface ApprovalOutcome {
@@ -644,6 +773,70 @@ export interface WorkbenchView {
     readonly approveBlocked?: string;
     /** Why the page cannot render a workbench at all, when it cannot. */
     readonly blockers: readonly string[];
+    /**
+     * 这份讨论的来源（v0.2.30 §四）。
+     *
+     * ## 为什么来源必须由服务端给
+     *
+     * 页面不能自己判断「这是官方读取还是我粘进来的」：它手上只有一个平台字符串，
+     * 而那个字符串在两种情况下的可靠程度天差地别。让页面去猜，猜错的方向永远是
+     * 「看起来更像官方」——把剪贴板内容显示成「微博 · 已读取」。
+     *
+     * 服务端按 `session.imported` 是否存在判断，那是决定性的事实。字段本身携带
+     * 标签、可说清的证据强度、以及一句必须显示的风险提示。
+     */
+    readonly source?: {
+        readonly kind: 'official_read' | 'manual_import';
+        readonly label: string;
+        readonly provenance: string;
+        readonly canProveCompleteness: boolean;
+        readonly canProveAuthorship: boolean;
+        readonly allowsWrite: boolean;
+        readonly caution: string;
+    };
+    /**
+     * 人工导入的十一步进度（v0.2.30 §二）。
+     *
+     * 只在 `source.kind === 'manual_import'` 时出现。步骤由服务端从存下来的事实推导
+     * （`stepOf`），页面照画即可——存一个 `step` 字段会让刷新后显示一个与候选、
+     * 批准、编辑记录三者都可能不一致的进度。
+     */
+    readonly manualFlow?: {
+        readonly step: string;
+        readonly stepTitle: string;
+        readonly steps: readonly {
+            readonly id: string;
+            readonly title: string;
+            readonly done: boolean;
+            readonly current: boolean;
+        }[];
+        /** 四种人格，页面渲染成选择器。 */
+        readonly personas: readonly {
+            readonly id: string;
+            readonly name: string;
+            readonly summary: string;
+            readonly approach: string;
+        }[];
+        /** 这份讨论里出现过的人，按分析结果。 */
+        readonly participants: readonly {
+            readonly name: string;
+            readonly postCount: number;
+            readonly isOwner: boolean;
+            readonly isOpponent: boolean;
+        }[];
+        /** 导入内容的来源形式与时间。 */
+        readonly importedAt?: string;
+        readonly importSource?: string;
+        /** 复制前必须看得见的目标。 */
+        readonly copyTarget?: {
+            readonly author?: string;
+            readonly excerpt: string;
+            readonly postId: string;
+        };
+        /** 这段正文能不能安全复制；不能时 `copyBlockers` 说明为什么。 */
+        readonly copyAllowed?: boolean;
+        readonly copyBlockers?: readonly string[];
+    };
 }
 export interface SettingsService {
     writable: boolean;

@@ -473,7 +473,23 @@ function uploadSteps(text) {
 for (const name of ['ci.yml', 'release.yml']) {
   const file = join(root, '.github', 'workflows', name)
   if (!existsSync(file)) continue
-  const text = readFileSync(file, 'utf8')
+  const raw = readFileSync(file, 'utf8')
+
+  /**
+   * 注释不算数。
+   *
+   * 三条检查都读原文，而注释里很可能**就是在讲这些写法为什么被去掉**——
+   * 比如 release.yml 那段说明「第一版用 `|| true` 收尾，CI 守卫报了，报得对」。
+   * 不剥注释的话，描述一次修复会重新触发它自己防的那个问题，于是唯一的出路
+   * 是删掉注释——把最有价值的说明赶走，只为了让检查闭嘴。
+   *
+   * 剥掉以 `#` 开头的行之后，检查仍然覆盖所有会被 shell 执行的内容：
+   * YAML 的注释只能整行，不存在「行尾注释里藏一条命令」的写法。
+   */
+  const text = raw
+    .split('\n')
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
 
   // A failure that is explicitly discarded never turns a check red.
   if (/\|\|\s*true/.test(text)) {

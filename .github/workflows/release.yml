@@ -20,6 +20,26 @@ jobs:
   release:
     name: 构建并发布
     runs-on: ubuntu-latest
+    # ## 为什么必须有超时（v0.2.30 §八）
+    #
+    # 没有 `timeout-minutes` 时，GitHub 给它默认的 **360 分钟**。一个挂住的步骤
+    # ——等待一个永不返回的子进程、一个把 stdin 打开着的命令——不会失败，只会
+    # 「一直在跑」。表现是：标签推上去了，Release 页面没有，CI 状态是黄色的，
+    # 而日志最后一行停在一个看起来已经完成的消息上。没人能从那个界面判断
+    # 「还在跑」和「卡死了」。
+    #
+    # 这个 job 的正常耗时约 3–5 分钟（全量测试 1 分钟 + 打包 + 上传）。
+    # 20 分钟是「明显不正常」的界，而不是正常上限：给它留出 4 倍余量，
+    # 同时让一次挂起在 20 分钟内变成一个明确的红色失败。
+    timeout-minutes: 20
+    # ## 同一分支上不要并发发布
+    #
+    # 两个运行同时往同一个 tag 上传资产会互相覆盖，而两次运行的产物可能不同
+    # （源码在两次之间变过）。不取消正在跑的：发布是「一次授权一次交付」，
+    # 中途掐掉可能留下半份资产。让它排队，后来的那个覆盖先来的结果是可解释的。
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
 
     steps:
       - name: 检出代码
@@ -75,12 +95,48 @@ jobs:
       # 第 9 节静态断言每一处管道都配了 pipefail。静态一条、动态一条，缺一不可：
       # 静态的改得掉，动态的证明真跑起来是什么行为。
       - name: 自动化测试
+        # 单步超时比 job 超时更早、更准：它指认的是**这一步**挂住了。
+        # job 级超时会把「测试挂了」和「打包挂了」报成同一种失败。
+        timeout-minutes: 12
         run: |
           set -euo pipefail
           # Globbed so a new test file cannot be silently skipped by a stale list.
           # Tee'd to a file because the delivery status report reads the real counts from it;
           # re-deriving them from a summary string in YAML would be a second source of truth.
-          node --experimental-transform-types --test --test-concurrency=8 "test/**/*.test.ts" 2>&1 | tee /tmp/test-output.log
+          #
+          # ## `timeout` 包一层，是为了让「挂起」有一个可诊断的形状
+          #
+          # 900 秒后发 TERM。没有它，挂住的测试会一直占着 runner，而日志停在某个
+          # 用例的中间——读者无法分辨「这个用例很慢」和「进程再也回不来了」。
+          # 被 TERM 打断时 `tee` 里仍然留着一份完整的输出，下面会打印最后 40 行，
+          # 于是失败信息里直接写着卡在哪个用例上。
+          # ## 这里不关 errexit，也不吞任何失败
+          #
+          # 第一版写的是 `set +e` … `STATUS=${PIPESTATUS[0]}` … 判完再 `set -e`，
+          # 并且用 `tail -40 … || true` 收尾。CI 守卫两条都报了，而且报得对：
+          # `set +e` 期间任何一条命令失败都不会被发现，而 `|| true` 是把「诊断
+          # 输出读不出来」这件事假装成成功。
+          #
+          # 现在这样写，失败仍然会让整个步骤立刻红：
+          #   - `timeout` 超时的退出码是 124（TERM）/ 137（KILL），
+          #     `if timeout …; then … else …` 直接按它分支；
+          #   - `PIPESTATUS[0]` 取的是 `timeout` 自己的退出码，不是 `tee` 的；
+          #   - 诊断输出用 `tail` 读，读不到就让这一步跟着失败——那说明日志根本
+          #     没写出来，比「测试失败」更该被看见。
+          if timeout --signal=TERM --kill-after=30s 900 \
+              node --experimental-transform-types --test --test-concurrency=8 "test/**/*.test.ts" 2>&1 \
+              | tee /tmp/test-output.log; then
+            echo "测试通过"
+          else
+            STATUS=${PIPESTATUS[0]}
+            if [ "$STATUS" -eq 124 ] || [ "$STATUS" -eq 137 ]; then
+              echo "::error::测试在 900 秒内没有结束，判定为挂起（exit $STATUS）。最后 40 行输出见下。"
+            else
+              echo "::error::测试失败（exit $STATUS）。最后 40 行输出见下。"
+            fi
+            tail -40 /tmp/test-output.log
+            exit 1
+          fi
 
       - name: 确认 lib/ 与源码一致
         run: |

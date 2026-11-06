@@ -36,10 +36,29 @@ import {
 } from './runtime.js'
 import { buildTools } from './tools.js'
 import { resolveStoreDirStrict } from './store-dir.js'
-import { MAX_STORED_COMMENTS } from './store.js'
+import { MAX_STORED_COMMENTS, type StoredCandidate, type StoredSession } from './store.js'
 import { PlatformRegistry } from './platforms/registry.js'
 import { tiebaProvider } from './platforms/tieba/provider.js'
 import { weiboProvider } from './platforms/weibo/provider.js'
+import { sourceOf } from './import/source.js'
+import { parseImport, toCollectedThread } from './import/manual.js'
+import { toStoredImport, MAX_IMPORTED_CHARS } from './import/session.js'
+import {
+  analyzeImport,
+  approveImportedCandidate,
+  copyReply,
+  editImportedCandidate,
+  generateForImport,
+  personaOf,
+  reselectImport,
+} from './import/workflow.js'
+import {
+  completedSteps,
+  personaOptions,
+  stepOf,
+  MANUAL_STEP_ORDER,
+  STEP_TITLES as MANUAL_STEP_TITLES,
+} from './import/workflow.js'
 import { PLATFORM_MANIFESTS } from './platforms/manifests.js'
 import { CAPABILITY_NAMES, markOf, stateOf } from './platforms/contracts.js'
 import type { CapabilityName, PlatformCapabilityMatrix } from './platforms/contracts.js'
@@ -108,13 +127,38 @@ function capabilityFor(
   platform: string,
   name: 'comment.publish' | 'comment.reply' = 'comment.publish',
 ): { declared: string; effective: string; reason: string } {
-  const matrix = runtime.platforms?.capabilitiesOf(platform)
+  /**
+   * ## 未注册的平台不是错误，是「没有这个平台」
+   *
+   * `capabilitiesOf` 对未注册的 id **抛错**（`PlatformNotRegisteredError`），而这里是
+   * 给页面算一个展示用的能力快照。v0.2.30 人工导入的会话平台是 `manual` —— 它按设计
+   * 就不在注册表里（没有发表路径）。于是一读工作台就抛，页面拿到的是
+   * 「读取工作台状态失败：平台「manual」没有注册」，**整条离线流程在页面上根本
+   * 显示不出来**：步骤、候选、复制按钮全部消失，只剩下这句看起来像故障的话。
+   *
+   * 这不是「注册表缺了一项」，是这个会话本来就没有可发表的平台。所以接住它，
+   * 返回 `unavailable` 并说明原因。发表路径本身不依赖这个返回值：那条路
+   * `adapterFor` 会抛，是另一道结构性闸门。
+   */
+  let matrix: ReturnType<NonNullable<Runtime['platforms']>['capabilitiesOf']> | undefined
+  let missingPlatform = false
+  try {
+    matrix = runtime.platforms?.capabilitiesOf(platform)
+  } catch {
+    matrix = undefined
+    missingPlatform = true
+  }
   const declared = matrix === undefined ? 'unavailable' : stateOf(matrix, name).state
   if (declared === 'unavailable' || declared === 'permission_required' || declared === 'supported') {
     return {
       declared,
       effective: declared,
-      reason: matrix === undefined ? `${platform} 没有声明任何能力` : stateOf(matrix, name).reason,
+      reason:
+        matrix === undefined
+          ? missingPlatform
+            ? `${platform} 不是一个已注册的平台，这个会话没有可发表的平台`
+            : `${platform} 没有声明任何能力`
+          : stateOf(matrix, name).reason,
     }
   }
   const accountId = configuredAccountOf(runtime.config(), platform) ?? ''
@@ -1087,6 +1131,26 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     })
   })
 
+  /**
+   * 离线候选的目标描述，供复制前显示（v0.2.30）。
+   *
+   * 与 `copyReply` 的 `target` 同一份内容，但这里只用会话里存下的东西：页面刷新时
+   * 也要显示「这段话是回给谁的」，而那不该为了显示一句话重新投影整份导入内容。
+   */
+  const findImportedTarget = (
+    session: StoredSession,
+    candidate: StoredCandidate,
+  ): { readonly author?: string; readonly excerpt: string; readonly postId: string } => {
+    const postId = candidate.targetPostId
+    const matched = (session.comments ?? []).find((entry) => entry.postId === postId)
+    const author = matched?.authorName ?? session.opponentName
+    return {
+      ...(author === undefined ? {} : { author }),
+      excerpt: matched?.text ?? '',
+      postId,
+    }
+  }
+
   // ---- settings API ---------------------------------------------------------
   //
   // The Host's settings RPC only exposes its own allowlisted namespaces, so a
@@ -1551,6 +1615,226 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     approve: createApprovalForSettings,
     pendingApprovals: listPendingApprovals,
     /**
+     * 离线讨论的七步（v0.2.30 §一/§二）。
+     *
+     * ## 全部走 `import/workflow.ts`，这里只做字段搬运
+     *
+     * 每一条都是 `workflow` 里那个函数的直接调用，包括 `personaOf` 的人格校验和
+     * `resolveBudget` 的预算解析——那些规则与命令行调用共用一份。在这里补任何
+     * 默认值或判断，就会出现「页面能生成的、工具清单生成不出来」这种两套行为。
+     *
+     * ## 没有一条能发表
+     *
+     * 这个对象里没有任何字段通向 `runPublish`。会话的平台是 `manual`，
+     * `adapterFor` 会抛错，`runPublish` 另有显式拒绝——三道门都不在这里。
+     */
+    manualImport: {
+      preview: async (input) => {
+        const parsed = parseImport({
+          kind: input.kind,
+          content: input.content,
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.url === undefined ? {} : { url: input.url }),
+          ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
+        })
+        const blocking = parsed.issues.find((issue) => issue.severity === 'error')
+        if (parsed.discussion === undefined || blocking !== undefined) {
+          return {
+            ok: false,
+            reason: blocking?.message ?? '没有从这段内容里解析出任何发言。',
+            issues: parsed.issues.map((issue) => ({
+              severity: issue.severity,
+              code: issue.code,
+              message: issue.message,
+            })),
+          }
+        }
+        /**
+         * ## 预览必须把「确认之后会发生什么」说在前面
+         *
+         * 两件事在这里一致化，都是实测发现的：
+         *
+         * 1. **只有一条发言**。粘进来一段没有「作者：内容」格式的文字时，解析器会把
+         *    整段当成一条发言（冒号把前半句读成了作者名）。预览于是返回
+         *    `ok: true` 并显示一个莫名其妙的作者——而下一步「确认导入」必定拒绝
+         *    「这份导入内容里没有任何评论」。用户在预览阶段看不出这一点，
+         *    只能在下一步撞墙。预览就该说「这样确认不了」，并给出**同一条**理由。
+         *
+         * 2. **超长内容会被截断**。截断发生在落盘（`toStoredImport`）时，而预览
+         *    不经过那里，所以预览展示的是完整正文、`issues` 是空的，确认之后存下的
+         *    却是截断版本。用户以为确认的是自己看到的那一段。这里把将要发生的截断
+         *    提前算出来并标出来，预览与落盘用同一组常量。
+         */
+        const comments = parsed.discussion.comments
+        if (comments.length === 0) {
+          return {
+            ok: false,
+            reason:
+              '这份导入内容里没有任何评论，无法分析。' +
+              '请至少导入一条别人说的话——只有原帖时没有可回复的对象。',
+            issues: parsed.issues.map((issue) => ({
+              severity: issue.severity,
+              code: issue.code,
+              message: issue.message,
+            })),
+          }
+        }
+        const overlong = comments.filter((comment) => comment.text.length > MAX_IMPORTED_CHARS)
+        const overlongRoot = parsed.discussion.root.text.length > MAX_IMPORTED_CHARS
+        const previewIssues = [
+          ...parsed.issues.map((issue) => ({
+            severity: issue.severity,
+            code: issue.code,
+            message: issue.message,
+          })),
+          ...(overlong.length === 0 && !overlongRoot
+            ? []
+            : [
+                {
+                  severity: 'warning' as const,
+                  code: 'will_truncate',
+                  message:
+                    `有 ${overlong.length + (overlongRoot ? 1 : 0)} 条正文超过 ${MAX_IMPORTED_CHARS} 字，` +
+                    '确认之后会截断保存——分析用的是截断后的那一段。',
+                },
+              ]),
+        ]
+        const collected = toCollectedThread(parsed.discussion)
+        return {
+          ok: true,
+          issues: previewIssues,
+          discussion: {
+            title: parsed.discussion.title,
+            author: parsed.discussion.root.author,
+            text: parsed.discussion.root.text,
+            comments: parsed.discussion.comments.map((comment) => ({
+              id: comment.id,
+              author: comment.author,
+              text: comment.text,
+              ...(comment.replyTo === undefined ? {} : { replyTo: comment.replyTo }),
+            })),
+            // 导入内容里出现过的作者名，按首次出现排序。页面用它让用户选「哪个是你」。
+            participants: [
+              parsed.discussion.root.author,
+              ...parsed.discussion.comments.map((comment) => comment.author),
+            ].filter((name, index, all) => name.trim() !== '' && all.indexOf(name) === index),
+          },
+          // 解析阶段就算出来的结构问题，页面要在确认之前显示。
+          ...(collected.issues.length === 0 ? {} : { structuralIssues: collected.issues }),
+        } as never
+      },
+      confirm: async (input) => {
+        const parsed = parseImport({
+          kind: input.kind,
+          content: input.content,
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.url === undefined ? {} : { url: input.url }),
+          ...(input.fileName === undefined ? {} : { fileName: input.fileName }),
+        })
+        if (parsed.discussion === undefined) {
+          return {
+            ok: false,
+            reason: parsed.issues.find((issue) => issue.severity === 'error')?.message ?? '解析失败。',
+          }
+        }
+        const config = effectiveConfig()
+        const imported = toStoredImport(parsed.discussion, new Date().toISOString())
+        const analyzed = await analyzeImport(runtimeView.store, {
+          imported,
+          ...(input.ownerName === undefined ? {} : { ownerName: input.ownerName }),
+          ...(input.targetPostId === undefined ? {} : { targetPostId: input.targetPostId }),
+          persona: personaOf(input.persona, config),
+          config,
+        })
+        if (!analyzed.ok || analyzed.value === undefined) {
+          return { ok: false, reason: analyzed.reason ?? '分析失败。', next: analyzed.next ?? [] }
+        }
+        return {
+          ok: true,
+          sessionId: analyzed.value.session.id,
+          participants: analyzed.value.participants,
+          securityNotes: analyzed.value.securityNotes,
+        }
+      },
+      select: async (input) => {
+        const config = effectiveConfig()
+        const result = await reselectImport(runtimeView.store, {
+          sessionId: input.sessionId,
+          ...(input.ownerName === undefined ? {} : { ownerName: input.ownerName }),
+          ...(input.targetPostId === undefined ? {} : { targetPostId: input.targetPostId }),
+          persona: personaOf(input.persona, config),
+          config,
+        })
+        return result.ok
+          ? { ok: true }
+          : { ok: false, reason: result.reason ?? '重新分析失败。', next: result.next ?? [] }
+      },
+      generate: async (input) => {
+        const config = effectiveConfig()
+        const result = await generateForImport(runtimeView.store, {
+          sessionId: input.sessionId,
+          ...(input.targetPostId === undefined ? {} : { targetPostId: input.targetPostId }),
+          ...(input.persona === undefined
+            ? {}
+            : { persona: personaOf(input.persona, config) }),
+          ...(input.ownerInstruction === undefined
+            ? {}
+            : { ownerInstruction: input.ownerInstruction }),
+          config,
+          llm: runtimeView.llm,
+        })
+        if (!result.ok || result.value === undefined) {
+          return { ok: false, reason: result.reason ?? '生成失败。', next: result.next ?? [] }
+        }
+        return {
+          ok: true,
+          candidateId: result.value.candidateId,
+          text: result.value.text,
+          securityDecision: result.value.securityDecision,
+          securityReasons: result.value.securityReasons,
+        }
+      },
+      edit: async (input) => {
+        const result = await editImportedCandidate(runtimeView.store, {
+          sessionId: input.sessionId,
+          candidateId: input.candidateId,
+          text: input.text,
+          config: effectiveConfig(),
+        })
+        return result.ok
+          ? { ok: true, candidateVersion: result.value?.candidateVersion }
+          : { ok: false, reason: result.reason ?? '编辑失败。' }
+      },
+      approve: async (input) => {
+        const result = await approveImportedCandidate(runtimeView.store, {
+          sessionId: input.sessionId,
+          candidateId: input.candidateId,
+          approvedText: input.approvedText,
+        })
+        return result.ok
+          ? { ok: true }
+          : { ok: false, reason: result.reason ?? '确认失败。', next: result.next ?? [] }
+      },
+      copy: async (input) => {
+        const result = await copyReply(runtimeView.store, {
+          sessionId: input.sessionId,
+          candidateId: input.candidateId,
+          ...(input.visibleText === undefined ? {} : { visibleText: input.visibleText }),
+        })
+        if (!result.ok || result.value === undefined) {
+          return { ok: false, reason: result.reason ?? '无法复制。', next: result.next ?? [] }
+        }
+        return {
+          ok: true,
+          text: result.value.text,
+          target: result.value.target,
+          safe: result.value.safe,
+          blockers: result.value.blockers,
+          persona: result.value.persona,
+        }
+      },
+    },
+    /**
      * Live per-platform diagnostic (v0.2.13 §四).
      *
      * ## Why the adapter is asked rather than a static manifest
@@ -1739,6 +2023,22 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     },
     editCandidate: async (input) => editCandidate(runtimeView, input),
     workbench: async ({ sessionId }: { readonly sessionId?: string }) => {
+      /**
+       * ## 先等 store 加载完再回答
+       *
+       * `DebateStore` 是懒加载的：`getSession` / `latestSession` 读的是内存缓存，
+       * 而缓存在 `ready()` 之前是空文档。这条路由原先没有 await，于是
+       * **进程起来之后第一次读工作台，永远读到「还没有会话」**——页面显示
+       * 「粘贴讨论链接」，而磁盘上明明躺着刚导入的那一条。
+       *
+       * 更糟的是它看起来像时序玄学：先访问一次别的页（`/status` 之类会 await 的
+       * 路由），再回来刷新就好了。第一遍白屏、第二遍正常，是最容易被当成缓存
+       * 或者浏览器问题的形状。
+       *
+       * 这也解释了为什么实测时它只在「刷新页面后立刻看工作台」时出现：正常流程
+       * 里确认导入那一步自己写过 store，缓存已经热了。
+       */
+      await runtimeView.store.ready()
       const session =
         sessionId === undefined
           ? runtimeView.store.latestSession()
@@ -1893,6 +2193,69 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
               assessmentFingerprint,
             }
 
+      /**
+       * 来源标识与离线流程（v0.2.30 §二/§四）。
+       *
+       * ## 为什么来源由服务端判定
+       *
+       * 页面只有一个平台字符串，它无法区分「官方接口读的」与「我自己粘的」，
+       * 而猜错的方向永远是「看起来更像官方」。服务端按 `session.imported`
+       * 是否存在判断——那是决定性的事实。
+       */
+      const source = sourceOf({ platform, hasImport: session.imported !== undefined })
+
+      /**
+       * 离线流程的进度与可复制性。
+       *
+       * `copyAllowed` 只看存下来的评估与检查结果，不重新跑一遍：复制是这个流程的
+       * 终点，它必须回答「这段文字当时通过了什么」，而不是「现在跑一遍会怎样」。
+       */
+      const manualFlow =
+        session.imported === undefined
+          ? undefined
+          : (() => {
+              const latest = candidate
+              const assessment = latest?.security
+              const blockers: string[] = []
+              if (latest === undefined) {
+                blockers.push('还没有生成候选回复。')
+              } else if (assessment === undefined) {
+                blockers.push('这段正文没有安全评估记录，请重新生成一次。')
+              } else if (assessment.decision === 'block') {
+                blockers.push(
+                  `安全评估判定为阻止：${assessment.reasons.join('；') || '未说明原因'}。`,
+                )
+              }
+              if (latest !== undefined && latest.violations.length > 0) {
+                blockers.push(`候选检查未通过：${latest.violations.join('；')}`)
+              }
+              if (latest !== undefined && !latest.approved) {
+                blockers.push('这条候选还没有人工确认，确认后才能复制。')
+              }
+              const target = latest === undefined ? undefined : findImportedTarget(session, latest)
+              const step = stepOf(session)
+              const done = new Set(completedSteps(session))
+              return {
+                step,
+                stepTitle: MANUAL_STEP_TITLES[step],
+                steps: MANUAL_STEP_ORDER.map((id) => ({
+                  id,
+                  title: MANUAL_STEP_TITLES[id],
+                  done: done.has(id),
+                  current: id === step,
+                })),
+                personas: personaOptions(),
+                participants: session.participants ?? [],
+                ...(session.imported.importedAt === undefined
+                  ? {}
+                  : { importedAt: session.imported.importedAt }),
+                importSource: session.imported.source,
+                ...(target === undefined ? {} : { copyTarget: target }),
+                copyAllowed: blockers.length === 0,
+                ...(blockers.length === 0 ? {} : { copyBlockers: blockers }),
+              }
+            })()
+
       return {
         ok: true,
         sessionId: session.id,
@@ -1902,6 +2265,8 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
         workbench: derived,
         approveExpectation,
         ...(approveBlocked === undefined ? {} : { approveBlocked }),
+        source,
+        ...(manualFlow === undefined ? {} : { manualFlow }),
         candidates: session.candidates.map((entry) => ({
           replyId: entry.replyId,
           text: entry.text,
@@ -1914,7 +2279,11 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           violations: entry.violations,
           ...(entry.security === undefined
             ? {}
-            : { assessmentFingerprint: entry.security.fingerprint }),
+            : {
+                assessmentFingerprint: entry.security.fingerprint,
+                securityDecision: entry.security.decision,
+                securityReasons: entry.security.reasons,
+              }),
         })),
         blockers: [...derived.blockers, ...(freshness.applies ? [] : [freshness.reason])],
       }

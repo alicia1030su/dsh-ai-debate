@@ -47,6 +47,9 @@ import {
   type WeiboDiagnosticRecorder,
 } from './diagnostics.js'
 import {
+  buildReadiness,
+} from './readiness.js'
+import {
   inspectCommand,
   listAvailableCommands,
   probeWeiboCli,
@@ -325,6 +328,15 @@ interface WeiboReadPlan {
   /** Why a given read is unavailable, when it is. */
   readonly threadProblem?: string
   readonly commentProblem?: string
+  /**
+   * 命令清单的结果（v0.2.30）。
+   *
+   * 单独记一份，是因为 `threadPlan` / `commentPlan` 只覆盖「我们认得的那两个命令」，
+   * 而八项诊断里的「命令清单」这一项问的是「这个账号到底有没有可用命令」。
+   * 用 `threadPlan === undefined` 去推断那件事，会在「有命令但没有能读正文的命令」
+   * 时给出错误答案。
+   */
+  readonly commandsRead?: { readonly ok: true; readonly count: number } | { readonly ok: false; readonly reason: string }
 }
 
 /**
@@ -340,15 +352,52 @@ interface WeiboReadPlan {
  */
 async function resolveReadPlan(): Promise<WeiboReadPlan> {
   const readiness = await probeWeiboCli()
-  if (!readiness.canRead) return { readiness, selectionNotes: [] }
 
+  /**
+   * ## 命令清单一律读，早退之后也要读（v0.2.30，真实 CLI 实测发现）
+   *
+   * v0.2.29 在 `doctor` 未通过时直接 `return`，命令清单一次都没读。于是诊断面板
+   * 报「命令清单：本次没有读取」——那是 `unknown`，而当时**完全读得到**。
+   *
+   * 真实输出（本机实测，登录已完成、认证与服务未完成）：
+   *
+   * ```json
+   * { "service_status": "none", "total": 75, "available_count": 0, "commands": [] }
+   * ```
+   *
+   * 这条请求成功、不花额度、也不需要服务开通——它是一份本地目录。不读它，
+   * 面板就只能说「不知道有几条可用命令」，而这是用户在排查时最想知道的一个数
+   * （0 条 = 权限没到，75 条 = 权限到了但命令选错了）。
+   *
+   * 所以它提前到这里：无论 `canRead` 真假，都读一次。
+   */
   const listed = await listAvailableCommands()
+
+  if (!readiness.canRead) {
+    return {
+      readiness,
+      selectionNotes: [],
+      ...(listed.status === 'ok' && listed.data !== undefined
+        ? { commandsRead: { ok: true as const, count: listed.data.length } }
+        : { commandsRead: { ok: false as const, reason: listed.message } }),
+      // 命令清单为空本身就是「为什么读不了」的一条证据，写进 selectionNotes 让面板能解释。
+      ...(listed.status === 'ok' && listed.data !== undefined && listed.data.length === 0
+        ? {
+            selectionNotes: [
+              '本账号当前可用命令为 0 条：这是开发者认证与服务未开通的结果，不是命令名选错。',
+            ],
+          }
+        : {}),
+    }
+  }
+
   if (listed.status !== 'ok' || listed.data === undefined) {
     return {
       readiness,
       selectionNotes: [],
       threadProblem: listed.message,
       commentProblem: listed.message,
+      commandsRead: { ok: false, reason: listed.message },
     }
   }
 
@@ -359,7 +408,8 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
     selectionNotes: string[]
     threadProblem?: string
     commentProblem?: string
-  } = { readiness, selectionNotes: [] }
+    commandsRead?: { readonly ok: true; readonly count: number } | { readonly ok: false; readonly reason: string }
+  } = { readiness, selectionNotes: [], commandsRead: { ok: true, count: listed.data.length } }
 
   // ## Candidate selection (v0.2.14 §五)
   //
@@ -649,8 +699,7 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
       const serviceActive = resolved.readiness.canRead
       const history = diagnostics.snapshot()
 
-      const lines = buildDiagnosticLines({
-        cliInstalled,
+      const lines = buildDiagnosticLines({        cliInstalled,
         ...(cliVersion === undefined ? {} : { cliVersion }),
         oauthLoggedIn,
         serviceActive,
@@ -696,6 +745,44 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
         },
         ...history,
         lines,
+        /**
+         * 八项就绪诊断（v0.2.30 §三）。
+         *
+         * ## 为什么它和 `lines` 并存而不是取代 `lines`
+         *
+         * `lines` 是「按顺序读一遍」的叙述，适合事后排查；八项是「现在的授权链条
+         * 走到哪一步」的快照，适合事前决定。两者服务不同时刻，且 `lines` 里有
+         * 命令选择理由之类八项表达不了的内容。
+         *
+         * 八项里每一项的 `state` 只看它自己，`blocking` 取第一个阻断项——
+         * 这样「已安装但没登录」会指出登录，而不会把开发者认证也标红，
+         * 后者在没登录的时候根本无从判断。
+         */
+        readiness: buildReadiness({
+          cliInstalled,
+          ...(cliVersion === undefined ? {} : { cliVersion }),
+          ...(resolved.commandsRead === undefined ? {} : { commands: resolved.commandsRead }),
+          ...(resolved.readiness.doctorSteps === undefined
+            ? {}
+            : { doctorSteps: resolved.readiness.doctorSteps }),
+          ...(resolved.readiness.doctorExitCode === undefined
+            ? {}
+            : {
+                doctorRaw: {
+                  code: resolved.readiness.doctorExitCode,
+                  output: resolved.readiness.message,
+                },
+              }),
+          // 额度：本进程不查，理由随快照带出去（`unknown` 而不是 `unavailable`）。
+          quota: {
+            known: false,
+            reason:
+              '本进程没有查询额度：那需要调用官方的账户/计费命令，属于账户管理操作，' +
+              '插件不代为执行。面板上显示「未知」是因为没查，不是因为查不到。',
+          },
+          ...(history.lastRead === undefined ? {} : { lastRead: history.lastRead }),
+          ...(history.lastError === undefined ? {} : { lastError: history.lastError }),
+        }),
       }
     },
     checkAuthentication: async () => {

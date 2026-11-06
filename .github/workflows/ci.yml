@@ -14,6 +14,10 @@ jobs:
   verify:
     name: 编译与测试（Node ${{ matrix.node }}）
     runs-on: ubuntu-latest
+    # 与 release.yml 同一条理由（v0.2.30 §八）：没有它，一个挂住的步骤会在
+    # 默认 360 分钟里一直是「运行中」，而绿色/红色的信号永远不到。
+    # 这个 job 正常 2–3 分钟，15 分钟是「明显不正常」的界。
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
