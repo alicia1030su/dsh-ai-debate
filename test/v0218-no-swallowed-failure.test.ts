@@ -91,6 +91,29 @@ function unquoted(line: string): string {
 }
 
 /**
+ * 这一行里有没有真的管道。
+ *
+ * 原来的写法是 `/[^|]\|[^|]/`，它要求管道**前面**有一个非管道字符。这条假设在
+ * v0.2.30 崩了：为了区分「测试很慢」和「进程再也回不来了」，release.yml 的测试步骤
+ * 改成
+ *
+ * ```sh
+ * if timeout --signal=TERM --kill-after=30s 900 \
+ *     node --experimental-transform-types --test … 2>&1 \
+ *     | tee /tmp/test-output.log; then
+ * ```
+ *
+ * 管道写在**续行开头**（上一行以 `\` 结束），于是行首就是 `|`，原正则判它「没有管道」，
+ * 断言报「测试步骤不再有管道了」。这属于把合法的续行写法误判成退化的单命令。
+ *
+ * 现在允许行首的 `|`，同时用 `(?![|])` 把 `||` 排除掉——`cmd || true` 不是管道，
+ * 它由另一个断言（以及 ci-guard）负责。
+ */
+function hasPipe(line: string): boolean {
+  return /(^|[^|])\|(?![|])/.test(unquoted(line))
+}
+
+/**
  * 找一个能跑脚本的 bash。
  *
  * Windows 上的 Git for Windows 自带 bash；Linux/macOS 上 bash 在 PATH 里。
@@ -201,7 +224,7 @@ test('release.yml 的测试步骤用 set -euo pipefail，不是裸 set -e', () =
   assert.match(body, /pipefail/, '测试步骤没有 pipefail')
   // 有管道就是有风险：这里断言它确实还带着管道，说明 pipefail 不是装饰。
   assert.ok(
-    testStep.lines.some((line) => /[^|]\|[^|]/.test(unquoted(line))),
+    testStep.lines.some((line) => hasPipe(line)),
     '测试步骤不再有管道了；如果改成直接重定向，这条测试应该跟着改，而不是留着一条空断言',
   )
 })
@@ -209,7 +232,7 @@ test('release.yml 的测试步骤用 set -euo pipefail，不是裸 set -e', () =
 test('两个工作流里每一个带管道的步骤都写了 pipefail', () => {
   for (const name of ['ci.yml', 'release.yml']) {
     for (const step of shellSteps(readWorkflow(name))) {
-      const piped = step.lines.filter((line) => /[^|]\|[^|]/.test(unquoted(line)))
+      const piped = step.lines.filter((line) => hasPipe(line))
       if (piped.length === 0) continue
       assert.match(
         step.lines.join('\n'),

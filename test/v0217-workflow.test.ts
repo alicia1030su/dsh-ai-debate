@@ -26,6 +26,26 @@ function readWorkflow(name) {
 }
 
 /**
+ * 剥掉整行注释，只留会真的被执行的内容。
+ *
+ * 这个文件反复在同一个地方摔跤：**散文里提到某个写法，被断言当成代码**。
+ * 先是 `stepsOf` 因为注释里有 `gh release create` 把注释所在的步骤当成了发布步骤；
+ * v0.2.30 又是「没有吞掉失败」这条——release.yml 的测试步骤上方写着
+ * 「第一版用 `tail -40 … || true` 收尾，守卫报得对」，于是**解释这次修复的注释
+ * 把修复本身判红了**。
+ *
+ * 断言要防的是代码吞掉失败。要拦住的是真的写进 shell 或 YAML 的 `|| true`，
+ * 而那两种写法都不是整行注释，剥完照样会被匹配到。`scripts/ci-guard.mjs`
+ * 为同一个原因做过同一件事。
+ */
+function withoutComments(workflow: string): string {
+  return workflow
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('#'))
+    .join('\n')
+}
+
+/**
  * 按缩进把 jobs 下的 steps 切成块。
  *
  * 返回 `{ text, header }`：`text` 是这一步的完整原文，`header` 是 `- name:` 那一行。
@@ -263,7 +283,8 @@ test('Release 在发布前做独立扫描与安装包内容校验', () => {
 
 test('两个工作流都没有吞掉失败', () => {
   for (const name of ['ci.yml', 'release.yml']) {
-    const workflow = readWorkflow(name)
+    // 看剥掉注释之后的那份：见 withoutComments()。
+    const workflow = withoutComments(readWorkflow(name))
 
     assert.doesNotMatch(workflow, /\|\|\s*true/, `${name} 里有 || true，会把失败吞掉`)
     assert.doesNotMatch(workflow, /continue-on-error:\s*true/, `${name} 里有 continue-on-error，失败不会变红`)
