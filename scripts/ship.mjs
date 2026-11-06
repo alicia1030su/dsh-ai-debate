@@ -1062,7 +1062,21 @@ async function main() {
     } else {
       branch = state.github.branch ?? branchForVersion(version, SLUG)
       report.github.branch = branch
-      report.github.commitSha = state.github.commitSha ?? run('git', ['rev-parse', 'HEAD']).stdout.trim()
+      /**
+       * ## 续跑时提交号要现读，不能沿用状态文件里的旧值（v0.2.31）
+       *
+       * `state.github.commitSha` 是**上一轮**提交阶段记下的。第一轮如果是从
+       * `origin/main` 新开了一条空分支，那里记的就是 main 的 sha；之后分支上
+       * 又被推了新提交，续跑却仍然报那个旧值。
+       *
+       * 实测到的后果：`.ship/delivery-status-0.2.31.json` 里写着
+       * `commitSha: 47ebcee`（那是 main），而分支头是 `5d7b523`，PR 里也有内容。
+       * 一份交付记录把提交号写错，等于让核验的人无法确定自己看的是哪份代码。
+       *
+       * 现读 HEAD 是唯一能保证「记录的是分支当前指向」的做法。状态文件只用来
+       * 记**做过没有**（`reached()`），不用来记**指向哪里**。
+       */
+      report.github.commitSha = run('git', ['rev-parse', 'HEAD']).stdout.trim()
     }
 
     if (!reached('pull_request')) {
