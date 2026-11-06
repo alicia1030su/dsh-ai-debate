@@ -360,9 +360,32 @@ function verify(version) {
  * 单独抽出来是为了 `--resume`：状态文件里没有测试计数时（老版本写的状态文件、
  * 或者上一轮根本没跑到验证），续跑必须**真的跑一遍**再填。猜一个数字、或者把
  * 「没重跑」写成「没跑过」，都会让最后那份交付报告变成假证据。
+ *
+ * ## 并发上限必须与 package.json 和 CI 一致（v0.2.31）
+ *
+ * 这里原来没有 `--test-concurrency`，用的是默认值（= CPU 核数，本机 16）。
+ * `test-concurrency-budget.test.ts` 早就写明：文件数超过 110 之后，默认并发会
+ * 偶发**整体停滞**——不是断言失败，是跑到一半所有 worker 都不再推进，
+ * `fail` 是 0 但 `tests` 少了，最难发现。
+ *
+ * 而这条上限只加在了 `package.json` 和两个工作流里，**漏掉了这份脚本**：
+ * 于是「本地 `npm test` 通过」「CI 通过」「ship 通过」是三条不同的命令，
+ * 而 ship 恰好是最后一道门。v0.2.31 实测到了后果：`ship` 报「测试失败（? 项）」，
+ * 单独跑同一份套件却全绿——因为它在默认并发下被一个 20 秒超时的真实 CLI 探测
+ * 拖住了，而那台机器单独跑只要 4.5 秒。
+ *
+ * 三处必须是同一个数字。这里刻意写死而不是从 package.json 读：
+ * 读出来就能被悄悄改掉，而这一条的意义正是「三处不许各自为政」。
  */
+const TEST_CONCURRENCY = 8
+
 function runTests() {
-  const tests = run(process.execPath, ['--experimental-transform-types', '--test', 'test/**/*.test.ts'])
+  const tests = run(process.execPath, [
+    '--experimental-transform-types',
+    '--test',
+    `--test-concurrency=${TEST_CONCURRENCY}`,
+    'test/**/*.test.ts',
+  ])
   const summary = parseTestSummary(`${tests.stdout}\n${tests.stderr}`)
   if (tests.code !== 0) {
     report.checks.tests = false
