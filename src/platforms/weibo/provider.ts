@@ -49,6 +49,7 @@ import {
 import {
   buildReadiness,
 } from './readiness.js'
+import { probeCredentialPresence } from './credential-state.js'
 import {
   inspectCommand,
   listAvailableCommands,
@@ -773,6 +774,14 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
                   output: resolved.readiness.message,
                 },
               }),
+          /**
+           * 本机凭据记录的**存在性**（v0.2.31 §六）。
+           *
+           * 只看磁盘上那个指向保管库的引用文件，不读保管库、不读令牌。
+           * 它存在的唯一作用是让「从没登录过」与「登录过但令牌失效」分开显示——
+           * `doctor` 对这两种情况给的是同一个 `×`。
+           */
+          credential: probeCredentialPresence(),
           // 额度：本进程不查，理由随快照带出去（`unknown` 而不是 `unavailable`）。
           quota: {
             known: false,

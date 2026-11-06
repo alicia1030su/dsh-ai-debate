@@ -32,6 +32,7 @@ import type { CollectedThread, FloorWithNested } from '../collector.js'
 import type { ConversationGraph } from '../conversation.js'
 import { toConversationGraph } from '../conversation-bridge.js'
 import type { Floor, NestedReply, PlatformId, Thread } from '../types.js'
+import type { ImportCorrections } from './corrections.js'
 
 /**
  * 离线来源的平台标识。
@@ -42,6 +43,14 @@ import type { Floor, NestedReply, PlatformId, Thread } from '../types.js'
  * 取适配器会抛错，而不是悄悄联网。
  */
 export const MANUAL_PLATFORM = 'manual' as const
+
+/**
+ * 「你手工指定它在回复原帖」的依据文案。
+ *
+ * 定义成常量而不是两处各写一份：修正层写它，投影层读它。两处字面量不一致时
+ * 不会报错，只会让「标为原帖」这个动作静默失效——一个只有用户能发现的失败。
+ */
+export const MANUAL_ROOT_BASIS = '你手工指定它在回复原帖'
 
 /** 界面上给 `manual` 用的名字。平台注册表里没有它，所以这里自带一份。 */
 export const MANUAL_DISPLAY_NAME = '人工导入' as const
@@ -55,6 +64,22 @@ export interface ImportedComment {
   readonly authorId?: string
   readonly text: string
   readonly createdAt?: string
+  /** 楼层号，仅在原文里明确写了的时候才有（`#3`、`3 楼`、`3L`）。 */
+  readonly floor?: number
+  /**
+   * 这条发言在原文里的样子（含作者行，未做任何改写）。
+   *
+   * ## 为什么必须留着
+   *
+   * 解析器会剥装饰、拆作者名、抽楼层号。每一步都可能把用户的原文解释错，
+   * 而用户是唯一能判断「这里到底是谁在说话」的人。只要原文在，他就能逐条核对；
+   * 不在了，他只能相信解析结果——而我们刚刚才证明过解析会出错。
+   *
+   * 它与 `text` 的区别是：`text` 是**给分析器读的正文**，`raw` 是**给人核对的原文**。
+   */
+  readonly raw?: string
+  /** 这条在原文中的起始行号（1 起）。用来把界面上的「第 12 行」指回原文。 */
+  readonly rawLine?: number
   /** 这条在回复哪一条（id 或昵称，由 `replyToKind` 说明是哪一种）。 */
   readonly replyTo?: string
   /**
@@ -64,6 +89,25 @@ export interface ImportedComment {
    * 合成一个字段会让图上两种边长得一样，而下游据此决定「能不能说对方讲过这句话」。
    */
   readonly replyToKind?: 'id' | 'name'
+  /**
+   * 判定这条回复关系的依据，一句话。
+   *
+   * 只有 `replyToKind === 'name'` 时才需要——那种关系是**推测**的，
+   * 推测必须能解释。`stated` 的依据是平台给的 id，不需要额外解释。
+   */
+  readonly replyBasis?: string
+  /**
+   * 用户明确说了「这条关系确认不了」（v0.2.31 §四）。
+   *
+   * ## 为什么它不等于「删掉关系」
+   *
+   * 删掉关系是断言「它没有在回谁」，而这恰恰是用户不知道的事。标记成不可确认
+   * 保住了两条信息：这条发言**声称**在回某人（原话还在），以及**我们不敢确定**。
+   *
+   * 投影时它会让这条边落成 `inferred`（即使原本有 id），并且在预览里显示
+   * 「你说过这条不确定」——分析器据此不会把对方的原话引作已核实的对立观点。
+   */
+  readonly replyUnconfirmed?: boolean
 }
 
 /** 一段导入的讨论。 */
@@ -81,7 +125,21 @@ export interface ImportedDiscussion {
     readonly text: string
     readonly createdAt?: string
   }
+  /** 原帖的楼层号，文本解析时若原文写了才有。 */
+  readonly rootFloor?: number
+  /** 原帖在原文里的样子，供预览逐条核对。 */
+  readonly rootRaw?: string
   readonly comments: readonly ImportedComment[]
+  /**
+   * 用户对这份内容的修正（v0.2.31 §四）。
+   *
+   * ## 为什么它挂在讨论上，而不是替换掉讨论
+   *
+   * 讨论里的每条发言是**解析结果**，这份清单是**用户说的话**。两者分开存，
+   * 才能回答「插件当时看懂了什么」和「人改了什么」——第三层是 `comment.raw`
+   * 里的原文。三层都在，出错时才查得动。
+   */
+  readonly corrections?: ImportCorrections
 }
 
 /** 一条解析问题。`severity` 决定它出现在预览的哪一栏。 */
@@ -117,50 +175,230 @@ export interface ImportRequest {
 // ---------------------------------------------------------------------------
 
 /**
- * 粘贴文本的语法。
+ * 粘贴文本的语法（v0.2.31 扩写）。
  *
- * 刻意做得宽松，因为真实用户的粘贴不会遵循任何规范。规则有五条：
+ * 刻意做得宽松，因为真实用户的粘贴不会遵循任何规范——论坛复制、截图 OCR、
+ * 手打转录，三种来源的格式完全不一样。规则如下：
  *
- * 1. `作者：内容`（全角或半角冒号，作者最多 32 字）开启一条发言。
+ * 1. `作者：内容`（全角或半角冒号，作者最多 40 字）开启一条发言。
  * 2. `作者 回复 某人：内容` 里的「作者」是前半段——不这样做，整串
  *    「路人乙 回复 路人甲」会变成一个作者名，而它在分析器眼里是一个从未出现过的陌生人。
  * 3. 不以「作者：」开头的非空行，接到上一条发言的正文后面（保留换行）。
- * 4. 单独一行 `---`（三个及以上短横）把**原帖**和**评论**分开：
+ * 4. 单独一行的分隔符把**原帖**和**评论**分开。支持 `---`、`===`、`***`、
+ *    `___`、`···`（以及它们带中文标注的形式，如 `--- 评论区 ---`）。
  *    分隔线之前的最后一段是原帖，之后的全是评论。没有分隔线时，第一条是原帖。
  * 5. 以 `#` 开头的行是 Markdown 标题，当标题用，不算发言。
+ * 6. **楼层号**（`#3`、`3 楼`、`3L`、`[3]`）单独成行时，作为下一条发言的楼层号；
+ *    写在作者行里时（`3 楼 甲：…`）从作者名里剥出来。
+ * 7. **时间戳**（`2024-01-01 12:00`、`3 小时前`、`昨天 12:30`）单独成行时，
+ *    作为下一条发言的时间；写在作者行里时从作者名里剥出来。
+ * 8. **回复前缀**在正文开头时（`回复 @甲：…`、`@甲 你说得不对`、`>> 甲`）识别为
+ *    回复关系，一律按昵称，证据强度是 `inferred`。
+ *
+ * ## 一条硬规则：识别不等于改写
+ *
+ * 上面每一条都只**提取**信息，不改动 `raw`。原始输入的每一行都留在
+ * `ImportedComment.raw` 里，用户能在预览里逐条核对「解析器有没有乱动我的话」。
+ * 这一条比任何规则都重要：一份被悄悄清洗过的转录，比一份诚实的原始文本更危险。
  */
 const AUTHOR_LINE = /^([^：:]{1,40})[：:]\s*([\s\S]*)$/
 const REPLY_IN_AUTHOR = /^(.{1,32}?)\s+回复\s*@?\s*(.{1,32})$/
-const SEPARATOR = /^\s*-{3,}\s*$/
+/**
+ * 分隔符。
+ *
+ * 五种符号 × 可选的中文标注。`--- 评论区 ---` 这种写法在手工整理过的转录里很常见，
+ * 只认纯 `---` 会把它当成一条「作者叫 `--- 评论区 ---`」的发言。
+ */
+const SEPARATOR =
+  /^\s*(?:-{3,}|={3,}|\*{3,}|_{3,}|[·・]{3,})\s*(?:[^\n]{0,20}(?:评论|回复|原帖|以上|以下)[^\n]{0,20})?\s*(?:-{3,}|={3,}|\*{3,}|_{3,}|[·・]{3,})?\s*$/
 const HEADING = /^\s*#{1,6}\s*(.*)$/
+/** `回复 @甲：…`。冒号可有可无。 */
 const REPLY_PREFIX = /^回复\s*@?\s*([^：:\s]{1,32})\s*[：:]?\s*([\s\S]*)$/
+/** `@甲 …`（行首 @，后面有空格或直接是正文）。 */
+const AT_PREFIX = /^@\s*([^：:\s]{1,32})\s+(?=[\s\S]*\S)([\s\S]*)$/
+/** `>> 甲` 或 `＞＞ 甲`。 */
+const QUOTE_PREFIX = /^(?:>>|＞＞)\s*@?\s*([^：:\s]{1,32})\s*[：:]?\s*([\s\S]*)$/
+
+/**
+ * 楼层号，单独成行时。
+ *
+ * `#3` / `3 楼` / `3L` / `[3]` / `3F`。刻意不接受裸数字：`2024` 一行也是数字，
+ * 但它是年份，把它当楼层号会让整段解析错位。
+ *
+ * ## 为什么用 `(?![A-Za-z0-9])` 而不是 `\b`
+ *
+ * `\b` 在中文后面**不成立**：`楼` 不是 `\w`，它后面是行尾也不是 `\w`，
+ * 两者之间没有「词边界」。第一版写成 `(?:楼|L|F)\b`，于是 `2 楼` 一条都认不出，
+ * 每个楼层号都变成一条「匿名：2 楼」的假发言——四个样本里三个当场错。
+ */
+const FLOOR_ONLY = /^\s*(?:#\s*(\d{1,5})|(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9])|\[\s*(\d{1,5})\s*\])\s*$/
+/** 作者行里的楼层号前缀：`3 楼 甲：…`。 */
+const FLOOR_PREFIX = /^\s*(?:#\s*(\d{1,5})|(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9]))\s*[·.、:：-]?\s+/
+/** 作者行里尾随的楼层号：`甲 3 楼：…` —— 这条不剥，容易误伤正文里的数字。 */
+
+/**
+ * 时间戳。
+ *
+ * 只认两种能确定是时间的：绝对日期（`2024-01-01`、`2024/1/1 12:00`、`1月1日`）
+ * 与相对时间（`3 小时前`、`昨天 12:30`、`刚刚`）。裸数字不是时间。
+ */
+const TIMESTAMP_ONLY =
+  /^\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}\s*日?(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?|\d{1,2}月\d{1,2}日(?:\s+\d{1,2}:\d{2})?|刚刚|\d{1,3}\s*(?:秒|分钟|小时|天|周|个月|年)前|(?:今天|昨天|前天|刚才)(?:\s+\d{1,2}:\d{2})?)\s*$/
+/** 作者行里包在括号里的时间：`甲（2024-01-01 12:00）：…`。 */
+const TIMESTAMP_IN_AUTHOR = /\s*[（(]\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}\s*日?(?:\s+\d{1,2}:\d{2})?|刚刚|\d{1,3}\s*(?:秒|分钟|小时|天|周|个月前?))\s*[）)]\s*$/
+
+/**
+ * 作者行里带括号时间的那一种：`甲（2024-01-01 12:00）：正文`。
+ *
+ * ## 为什么这条必须先于通用的作者行匹配
+ *
+ * 时间是**含冒号**的（`12:00`），而通用作者行按冒号切分，于是
+ *
+ * ```
+ * 甲（2024-01-01 12:00）：先修
+ * ```
+ *
+ * 被切成作者 `甲（2024-01-01 12`、正文 `00）：先修`。作者名里带半个时间，
+ * 分析器就把同一份讨论里的这个人拆成了两个陌生人，而两半都不像人话。
+ *
+ * 先在专用规则上匹配一次，命中就按「名字 + 时间 + 正文」处理；没命中再走通用规则。
+ */
+const AUTHOR_WITH_TIME =
+  /^([^：:（(]{1,40})\s*[（(]\s*([^）)]{1,32})\s*[）)]\s*[：:]\s*([\s\S]*)$/
+
+/**
+ * 不带括号的时间：`甲 2024-01-01 12:00：先修`。
+ *
+ * 时间里的冒号同样会把通用规则切错。这条要求「时间紧跟在冒号之前」，
+ * 所以它不会误伤「甲：我在 2024-01-01 12:00 到的」——那种情形冒号在时间**前面**。
+ */
+const AUTHOR_TAIL_TIME =
+  /^(.{1,40}?)\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}\s*日?(?:\s+\d{1,2}:\d{2})?|刚刚|\d{1,3}\s*(?:秒|分钟|小时|天|周)前)\s*[：:]\s*([\s\S]*)$/
+
+/** 作者名尾部的楼层标记：`甲 2 楼` 里的 `2 楼`。只在作者段被时间/括号切开后才需要。 */
+const TRAILING_FLOOR = /\s+(?:#?(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9]))\s*$/
+
+/**
+ * 引用标记 `>> 甲` / `＞＞ 甲`。
+ *
+ * ## `>` 在这套语法里有两个意思，必须分开
+ *
+ * - 单个 `>` 是网页复制带的**引用装饰**（`> 甲：…` 是「甲说了这句话」的引文块），
+ *   要剥掉；
+ * - 两个 `>` 是**回复标记**（`>> 甲` 是「下面这条在回甲」），要保留成关系。
+ *
+ * 第一版把两者都当装饰剥掉，于是 `>> 甲` 变成一行裸文本 `甲`，
+ * 被记成一条「匿名：甲」的发言——多出一个假发言人，少了一条真回复边。
+ */
+const QUOTE_MARK = /^\s*(?:>>|＞＞|＞\s>)\s*(.*)$/
 
 /** 剥掉网页复制常带的行首装饰。 */
 function stripDecoration(line: string): string {
-  return line.replace(/^\s*(?:[>|｜]\s*)+/, '').replace(/^\s*【[^】]{0,12}】\s*/, '')
+  return line
+    .replace(/^\s*(?:[>|｜]\s*)+/, '')
+    .replace(/^\s*【[^】]{0,12}】\s*/, '')
+    // 论坛常见的「3 楼」独立标签，前面常带一个圆点或中括号
+    .replace(/^\s*[·・•]\s*/, '')
+}
+
+/** 从作者名里剥出楼层号与时间，剩下的才算名字。 */
+function splitAuthorMeta(raw: string): {
+  readonly author: string
+  readonly floor?: number
+  readonly createdAt?: string
+} {
+  let rest = raw.trim()
+  let floor: number | undefined
+
+  const floorMatch = rest.match(FLOOR_PREFIX)
+  if (floorMatch !== null) {
+    const digits = floorMatch[1] ?? floorMatch[2]
+    const value = digits === undefined ? undefined : Number.parseInt(digits, 10)
+    if (value !== undefined && Number.isFinite(value) && value > 0) {
+      floor = value
+      rest = rest.slice(floorMatch[0].length).trim()
+    }
+  }
+
+  let createdAt: string | undefined
+  const timeMatch = rest.match(TIMESTAMP_IN_AUTHOR)
+  if (timeMatch !== null && timeMatch[1] !== undefined) {
+    createdAt = timeMatch[1].trim()
+    rest = rest.slice(0, rest.length - timeMatch[0].length).trim()
+  }
+
+  // `甲 2 楼`：楼层写在名字后面。只在前缀规则没命中时补一次，
+  // 且只在尾部——正文里的「2 楼」不该被剥。
+  if (floor === undefined) {
+    const trailing = rest.match(TRAILING_FLOOR)
+    if (trailing !== null && trailing[1] !== undefined) {
+      const value = Number.parseInt(trailing[1], 10)
+      if (Number.isFinite(value) && value > 0) {
+        floor = value
+        rest = rest.slice(0, rest.length - trailing[0].length).trim()
+      }
+    }
+  }
+
+  return {
+    author: rest === '' ? '匿名' : rest,
+    ...(floor === undefined ? {} : { floor }),
+    ...(createdAt === undefined ? {} : { createdAt }),
+  }
 }
 
 interface RawBlock {
   readonly author: string
   /** `作者 回复 目标：` 里的目标。 */
   readonly replyToName?: string
+  /**
+   * 这条回复关系的依据，原文里到底是什么让它成了「回复某人」。
+   *
+   * 三种来源：作者行里的「回复 X」、正文开头的「回复 X」、正文开头的「@X」或「>> X」。
+   * 记下来是给预览用的：用户看到「回复 甲」时要知道**解析器凭什么这么判**，
+   * 否则他没法判断这条关系该不该保留。
+   */
+  readonly replyBasis?: string
+  readonly floor?: number
+  readonly createdAt?: string
   readonly lines: string[]
   readonly startLine: number
+  /** 这一条在原文里占的行（含作者行），用于「保留原始输入」与逐条核对。 */
+  readonly rawLines: string[]
 }
 
 function splitBlocks(content: string): {
   readonly blocks: readonly RawBlock[]
   readonly headings: readonly string[]
   readonly separatorAt?: number
+  /** 楼层号/时间戳写在了单独一行、但后面没有跟任何发言——不能静默丢掉。 */
+  readonly danglingMeta: number
 } {
   const blocks: RawBlock[] = []
   const headings: string[] = []
   let current: RawBlock | undefined
   let separatorAt: number | undefined
+  let pendingFloor: number | undefined
+  let pendingTime: string | undefined
+  let pendingReplyTo: string | undefined
+  let pendingReplyBasis: string | undefined
+  let danglingMeta = 0
   const lines = content.split(/\r?\n/)
 
   for (const [index, rawLine] of lines.entries()) {
     const lineNumber = index + 1
+    // `>> 甲` 先认出来，否则下一行的 `stripDecoration` 会把它当引用装饰剥掉。
+    const quote = rawLine.match(QUOTE_MARK)
+    if (quote !== null) {
+      const claim = (quote[1] ?? '').trim()
+      // 只有「>> 名字」这种短行才当回复标记；`>> 一长串正文` 更可能是引用整段。
+      if (claim !== '' && claim.length <= 32 && !/[：:]/.test(claim)) {
+        pendingReplyTo = claim
+        pendingReplyBasis = `上一行写了「>> ${claim}」，按昵称认作回复 ${claim}`
+        current = undefined
+        continue
+      }
+    }
     const line = stripDecoration(rawLine)
     if (line.trim() === '') {
       // 空行结束当前发言。续行靠「紧跟其后」判断，空行之后的裸行属于下一条。
@@ -178,7 +416,76 @@ function splitBlocks(content: string): {
     if (SEPARATOR.test(line)) {
       separatorAt = lineNumber
       current = undefined
+      // 分隔线两侧的楼层/时间标记不属于任何一条发言。
+      if (pendingFloor !== undefined || pendingTime !== undefined) danglingMeta += 1
+      pendingFloor = undefined
+      pendingTime = undefined
       continue
+    }
+    /**
+     * 楼层号与时间戳单独成行时，属于**下一条**发言。
+     *
+     * ## 为什么需要这个 pending 机制
+     *
+     * 论坛复制出来的格式常常是三行一组：
+     *
+     * ```
+     * 3 楼
+     * 2024-01-01 12:00
+     * 甲：你说得不对
+     * ```
+     *
+     * 没有 pending 时，`3 楼` 会被当成一条「匿名」发言，`2024-01-01 12:00`
+     * 也会——于是每条真实发言前面多出两条假发言，参与者里多一个「匿名」，
+     * 分析器会把这个匿名者当成一个从不正面回应的人。
+     */
+    const floorOnly = line.match(FLOOR_ONLY)
+    if (floorOnly !== null) {
+      const digits = floorOnly[1] ?? floorOnly[2] ?? floorOnly[3]
+      const value = digits === undefined ? undefined : Number.parseInt(digits, 10)
+      if (value !== undefined && Number.isFinite(value) && value > 0) {
+        pendingFloor = value
+        current = undefined
+        continue
+      }
+    }
+    const timeOnly = line.match(TIMESTAMP_ONLY)
+    if (timeOnly !== null) {
+      pendingTime = timeOnly[1]!.trim()
+      current = undefined
+      continue
+    }
+    // `甲（2024-01-01 12:00）：正文` 先于通用作者行匹配：时间里的冒号会把它切错。
+    // 不带括号的 `甲 2024-01-01 12:00：正文` 同理，但它的时间必须紧贴冒号，
+    // 所以单独一条规则、排在后面——先认带括号的，避免两条规则抢同一行。
+    const withTime = line.match(AUTHOR_WITH_TIME) ?? line.match(AUTHOR_TAIL_TIME)
+    if (withTime !== null && !/^\s/.test(withTime[1]!)) {
+      const candidateTime = (withTime[2] ?? '').trim()
+      if (candidateTime !== '') {
+        const meta = splitAuthorMeta(withTime[1]!.trim())
+        current = {
+          author: meta.author,
+          ...(pendingFloor === undefined ? {} : { floor: pendingFloor }),
+          ...(pendingTime === undefined ? {} : { createdAt: pendingTime }),
+          ...(meta.floor === undefined ? {} : { floor: meta.floor }),
+          createdAt: candidateTime,
+          ...(pendingReplyTo === undefined
+            ? {}
+            : {
+                replyToName: pendingReplyTo,
+                ...(pendingReplyBasis === undefined ? {} : { replyBasis: pendingReplyBasis }),
+              }),
+          lines: [withTime[3] ?? ''],
+          startLine: lineNumber,
+          rawLines: [rawLine],
+        }
+        pendingFloor = undefined
+        pendingTime = undefined
+        pendingReplyTo = undefined
+        pendingReplyBasis = undefined
+        blocks.push(current)
+        continue
+      }
     }
     const match = line.match(AUTHOR_LINE)
     // 作者行必须同时满足「有冒号」和「作者部分不含前导空格」——后者防止把
@@ -188,30 +495,70 @@ function splitBlocks(content: string): {
       // `A 回复 B` 拆成作者 + 被回复人。只在 B 部分不含空格且长度合理时才拆，
       // 避免把「支持 回复 反对 双方都有理」这类正常昵称切坏。
       const replyInAuthor = rawAuthor.match(REPLY_IN_AUTHOR)
-      const author = replyInAuthor === null ? rawAuthor : replyInAuthor[1]!.trim()
+      const authorPart = replyInAuthor === null ? rawAuthor : replyInAuthor[1]!.trim()
       const target = replyInAuthor === null ? undefined : replyInAuthor[2]!.trim()
+      // `3 楼 甲` / `甲（2024-01-01）` 里的元信息从作者名里剥出来。
+      const meta = splitAuthorMeta(authorPart)
+      const author = meta.author
+      // 作者行没写回复对象时，才用上一行 `>> 甲` 留下的那个。
+      const effectiveReply = target ?? pendingReplyTo
+      const effectiveBasis =
+        target === undefined || target === ''
+          ? pendingReplyBasis
+          : `作者行写了「回复 ${target}」`
       current = {
         author: author === '' ? '匿名' : author,
-        ...(target === undefined || target === '' ? {} : { replyToName: target }),
+        ...(effectiveReply === undefined || effectiveReply === ''
+          ? {}
+          : {
+              replyToName: effectiveReply,
+              ...(effectiveBasis === undefined ? {} : { replyBasis: effectiveBasis }),
+            }),
+        ...(pendingFloor === undefined ? {} : { floor: pendingFloor }),
+        ...(pendingTime === undefined ? {} : { createdAt: pendingTime }),
+        ...(meta.floor === undefined ? {} : { floor: meta.floor }),
+        ...(meta.createdAt === undefined ? {} : { createdAt: meta.createdAt }),
         lines: [match[2] ?? ''],
         startLine: lineNumber,
+        rawLines: [rawLine],
       }
+      pendingFloor = undefined
+      pendingTime = undefined
+      pendingReplyTo = undefined
+      pendingReplyBasis = undefined
       blocks.push(current)
       continue
     }
     if (current !== undefined) {
       current.lines.push(line)
+      current.rawLines.push(rawLine)
       continue
     }
     // 没有作者行开头的裸文本：当作「匿名」的一条，而不是丢掉。
-    current = { author: '匿名', lines: [line], startLine: lineNumber }
+    current = {
+      author: '匿名',
+      ...(pendingReplyTo === undefined
+        ? {}
+        : {
+            replyToName: pendingReplyTo,
+            ...(pendingReplyBasis === undefined ? {} : { replyBasis: pendingReplyBasis }),
+          }),
+      lines: [line],
+      startLine: lineNumber,
+      rawLines: [rawLine],
+    }
+    pendingReplyTo = undefined
+    pendingReplyBasis = undefined
     blocks.push(current)
   }
+
+  if (pendingFloor !== undefined || pendingTime !== undefined) danglingMeta += 1
 
   return {
     blocks,
     headings,
     ...(separatorAt === undefined ? {} : { separatorAt }),
+    danglingMeta,
   }
 }
 
@@ -231,7 +578,7 @@ export function parseText(content: string): ParseResult {
     }
   }
 
-  const { blocks, headings, separatorAt } = splitBlocks(content)
+  const { blocks, headings, separatorAt, danglingMeta } = splitBlocks(content)
   if (blocks.length === 0) {
     return {
       issues: [
@@ -285,25 +632,49 @@ export function parseText(content: string): ParseResult {
   /**
    * 评论：除原帖之外的每一条，按原文顺序。
    *
-   * `回复 @某人` 或 `回复 某人` 开头的正文会被解析成「在回复某人」（按昵称，
-   * 因此下游只能算 `inferred`）；`作者 回复 目标：` 那种写法已经在
-   * `splitBlocks` 里拆好了，两条路径的结果一致。
+   * 回复关系的三种写法按**证据强度**排序处理，后面的不覆盖前面的：
+   *
+   * 1. 正文开头的 `> 甲` / `@甲` / `回复 @甲` —— 最明确，用户就是照着论坛界面写的；
+   * 2. 作者行里的 `甲 回复 乙：` —— 次之，但有的论坛把「回复」写在名字后面；
+   * 3. 正文里的**行内**「回复 @甲」（不在开头）—— 最弱，那句话可能只是引述。
+   *
+   * 三条路径的结果都是 `replyToKind: 'name'`，即 `inferred`。没有任何一条能
+   * 升级成 `stated`：`stated` 需要平台签发的被回复者 id，而粘贴的文本里没有。
    */
   const commentBlocks = blocks.filter((block) => block !== root)
   const comments: ImportedComment[] = commentBlocks.map((block, index) => {
     let text = block.lines.join('\n').trim()
     let replyTo = block.replyToName
-    const reply = text.match(REPLY_PREFIX)
-    if (reply !== null) {
-      // 正文里的「回复 @某人」比作者名里的更明确，覆盖它。
-      replyTo = reply[1]!.trim()
-      text = (reply[2] ?? '').trim()
+    let replyBasis = block.replyBasis
+
+    // 正文开头的引用/艾特优先。先试最具体的三个前缀，取第一个命中的。
+    const prefixHit =
+      text.match(REPLY_PREFIX) ?? text.match(AT_PREFIX) ?? text.match(QUOTE_PREFIX)
+    if (prefixHit !== null) {
+      const claim = prefixHit[1]!.trim()
+      // `@甲` 这条要排除掉「@ 后面是一整句」的情况：昵称最多 32 字，且不含空格。
+      if (claim !== '' && claim.length <= 32) {
+        replyTo = claim
+        replyBasis = `正文开头写成「${text.slice(0, Math.min(12, text.length))}…」，按昵称认作回复 ${claim}`
+        text = (prefixHit[2] ?? '').trim()
+      }
     }
+
     return {
       id: `local:${index + 1}`,
       author: block.author,
       text,
-      ...(replyTo === undefined ? {} : { replyTo, replyToKind: 'name' as const }),
+      ...(block.createdAt === undefined ? {} : { createdAt: block.createdAt }),
+      ...(block.floor === undefined ? {} : { floor: block.floor }),
+      raw: block.rawLines.join('\n'),
+      rawLine: block.startLine,
+      ...(replyTo === undefined
+        ? {}
+        : {
+            replyTo,
+            replyToKind: 'name' as const,
+            ...(replyBasis === undefined ? {} : { replyBasis }),
+          }),
     }
   })
 
@@ -320,13 +691,34 @@ export function parseText(content: string): ParseResult {
     })
   }
 
+  // 单独成行的楼层号/时间戳后面没跟发言：说了，不静默丢。
+  if (danglingMeta > 0) {
+    issues.push({
+      severity: 'info',
+      code: 'dangling_meta',
+      message:
+        `有 ${danglingMeta} 处楼层号或时间标记后面没有跟任何发言，已忽略。` +
+        '如果那些标记本身有意义，请把它们写进对应发言的同一行。',
+    })
+  }
+
+  const rootFloor = root.floor
+  const rootCreatedAt = root.createdAt
+
   return {
     discussion: {
       platform: MANUAL_PLATFORM,
       source: 'text',
       title: headings[0] ?? deriveTitle(rootText, root.author),
-      root: { author: root.author, text: rootText },
+      root: {
+        author: root.author,
+        text: rootText,
+        ...(rootCreatedAt === undefined ? {} : { createdAt: rootCreatedAt }),
+      },
       comments,
+      // 原帖的楼层号与独占行原文：预览要能显示「第 1 楼」并让人核对。
+      ...(rootFloor === undefined ? {} : { rootFloor }),
+      rootRaw: root.rawLines.join('\n'),
     },
     issues,
   }
@@ -534,6 +926,33 @@ export function deriveTitle(text: string, author: string): string {
 
 /** 按输入形式分派。`file` 由调用方读好内容后，按扩展名决定按哪种解析。 */
 export function parseImport(request: ImportRequest): ParseResult {
+  /**
+   * ## 二进制内容先拦一次，不要让它变成一条「匿名发言」
+   *
+   * 用户点「选择文件」时选错是常事：一份 PDF、一张截图、一个 .docx。这些内容
+   * 读进来是一串带控制字符的乱码，而 `parseText` 会尽职地把它当成正文——于是
+   * 预览上出现一条作者为「匿名」、正文是 `%PDF-1.4…` 的发言，下一步的分析
+   * 对着这段乱码跑，最后说「没有找到可回复的对象」。
+   *
+   * 用户看到的是一条关于讨论内容的错误，而他真正做错的是选错了文件。所以在这里
+   * 就说明白：这个文件不是文本。判据只取两个**确定**的信号（NUL 字节、PDF 魔数），
+   * 不猜别的编码——猜错会把一份正常的 GBK 文本判成二进制。
+   */
+  const binary = binaryReasonOf(request.content)
+  if (binary !== undefined) {
+    return {
+      issues: [
+        {
+          severity: 'error',
+          code: 'binary_content',
+          message:
+            `${binary}这份内容不是纯文本，粘贴进来只会变成乱码。` +
+            '请从原页面复制文字，或先把文件另存为 .txt 再导入。',
+        },
+      ],
+    }
+  }
+
   const looksJson =
     request.kind === 'json' ||
     (request.kind === 'file' && /\.json$/i.test(request.fileName ?? '')) ||
@@ -552,6 +971,31 @@ export function parseImport(request: ImportRequest): ParseResult {
     ...(url === undefined || url === '' ? {} : { url }),
   }
   return { discussion, issues: result.issues }
+}
+
+/**
+ * 内容像不像二进制。返回一句能读懂的原因，或 `undefined`（是文本）。
+ *
+ * 只看两个信号，都不猜编码：
+ * - NUL 字节：任何纯文本编码都不会产生 `\u0000`，而几乎所有二进制格式都有。
+ * - PDF 魔数：它是最常见的一种「选错文件」，而且开头就是 ASCII，能通过 NUL 检查。
+ */
+function binaryReasonOf(content: string): string | undefined {
+  // PDF 魔数放在 NUL 之前：PDF 里通常也有 NUL，先判魔数才能说出「这是一份 PDF」
+  // 而不是笼统的「含有二进制数据」。用户拿到后者仍然不知道自己做错了什么。
+  if (/^\s*%PDF-\d/.test(content)) return '这是一份 PDF。'
+  if (content.includes('\u0000')) return '这个文件里含有二进制数据（NUL 字节）。'
+  const sample = content.slice(0, 4096)
+  if (sample !== '') {
+    // 控制字符（除常见的换行/制表）占比过高：不是给人读的文本。
+    let control = 0
+    for (const char of sample) {
+      const code = char.codePointAt(0) ?? 0
+      if (code < 0x20 && char !== '\n' && char !== '\r' && char !== '\t') control += 1
+    }
+    if (control / sample.length > 0.02) return '这段内容里有大量控制字符。'
+  }
+  return undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +1065,18 @@ export function toCollectedThread(discussion: ImportedDiscussion): CollectedThre
     const claim = comment.replyTo?.trim() ?? ''
     if (claim === '') return { kind: 'none' }
     if (claim === discussion.root.id) return { kind: 'root' }
+    /**
+     * ## 用户把某一条提升成原帖之后，「回复原帖」要认新作者
+     *
+     * 修正层会把「在回原帖」写成原帖作者名（见 `corrections.ts` 的
+     * `rootAuthorMarker`）。如果这里只认 `root.id`，那个标记会掉进按昵称的
+     * 分支——多数情况下也能命中（`rootAuthorMatches`），但当评论区有人同名时
+     * 就会判歧义，而用户明明已经用「标为原帖」把这件事定下来了。
+     *
+     * 所以先看一个明确的信号：这条发言的 `replyBasis` 写着「你手工指定它在回复
+     * 原帖」。它不是靠昵称猜的，直接归 `root`。
+     */
+    if (comment.replyBasis === MANUAL_ROOT_BASIS) return { kind: 'root' }
 
     // 先按 id 找。id 是用户写的引用，不需要唯一性判断。
     const byIdentifier = byId.get(claim)
@@ -719,20 +1175,41 @@ export function toCollectedThread(discussion: ImportedDiscussion): CollectedThre
       continue
     }
     const targetId = resolution.comment.id
+    /**
+     * ## 「用户说这条关系确认不了」压过 id
+     *
+     * 结构化 JSON 里给了 `replyTo: 'c1'` 时关系是 `stated`；但用户可以在预览里
+     * 把它标成「不确定」。两者冲突时取**更弱**的那个：`stated` 的意思是
+     * 「这条关系不需要怀疑」，而用户刚刚明确怀疑了它。
+     *
+     * 反过来（把 `inferred` 升级成 `stated`）永远不做，见 `corrections.ts` 的说明。
+     */
+    const unconfirmed = comment.replyUnconfirmed === true
+    const stated = comment.replyToKind === 'id' && !unconfirmed
     const nested: NestedReply = {
       platform: MANUAL_PLATFORM,
       postId: comment.id,
       parentPostId: ownerId,
-      // 只有「按 id 解析到」时才写 `replyToPostId`；昵称解析来的关系写
-      // `replyToName` 并标 `relationUncertain`——它建立在一个可能重名、
+      // 只有「按 id 解析到」且未被标为不确定时才写 `replyToPostId`；昵称解析来的
+      // 关系写 `replyToName` 并标 `relationUncertain`——它建立在一个可能重名、
       // 也可能被改掉的昵称上。下游据此决定能不能把「对方说过这句话」当成事实。
-      ...(comment.replyToKind === 'id' ? { replyToPostId: targetId } : {}),
+      ...(stated ? { replyToPostId: targetId } : {}),
       authorName: comment.author,
       ...(comment.authorId === undefined ? {} : { authorId: comment.authorId }),
-      ...(comment.replyToKind === 'name' ? { replyToName: comment.replyTo } : {}),
+      ...(comment.replyTo !== undefined ? { replyToName: comment.replyTo } : {}),
+      /**
+       * 依据随边一起带上（v0.2.31）。
+       *
+       * 图的桥接层原来对每条 `replies_to` 边一律写「平台返回了被回复的 post id」。
+       * 人工导入没有平台参与，这句话是假的——而这条边会一路走进图、走进转录、
+       * 走进模型的上下文，始终带着一个它没有的权威。
+       *
+       * 这里把解析层知道的依据原样传下去：按 id 指定、按你手工指定、按昵称认。
+       */
+      ...(comment.replyBasis === undefined ? {} : { replyBasis: comment.replyBasis }),
       content: comment.text,
       ...(comment.createdAt === undefined ? {} : { createdAt: comment.createdAt }),
-      ...(comment.replyToKind === 'name' ? { relationUncertain: true } : {}),
+      ...(stated ? {} : { relationUncertain: true }),
     }
     const bucket = nestedByFloor.get(ownerId) ?? []
     bucket.push(nested)

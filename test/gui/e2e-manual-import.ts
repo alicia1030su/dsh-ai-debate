@@ -23,6 +23,8 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { EvidenceCollector, MANUAL_E2E_SCRIPT_VERSION } from './evidence.ts'
+
 interface StageResult {
   readonly name: string
   readonly status: 'passed' | 'failed' | 'skipped'
@@ -43,6 +45,16 @@ const outDir = process.env.DSH_E2E_OUT_DIR ?? 'tmp/gui-manual'
 const interceptLog = process.env.DSH_E2E_INTERCEPT_LOG ?? ''
 
 mkdirSync(outDir, { recursive: true })
+
+/**
+ * 证据收集器（v0.2.31 §八）。
+ *
+ * 这个脚本从 v0.2.30 起就采 `exceptionThrown` 与 `console.error`，但只写进一个
+ * `consoleErrors` 数组：不采失败请求、不采 4xx/5xx、不记 HEAD。
+ * 于是「0 异常」只是一句话——它没覆盖网络层，也没说这份证据属于哪个提交。
+ * v0.2.30 的第一轮全绿就跑在两个改过产品代码的提交之前。
+ */
+const startedAt = new Date().toISOString()
 
 // ── CDP plumbing ────────────────────────────────────────────────────────────
 
@@ -65,10 +77,28 @@ if (page === undefined) {
   finish()
 }
 
+/**
+ * 收集器先声明、后赋值：`finish()` 在「找不到页面」那条分支上会被调用，
+ * 那时还拿不到 `page.url`。写成 `const` 会在那条分支撞进 TDZ，
+ * 把一条可读的失败变成一次 `ReferenceError`。
+ */
+let evidence: EvidenceCollector | undefined
+
 const ws = new WebSocket(page.webSocketDebuggerUrl)
 let seq = 0
 const pending = new Map<number, { res: (v: unknown) => void; rej: (e: Error) => void }>()
+/** 保留这个数组：页面自身读它做过一些断言，改造时不动它的语义。 */
 const consoleErrors: string[] = []
+
+evidence = new EvidenceCollector({
+  script: 'e2e-manual-import.ts',
+  scriptVersion: MANUAL_E2E_SCRIPT_VERSION,
+  pageUrl: page.url,
+  cdpPort: port,
+  appPort,
+  startedAt,
+})
+const collector = evidence
 
 ws.addEventListener('message', (event) => {
   const message = JSON.parse(event.data as string) as {
@@ -85,6 +115,8 @@ ws.addEventListener('message', (event) => {
     else entry.res(message.result)
     return
   }
+  collector.record(message)
+  // 兼容旧断言：这个数组仍然只记 error 级与未捕获异常。
   if (message.method === 'Runtime.exceptionThrown') {
     const details = message.params?.exceptionDetails as { text?: string } | undefined
     consoleErrors.push(`exception: ${details?.text ?? 'unknown'}`)
@@ -130,6 +162,19 @@ async function screenshot(name: string): Promise<void> {
     throw new Error(`截图 ${name} 失败：返回空数据`)
   }
   writeFileSync(join(outDir, `${name}.png`), Buffer.from(result.data, 'base64'))
+  /**
+   * 把截图登记进证据清单。
+   *
+   * ## 第一版忘了这一句
+   *
+   * 截图确实写到磁盘上了（`01-start.png` 等），但 `evidence.json` 里
+   * `screenshots: []`——因为收集器从来没被告知。报告于是写「证据含截图」，
+   * 而清单里一张都没有：一份清单只列它知道的东西，不知道的不会自己出现。
+   *
+   * 这也说明「先声明后赋值」那个改动是对的：`collector` 在这里已被赋值，
+   * 而 `finish()` 走的那条早退分支不会经过这个函数。
+   */
+  collector.screenshot(name)
 }
 
 /** 按可见文字点一个按钮或页签，用真实坐标。 */
@@ -277,14 +322,37 @@ async function callAction(body: Record<string, unknown>): Promise<Record<string,
 function finish(): never {
   const failed = stages.filter((s) => s.status === 'failed')
   const skipped = stages.filter((s) => s.status === 'skipped')
+  /**
+   * 异常信号参与结论（v0.2.31 §八）。
+   *
+   * 只记录不影响结论的信号，等于给报告加一个没人看的栏位。这里把未捕获异常、
+   * 失败请求与 5xx 都算进 verdict——一份「47/47 通过但抛了 3 个异常」的运行
+   * 不该读起来是全绿。
+   *
+   * 业务 4xx 不算：这个脚本会故意请求不存在的东西来验证拒绝路径，而本项目的
+   * 约定是「业务失败回 200 + ok:false」，所以出现的 4xx 只可能是静态资源，
+   * 那属于真问题，仍然计入。
+   */
+  const signals = evidence === undefined ? [] : evidence.signalsView()
+  const fatal = signals.filter(
+    (signal) => signal.kind === 'exception' || signal.kind === 'network' || signal.kind === 'http',
+  )
   const verdict = {
-    verdict: failed.length === 0 && skipped.length === 0 ? 'passed' : 'failed',
+    verdict: failed.length === 0 && skipped.length === 0 && fatal.length === 0 ? 'passed' : 'failed',
     stages,
     consoleErrors,
+    signals,
+    fatalSignals: fatal.length,
     at: new Date().toISOString(),
   }
   writeFileSync(join(outDir, 'result.json'), JSON.stringify(verdict, null, 2), 'utf8')
-  process.stdout.write(`\n结论：${verdict.verdict}（失败 ${failed.length}，跳过 ${skipped.length}）\n`)
+  if (evidence !== undefined) {
+    evidence.finish({ outDir, stages, cwd: process.cwd() })
+  }
+  process.stdout.write(
+    `\n结论：${verdict.verdict}（失败 ${failed.length}，跳过 ${skipped.length}，` +
+      `异常信号 ${fatal.length}/${signals.length}）\n`,
+  )
   process.exit(verdict.verdict === 'passed' ? 0 : 1)
 }
 
@@ -538,8 +606,19 @@ try {
   )
 
   // ── 9/15：四种人格 ───────────────────────────────────────────────────
+  //
+  // ## 为什么要按「——」筛，而不是数所有 option
+  //
+  // v0.2.31 之前离线分区里只有一个 `<select>`（人格）。这一版加了交互式纠错，
+  // 每条发言下面多了一个「在回哪一条」的下拉框，于是「页面上有几个 option」
+  // 从 4 变成了 22——断言红了，而产品没有任何问题。
+  //
+  // 人格选项的文案是 `名字 —— 一句话说明`，纠错下拉框的选项是 id + 作者 + 摘录。
+  // 按这个分隔符筛，测的就还是「人格有几个」，而不是「这一页有几个下拉框」。
   const personaOptions = await evaluate<string[]>(
-    `[...document.querySelectorAll('select option')].map((o) => o.textContent.trim())`,
+    `[...document.querySelectorAll('select option')]
+      .map((o) => o.textContent.trim())
+      .filter((text) => text.includes(' —— '))`,
   )
   stage(
     '四种人格可选',
@@ -765,9 +844,25 @@ try {
       reopened.config ? '三跳都点到了' : `插件页=${reopened.plugins} 列表=${reopened.row} 详情=${reopened.detail} 配置=${reopened.config}`,
     )
     const manualTabAgain = await clickByLabel('离线导入')
-    await sleep(2400)
+    /**
+     * ## 等配置读完，而不是睡一个固定时长
+     *
+     * 这一条上一轮红过一次，截图显示的是「正在读取配置…」——**页面还在加载**。
+     * 原来写的是 `sleep(2400)`，而这一次宿主刚重启、磁盘缓存是冷的，2.4 秒不够。
+     *
+     * 那一刻的失败是真实的（页面确实还没显示出会话），但它证明的是测试的超时
+     * 太短，不是产品有问题。固定 `sleep` 在慢的时候误报、在快的时候空等，
+     * 所以改成轮询：等到页面说出「当前步骤」或「还没有导入任何内容」为止——
+     * 这两个中任意一个出现，都说明配置已经读完了。
+     */
+    let afterReload = ''
+    const reloadDeadline2 = Date.now() + 25_000
+    while (Date.now() < reloadDeadline2) {
+      afterReload = await manualSectionText()
+      if (afterReload.includes('当前步骤') || afterReload.includes('还没有导入任何内容')) break
+      await sleep(700)
+    }
     if (manualTabAgain) {
-      const afterReload = await manualSectionText()
       // 这条是 v0.2.30 修掉的一个真缺陷的回归：进程起来后第一次读工作台曾经
       // 永远是空的，因为 store 懒加载而路由没有 await。
       stage(
@@ -777,7 +872,9 @@ try {
           : 'failed',
         afterReload.includes('当前步骤')
           ? afterReload.split('\n').find((line) => line.includes('当前步骤')) ?? '有会话'
-          : `刷新后会话丢了：${afterReload.slice(0, 120).replace(/\n/g, ' / ')}`,
+          : afterReload.includes('还没有导入任何内容')
+            ? '刷新之后页面说是空的——会话真的丢了，不是加载慢'
+            : `刷新后会话丢了：${afterReload.slice(0, 120).replace(/\n/g, ' / ')}`,
       )
       await screenshot('10-after-reload')
     } else {

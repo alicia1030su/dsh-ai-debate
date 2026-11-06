@@ -311,6 +311,8 @@ export interface SettingsRouteDeps {
             readonly title?: string;
             readonly url?: string;
             readonly fileName?: string;
+            /** 上一轮预览上做过的人工修正（v0.2.31 §四）。 */
+            readonly corrections?: unknown;
         }): Promise<{
             readonly ok: boolean;
             readonly reason?: string;
@@ -331,6 +333,12 @@ export interface SettingsRouteDeps {
                 }[];
                 readonly participants: readonly string[];
             };
+            /** 结构化预览（v0.2.31）：关系三档、楼层、依据、同名、统计。 */
+            readonly structure?: unknown;
+            /** 修正做了什么，逐条可读。 */
+            readonly audit?: readonly unknown[];
+            /** 回传给下一次预览/确认的修正清单（原样带上即可）。 */
+            readonly corrections?: unknown;
         }>;
         /** 确认导入：分析并建会话。 */
         confirm(input: {
@@ -342,6 +350,8 @@ export interface SettingsRouteDeps {
             readonly ownerName?: string;
             readonly targetPostId?: string;
             readonly persona?: string;
+            /** 与预览时同一份修正清单，保证「确认的数据 = 预览的数据」。 */
+            readonly corrections?: unknown;
         }): Promise<{
             readonly ok: boolean;
             readonly sessionId?: string;
@@ -355,6 +365,25 @@ export interface SettingsRouteDeps {
             }[];
             readonly securityNotes?: readonly string[];
         }>;
+        /**
+         * 对已确认的会话应用一批修正（v0.2.31 §四）。
+         *
+         * 与 `preview` 的 `corrections` 不同：那条路径在**导入之前**改，
+         * 这条在**已经建了会话之后**改，需要重新分析并把旧候选作废。
+         * 两条都必须只能用于分析，永远不产生发表权限。
+         */
+        revise(input: {
+            readonly sessionId: string;
+            readonly corrections: unknown;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+            readonly next?: readonly string[];
+            readonly structure?: unknown;
+            readonly audit?: readonly unknown[];
+            /** 因修正而作废的候选数。必须报出来：用户要知道自己刚才那段草稿没了。 */
+            readonly discardedCandidates?: number;
+        }>;
         /** 换主人或换目标，重跑分析。 */
         select(input: {
             readonly sessionId: string;
@@ -365,6 +394,15 @@ export interface SettingsRouteDeps {
             readonly ok: boolean;
             readonly reason?: string;
             readonly next?: readonly string[];
+        }>;
+        /** 取目标上下文（v0.2.31 §五）：这条发言前后是谁在说什么。 */
+        context(input: {
+            readonly sessionId: string;
+            readonly postId: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+            readonly context?: unknown;
         }>;
         /** 生成候选。 */
         generate(input: {

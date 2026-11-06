@@ -157,6 +157,26 @@ export interface ReadinessSnapshot {
    * 与 `blocking` 的分工：后者说「哪一项」，这句说「那一项现在是怎样」。
    */
   readonly summary?: string
+  /**
+   * 这次快照是什么时候取的（ISO）。
+   *
+   * ## 为什么诊断必须带时间（v0.2.31 §六）
+   *
+   * 授权状态是会变的：令牌会过期、服务会到期、额度会用完。一个不带时间的
+   * 「已登录」看起来像永久事实，而它只是某一刻的观测——v0.2.30 的 README
+   * 就是这么把一次成功登录写成了静态结论，十二小时后就与事实不符。
+   *
+   * 有了这个字段，页面就能说「3 小时前检查的」，而不是「已登录」。
+   */
+  readonly checkedAt: string
+  /**
+   * 这份快照多久之后不该再当作现状（毫秒）。
+   *
+   * 取 10 分钟：比任何一次人工排查的节奏都短，又不会让页面每次重绘都重新探测
+   * （探测要跑 2~3 个 CLI 子进程）。超过之后页面必须标注「这是旧结果」，
+   * 而不是继续把它画成绿的。
+   */
+  readonly staleAfterMs: number
 }
 
 /** 探测的原始输入，与本模块解耦，便于用固定数据测八项判断。 */
@@ -198,6 +218,27 @@ export interface ReadinessProbe {
   }
   /** 最近一次错误，用于给「读取失败」那一项提供细节。 */
   readonly lastError?: { readonly at: string; readonly state: string; readonly message: string }
+  /**
+   * 本机登录凭据的存在性（v0.2.31 §六）。
+   *
+   * 与 `doctorSteps` 的分工：`doctor` 只说「登录这一项过了没有」，而这一项说
+   * 「这台机器上到底有没有一条登录记录」。两者都缺时才说得准那种失败：
+   * 有记录但过不了 = 令牌失效；没记录 = 从没登录过。
+   */
+  readonly credential?: {
+    readonly state: 'absent' | 'recorded' | 'unknown'
+    readonly username?: string
+    readonly recordedAt?: string
+    readonly storage?: string
+    readonly reason?: string
+  }
+  /**
+   * 现在的时间（ISO），用于给快照打时间戳。
+   *
+   * 从外面传进来而不是在这里 `new Date()`：这个函数必须是纯的，否则同一份
+   * 输入两次调用得到不同结果，测试没法断言「同样的状态得到同样的快照」。
+   */
+  readonly now?: string
 }
 
 /** CLI 的六个状态到「装在不在 / 通了没通」的映射，保持与 `cli.ts` 一致。 */
@@ -227,6 +268,92 @@ const ACTIVATION_PATTERN = /开通服务|开通|服务|subscri|plan/i
 function versionLooksUsable(version: string | undefined): boolean {
   if (version === undefined) return false
   return /\d+\.\d+/.test(version)
+}
+
+/**
+ * 把 `doctor` 的登录结论与本机凭据记录合成一条更精确的检查（v0.2.31 §六）。
+ *
+ * ## 三种失败，三种措辞
+ *
+ * | 情形 | 依据 | 说明 |
+ * | --- | --- | --- |
+ * | 没登录过 | doctor 不通过 + 没有凭据记录 | 「这台机器上没有登录记录」 |
+ * | 登录过但失效 | doctor 不通过 + 有凭据记录 | 「登录记录在，但 CLI 拿不到可用令牌」 |
+ * | 读不到结论 | doctor 没跑 / 凭据文件读不出来 | 「无法确认」，不做任何推断 |
+ *
+ * ## 为什么「有记录但失效」不直接写「令牌过期」
+ *
+ * CLI 的 `resolveToken()` 在刷新令牌的 HTTP 请求失败时**返回 null**，它把所有
+ * 异常都 `catch` 掉了。所以「网络断了」和「令牌过期」在 CLI 输出上完全一样。
+ *
+ * 把两者说成一个，会让主人在断网时跑去重新登录——而登录同样会失败，于是他
+ * 会得出「插件坏了」的结论。所以措辞里两件事都写，并给出能区分它们的动作：
+ * **先确认网络，再重新登录**。
+ */
+function loginCheck(
+  probe: ReadinessProbe,
+  step: { readonly label: string; readonly ok: boolean } | undefined,
+  fallback: ReadinessCheck,
+): ReadinessCheck {
+  if (!probe.cliInstalled) return fallback
+  if (step?.ok === true) {
+    return {
+      id: 'login',
+      title: 'OAuth 登录',
+      state: 'ready',
+      detail:
+        probe.credential?.state === 'recorded' && probe.credential.username !== undefined
+          ? `doctor：${step.label} ✓（账号 ${probe.credential.username}）`
+          : `doctor：${step.label} ✓`,
+      next: [],
+    }
+  }
+  // doctor 没给出这一项：不猜。沿用上游的「没有证据」措辞。
+  if (step === undefined) return fallback
+
+  const credential = probe.credential
+  if (credential === undefined) return fallback
+
+  if (credential.state === 'absent') {
+    return {
+      id: 'login',
+      title: 'OAuth 登录',
+      state: 'blocked',
+      detail: '这台机器上没有登录记录：从来没有完成过 OAuth 登录。',
+      next: [
+        '运行 weibo-cli auth login（桌面环境会打开浏览器）',
+        '完成后重新运行 doctor 确认这一行为 ✓',
+      ],
+    }
+  }
+
+  if (credential.state === 'recorded') {
+    const who = credential.username === undefined ? '' : `（账号 ${credential.username}）`
+    const when =
+      credential.recordedAt === undefined ? '' : `，记录于 ${credential.recordedAt.slice(0, 16).replace('T', ' ')}`
+    return {
+      id: 'login',
+      title: 'OAuth 登录',
+      state: 'blocked',
+      detail:
+        `本机有登录记录${who}${when}，但 CLI 现在拿不到可用令牌。` +
+        '这有两种可能：令牌已被平台判定失效（过期或被撤销），或者当前网络连不上授权服务——' +
+        'CLI 对这两种情况给出的是同一个回答。',
+      next: [
+        '先确认网络能访问 open.weibo.com（断网时重新登录也会失败）',
+        '再运行 weibo-cli auth login 重新授权',
+        '完成后重新运行 doctor 确认这一行为 ✓',
+      ],
+    }
+  }
+
+  return {
+    id: 'login',
+    title: 'OAuth 登录',
+    state: 'unknown',
+    detail: `无法确认登录状态：${credential.reason ?? '凭据记录读不出来'}。`,
+    next: ['运行 weibo-cli doctor 看它自己怎么说', '必要时运行 weibo-cli auth login 重新授权'],
+  }
 }
 
 /**
@@ -386,11 +513,31 @@ export function buildReadiness(probe: ReadinessProbe): ReadinessSnapshot {
         }
   }
 
+  /**
+   * 4. 登录——这一项要比 `doctor` 多知道一件事
+   *
+   * ## `doctor` 的 `× 注册或登录` 覆盖了两种完全不同的处境
+   *
+   * 1. 这台机器**从来没登录过** → 下一步：去登录；
+   * 2. 登录过，但令牌**已被平台判定失效** → 下一步：还是去登录，但原因不同。
+   *
+   * 第 2 种是 v0.2.30 发布当天真实发生的：README 写「已登录」，12 小时后
+   * 平台回 `401 invalid_grant`，而 `doctor` 的第一行又变回了 `×`。文档把一个
+   * 会过期的状态写成了永久事实，只因为当时没有办法区分这两件事。
+   *
+   * `probe.credential` 给了区分它们的依据：CLI 只在磁盘上留一个指向系统保管库的
+   * **引用**（账号名、创建时间），不读它就没有第二种信息。本模块只读那个引用，
+   * 从不读保管库本身。
+   */
   push(
-    fromDoctor('login', 'OAuth 登录', login, [
-      '运行 weibo-cli auth login（桌面环境会打开浏览器）',
-      '完成后重新运行 doctor 确认这一行为 ✓',
-    ]),
+    loginCheck(
+      probe,
+      login,
+      fromDoctor('login', 'OAuth 登录', login, [
+        '运行 weibo-cli auth login（桌面环境会打开浏览器）',
+        '完成后重新运行 doctor 确认这一行为 ✓',
+      ]),
+    ),
   )
   push(
     fromDoctor('certification', '开发者认证', cert, [
@@ -483,7 +630,30 @@ export function buildReadiness(probe: ReadinessProbe): ReadinessSnapshot {
     ...(canRead || blockingCheck === undefined
       ? {}
       : { summary: `${blockingCheck.title}：${blockingCheck.detail}` }),
+    checkedAt: probe.now ?? new Date().toISOString(),
+    staleAfterMs: READINESS_TTL_MS,
   }
+}
+
+/**
+ * 一份快照多久之后不该再当作现状。
+ *
+ * 10 分钟：比任何一次人工排查的节奏都短，又不会让页面每次重绘都重新探测
+ * （探测要跑 2~3 个 CLI 子进程，每个几百毫秒）。
+ */
+export const READINESS_TTL_MS = 10 * 60 * 1000
+
+/**
+ * 快照是否已经过期。
+ *
+ * 页面必须用它决定标不标「这是旧结果」。不标的话，一次十分钟前说「已就绪」的
+ * 探测会在令牌过期之后继续显示成绿的——而那正是 v0.2.30 文档犯的同一个错，
+ * 只是从 README 搬到了界面上。
+ */
+export function readinessIsStale(snapshot: ReadinessSnapshot, now = Date.now()): boolean {
+  const checked = Date.parse(snapshot.checkedAt)
+  if (!Number.isFinite(checked)) return true
+  return now - checked > snapshot.staleAfterMs
 }
 
 /**

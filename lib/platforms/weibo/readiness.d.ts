@@ -126,6 +126,26 @@ export interface ReadinessSnapshot {
      * 与 `blocking` 的分工：后者说「哪一项」，这句说「那一项现在是怎样」。
      */
     readonly summary?: string;
+    /**
+     * 这次快照是什么时候取的（ISO）。
+     *
+     * ## 为什么诊断必须带时间（v0.2.31 §六）
+     *
+     * 授权状态是会变的：令牌会过期、服务会到期、额度会用完。一个不带时间的
+     * 「已登录」看起来像永久事实，而它只是某一刻的观测——v0.2.30 的 README
+     * 就是这么把一次成功登录写成了静态结论，十二小时后就与事实不符。
+     *
+     * 有了这个字段，页面就能说「3 小时前检查的」，而不是「已登录」。
+     */
+    readonly checkedAt: string;
+    /**
+     * 这份快照多久之后不该再当作现状（毫秒）。
+     *
+     * 取 10 分钟：比任何一次人工排查的节奏都短，又不会让页面每次重绘都重新探测
+     * （探测要跑 2~3 个 CLI 子进程）。超过之后页面必须标注「这是旧结果」，
+     * 而不是继续把它画成绿的。
+     */
+    readonly staleAfterMs: number;
 }
 /** 探测的原始输入，与本模块解耦，便于用固定数据测八项判断。 */
 export interface ReadinessProbe {
@@ -186,6 +206,27 @@ export interface ReadinessProbe {
         readonly state: string;
         readonly message: string;
     };
+    /**
+     * 本机登录凭据的存在性（v0.2.31 §六）。
+     *
+     * 与 `doctorSteps` 的分工：`doctor` 只说「登录这一项过了没有」，而这一项说
+     * 「这台机器上到底有没有一条登录记录」。两者都缺时才说得准那种失败：
+     * 有记录但过不了 = 令牌失效；没记录 = 从没登录过。
+     */
+    readonly credential?: {
+        readonly state: 'absent' | 'recorded' | 'unknown';
+        readonly username?: string;
+        readonly recordedAt?: string;
+        readonly storage?: string;
+        readonly reason?: string;
+    };
+    /**
+     * 现在的时间（ISO），用于给快照打时间戳。
+     *
+     * 从外面传进来而不是在这里 `new Date()`：这个函数必须是纯的，否则同一份
+     * 输入两次调用得到不同结果，测试没法断言「同样的状态得到同样的快照」。
+     */
+    readonly now?: string;
 }
 /** CLI 的六个状态到「装在不在 / 通了没通」的映射，保持与 `cli.ts` 一致。 */
 export declare function isInstallFailure(status: WeiboCliStatus): boolean;
@@ -204,6 +245,21 @@ export declare function isInstallFailure(status: WeiboCliStatus): boolean;
  * 是一个关于账号的断言，而我们没有任何证据——用户会去找一个不存在的登录问题。
  */
 export declare function buildReadiness(probe: ReadinessProbe): ReadinessSnapshot;
+/**
+ * 一份快照多久之后不该再当作现状。
+ *
+ * 10 分钟：比任何一次人工排查的节奏都短，又不会让页面每次重绘都重新探测
+ * （探测要跑 2~3 个 CLI 子进程，每个几百毫秒）。
+ */
+export declare const READINESS_TTL_MS: number;
+/**
+ * 快照是否已经过期。
+ *
+ * 页面必须用它决定标不标「这是旧结果」。不标的话，一次十分钟前说「已就绪」的
+ * 探测会在令牌过期之后继续显示成绿的——而那正是 v0.2.30 文档犯的同一个错，
+ * 只是从 README 搬到了界面上。
+ */
+export declare function readinessIsStale(snapshot: ReadinessSnapshot, now?: number): boolean;
 /**
  * 把快照压成一行中文，给日志和不带面板的地方用。
  *
