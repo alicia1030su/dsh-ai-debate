@@ -35,7 +35,6 @@ import test from 'node:test'
 import { Context } from '@deepseek-ai/cordis'
 
 import * as plugin from '../lib/index.js'
-import { resolveConfig } from '../lib/config.js'
 import { DebateStore } from '../lib/store.js'
 import { parseText } from '../lib/import/manual.js'
 import { toStoredImport } from '../lib/import/session.js'
@@ -57,7 +56,7 @@ function importedSession(now: string) {
   return {
     id: 'm-test-1',
     platform: 'manual',
-    threadId: imported.threadId ?? 'local-thread',
+    threadId: 'local-thread',
     threadUrl: 'local://import/m-test-1',
     threadTitle: imported.title,
     forumName: '人工导入',
@@ -116,7 +115,7 @@ async function mountWithImportedSession(dir: string) {
   // 那是另一条正确的拒绝路径，不是本文件要测的东西。
   app.provide('connection', { requestRejection: () => undefined })
 
-  const fiber = app.plugin(plugin, {
+  const fiber = (app.plugin as never as (p: unknown, c: unknown) => { dispose(): Promise<void> })(plugin, {
     enabled: true,
     storeDir: dir,
     announceToAgent: false,

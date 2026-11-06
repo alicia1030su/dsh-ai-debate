@@ -257,7 +257,6 @@ function manualSectionText(): Promise<string> {
 
 /** 走页面自己的路由。与会话 Cookie 一起，等价于点按钮发出的那个请求。 */
 let sessionId = ''
-let candidateId = ''
 
 async function callAction(body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const raw = await evaluate<string>(`(async () => {

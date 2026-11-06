@@ -42,7 +42,7 @@ import { tiebaProvider } from './platforms/tieba/provider.js'
 import { weiboProvider } from './platforms/weibo/provider.js'
 import { sourceOf } from './import/source.js'
 import { parseImport, toCollectedThread } from './import/manual.js'
-import { toStoredImport } from './import/session.js'
+import { toStoredImport, MAX_IMPORTED_CHARS } from './import/session.js'
 import {
   analyzeImport,
   approveImportedCandidate,
@@ -1649,14 +1649,60 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
             })),
           }
         }
-        const collected = toCollectedThread(parsed.discussion)
-        return {
-          ok: true,
-          issues: parsed.issues.map((issue) => ({
+        /**
+         * ## 预览必须把「确认之后会发生什么」说在前面
+         *
+         * 两件事在这里一致化，都是实测发现的：
+         *
+         * 1. **只有一条发言**。粘进来一段没有「作者：内容」格式的文字时，解析器会把
+         *    整段当成一条发言（冒号把前半句读成了作者名）。预览于是返回
+         *    `ok: true` 并显示一个莫名其妙的作者——而下一步「确认导入」必定拒绝
+         *    「这份导入内容里没有任何评论」。用户在预览阶段看不出这一点，
+         *    只能在下一步撞墙。预览就该说「这样确认不了」，并给出**同一条**理由。
+         *
+         * 2. **超长内容会被截断**。截断发生在落盘（`toStoredImport`）时，而预览
+         *    不经过那里，所以预览展示的是完整正文、`issues` 是空的，确认之后存下的
+         *    却是截断版本。用户以为确认的是自己看到的那一段。这里把将要发生的截断
+         *    提前算出来并标出来，预览与落盘用同一组常量。
+         */
+        const comments = parsed.discussion.comments
+        if (comments.length === 0) {
+          return {
+            ok: false,
+            reason:
+              '这份导入内容里没有任何评论，无法分析。' +
+              '请至少导入一条别人说的话——只有原帖时没有可回复的对象。',
+            issues: parsed.issues.map((issue) => ({
+              severity: issue.severity,
+              code: issue.code,
+              message: issue.message,
+            })),
+          }
+        }
+        const overlong = comments.filter((comment) => comment.text.length > MAX_IMPORTED_CHARS)
+        const overlongRoot = parsed.discussion.root.text.length > MAX_IMPORTED_CHARS
+        const previewIssues = [
+          ...parsed.issues.map((issue) => ({
             severity: issue.severity,
             code: issue.code,
             message: issue.message,
           })),
+          ...(overlong.length === 0 && !overlongRoot
+            ? []
+            : [
+                {
+                  severity: 'warning' as const,
+                  code: 'will_truncate',
+                  message:
+                    `有 ${overlong.length + (overlongRoot ? 1 : 0)} 条正文超过 ${MAX_IMPORTED_CHARS} 字，` +
+                    '确认之后会截断保存——分析用的是截断后的那一段。',
+                },
+              ]),
+        ]
+        const collected = toCollectedThread(parsed.discussion)
+        return {
+          ok: true,
+          issues: previewIssues,
           discussion: {
             title: parsed.discussion.title,
             author: parsed.discussion.root.author,
