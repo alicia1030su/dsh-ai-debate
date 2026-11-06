@@ -847,33 +847,47 @@ try {
     /**
      * ## 等配置读完，而不是睡一个固定时长
      *
-     * 这一条上一轮红过一次，截图显示的是「正在读取配置…」——**页面还在加载**。
-     * 原来写的是 `sleep(2400)`，而这一次宿主刚重启、磁盘缓存是冷的，2.4 秒不够。
+     * 这一条红过两次，两次的原因不同，都值得记下来。
      *
-     * 那一刻的失败是真实的（页面确实还没显示出会话），但它证明的是测试的超时
-     * 太短，不是产品有问题。固定 `sleep` 在慢的时候误报、在快的时候空等，
-     * 所以改成轮询：等到页面说出「当前步骤」或「还没有导入任何内容」为止——
-     * 这两个中任意一个出现，都说明配置已经读完了。
+     * **第一次是睡太短。** 原来写 `sleep(2400)`，而这次宿主刚重启、磁盘缓存是冷的，
+     * 截图停留在「正在读取配置…」。固定 `sleep` 在慢的时候误报、在快的时候空等。
+     *
+     * **第二次是轮询的判据错了。** 改成轮询之后，我把「页面说『还没有导入任何内容』」
+     * 也当成了「加载完成」的信号。但它不是：`flow == null` 时页面渲染的就是这句
+     * 空状态文案，而**加载完成之前 `flow` 本来就是 null**。于是循环在第一次检查时
+     * 就满足条件退出，把「还没加载」读成了「确实是空的」——一个更隐蔽的假失败。
+     *
+     * 现在的判据只有一个：**看到「当前步骤」**。那是工作台真的返回了会话才会出现
+     * 的字样。超时之后才去区分「空」和「没加载」。
      */
     let afterReload = ''
+    let sawSession = false
     const reloadDeadline2 = Date.now() + 25_000
     while (Date.now() < reloadDeadline2) {
       afterReload = await manualSectionText()
-      if (afterReload.includes('当前步骤') || afterReload.includes('还没有导入任何内容')) break
+      if (afterReload.includes('当前步骤')) {
+        sawSession = true
+        break
+      }
       await sleep(700)
+    }
+    if (!sawSession) {
+      // 25 秒还没等到会话，再给 4 秒的宽限：慢机器上工作台可能确实在排队。
+      // 宽限之后仍为空，才是「真的丢了」。
+      await sleep(4000)
+      afterReload = await manualSectionText()
+      sawSession = afterReload.includes('当前步骤')
     }
     if (manualTabAgain) {
       // 这条是 v0.2.30 修掉的一个真缺陷的回归：进程起来后第一次读工作台曾经
       // 永远是空的，因为 store 懒加载而路由没有 await。
       stage(
         '刷新后仍读得到这条会话',
-        afterReload.includes('当前步骤') && afterReload.includes('人工导入')
-          ? 'passed'
-          : 'failed',
-        afterReload.includes('当前步骤')
+        sawSession && afterReload.includes('人工导入') ? 'passed' : 'failed',
+        sawSession
           ? afterReload.split('\n').find((line) => line.includes('当前步骤')) ?? '有会话'
           : afterReload.includes('还没有导入任何内容')
-            ? '刷新之后页面说是空的——会话真的丢了，不是加载慢'
+            ? '刷新之后工作台说是空的——会话真的丢了，不是加载慢（已多等 4 秒）'
             : `刷新后会话丢了：${afterReload.slice(0, 120).replace(/\n/g, ' / ')}`,
       )
       await screenshot('10-after-reload')
