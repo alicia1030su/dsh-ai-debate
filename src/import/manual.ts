@@ -213,7 +213,24 @@ const SEPARATOR =
   /^\s*(?:-{3,}|={3,}|\*{3,}|_{3,}|[·・]{3,})\s*(?:[^\n]{0,20}(?:评论|回复|原帖|以上|以下)[^\n]{0,20})?\s*(?:-{3,}|={3,}|\*{3,}|_{3,}|[·・]{3,})?\s*$/
 const HEADING = /^\s*#{1,6}\s*(.*)$/
 /** `回复 @甲：…`。冒号可有可无。 */
-const REPLY_PREFIX = /^回复\s*@?\s*([^：:\s]{1,32})\s*[：:]?\s*([\s\S]*)$/
+/**
+ * `回复 甲：…` 这类前缀。
+ *
+ * ## 名字后面**必须有分隔符**（v0.2.32，实测缺口）
+ *
+ * 原来写的是 `([^：:\s]{1,32})\s*[：:]?` —— 分隔符是可选的，于是任何以「回复」
+ * 开头的正常句子都被吃掉：
+ *
+ * ```
+ * 乙：回复太长了懒得看
+ * ```
+ *
+ * 被解析成「作者乙，正文空，在回复『太长了懒得看』」：一句话消失，还凭空多出
+ * 一条指向不存在的人的回复边。这不是边界情况，是「回复」这个词在中文里的日常用法。
+ *
+ * 现在要求名字后面跟冒号或空白，两者都没有就不认为是回复标记，整句留给正文。
+ */
+const REPLY_PREFIX = /^回复\s*@?\s*([^：:\s]{1,32})(?:\s*[：:]\s*|\s+)([\s\S]*)$/
 /** `@甲 …`（行首 @，后面有空格或直接是正文）。 */
 const AT_PREFIX = /^@\s*([^：:\s]{1,32})\s+(?=[\s\S]*\S)([\s\S]*)$/
 /** `>> 甲` 或 `＞＞ 甲`。 */
@@ -231,9 +248,11 @@ const QUOTE_PREFIX = /^(?:>>|＞＞)\s*@?\s*([^：:\s]{1,32})\s*[：:]?\s*([\s\S
  * 两者之间没有「词边界」。第一版写成 `(?:楼|L|F)\b`，于是 `2 楼` 一条都认不出，
  * 每个楼层号都变成一条「匿名：2 楼」的假发言——四个样本里三个当场错。
  */
-const FLOOR_ONLY = /^\s*(?:#\s*(\d{1,5})|(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9])|\[\s*(\d{1,5})\s*\])\s*$/
+const FLOOR_ONLY =
+  /^\s*(?:#\s*(\d{1,5})|第\s*(\d{1,5})\s*楼|(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9])|\[\s*(\d{1,5})\s*\])\s*$/
 /** 作者行里的楼层号前缀：`3 楼 甲：…`。 */
-const FLOOR_PREFIX = /^\s*(?:#\s*(\d{1,5})|(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9]))\s*[·.、:：-]?\s+/
+const FLOOR_PREFIX =
+  /^\s*(?:#\s*(\d{1,5})|第\s*(\d{1,5})\s*楼|(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9]))(?:\s*[·.、:：\-]\s*|\s+)/
 /** 作者行里尾随的楼层号：`甲 3 楼：…` —— 这条不剥，容易误伤正文里的数字。 */
 
 /**
@@ -276,7 +295,7 @@ const AUTHOR_TAIL_TIME =
   /^(.{1,40}?)\s*(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}\s*日?(?:\s+\d{1,2}:\d{2})?|刚刚|\d{1,3}\s*(?:秒|分钟|小时|天|周)前)\s*[：:]\s*([\s\S]*)$/
 
 /** 作者名尾部的楼层标记：`甲 2 楼` 里的 `2 楼`。只在作者段被时间/括号切开后才需要。 */
-const TRAILING_FLOOR = /\s+(?:#?(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9]))\s*$/
+const TRAILING_FLOOR = /(?:^|\s)第?\s*#?\s*(\d{1,5})\s*(?:楼|[LlFf])(?![A-Za-z0-9])\s*$/
 
 /**
  * 引用标记 `>> 甲` / `＞＞ 甲`。
@@ -312,7 +331,8 @@ function splitAuthorMeta(raw: string): {
 
   const floorMatch = rest.match(FLOOR_PREFIX)
   if (floorMatch !== null) {
-    const digits = floorMatch[1] ?? floorMatch[2]
+    // 三个可选分支：`#3` / `第 3 楼` / `3 楼|3L|3F`
+    const digits = floorMatch[1] ?? floorMatch[2] ?? floorMatch[3]
     const value = digits === undefined ? undefined : Number.parseInt(digits, 10)
     if (value !== undefined && Number.isFinite(value) && value > 0) {
       floor = value
@@ -441,7 +461,8 @@ function splitBlocks(content: string): {
      */
     const floorOnly = line.match(FLOOR_ONLY)
     if (floorOnly !== null) {
-      const digits = floorOnly[1] ?? floorOnly[2] ?? floorOnly[3]
+      // 四个可选分支：`#3` / `第 3 楼` / `3 楼|3L|3F` / `[3]`
+      const digits = floorOnly[1] ?? floorOnly[2] ?? floorOnly[3] ?? floorOnly[4]
       const value = digits === undefined ? undefined : Number.parseInt(digits, 10)
       if (value !== undefined && Number.isFinite(value) && value > 0) {
         pendingFloor = value
@@ -499,7 +520,23 @@ function splitBlocks(content: string): {
       const target = replyInAuthor === null ? undefined : replyInAuthor[2]!.trim()
       // `3 楼 甲` / `甲（2024-01-01）` 里的元信息从作者名里剥出来。
       const meta = splitAuthorMeta(authorPart)
-      const author = meta.author
+      let author = meta.author
+      let bodyText = match[2] ?? ''
+      /**
+       * `第 2 楼：乙：回复一` —— 楼层号后面紧跟冒号时，真正的作者在下一段。
+       *
+       * 这种写法在论坛里很常见（楼层标签单独占一个冒号）。原来它被切成
+       * 「作者=第 2 楼、正文=乙：回复一」，剥掉楼层后作者变成空、退回「匿名」，
+       * 于是这条发言挂到了一个不存在的人头上。这里往下再切一次。
+       */
+      if (meta.floor !== undefined && (author === '' || author === '匿名')) {
+        const inner = bodyText.match(AUTHOR_LINE)
+        if (inner !== null && !/^\s/.test(inner[1]!) && inner[1]!.trim() !== '') {
+          const innerMeta = splitAuthorMeta(inner[1]!.trim())
+          author = innerMeta.author
+          bodyText = inner[2] ?? ''
+        }
+      }
       // 作者行没写回复对象时，才用上一行 `>> 甲` 留下的那个。
       const effectiveReply = target ?? pendingReplyTo
       const effectiveBasis =
@@ -518,7 +555,7 @@ function splitBlocks(content: string): {
         ...(pendingTime === undefined ? {} : { createdAt: pendingTime }),
         ...(meta.floor === undefined ? {} : { floor: meta.floor }),
         ...(meta.createdAt === undefined ? {} : { createdAt: meta.createdAt }),
-        lines: [match[2] ?? ''],
+        lines: [bodyText],
         startLine: lineNumber,
         rawLines: [rawLine],
       }
