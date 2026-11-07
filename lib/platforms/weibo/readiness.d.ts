@@ -221,6 +221,23 @@ export interface ReadinessProbe {
         readonly reason?: string;
     };
     /**
+     * 授权主机的可达性（v0.2.33 §六）。
+     *
+     * 只在「有登录记录但拿不到令牌」时才有意义：它把「要么网络、要么令牌」这句
+     * 两难的话收敛成一条确定的结论。`undefined` 表示本次没有探测——措辞必须
+     * 退回两种可能，不能假装知道。
+     */
+    readonly network?: {
+        readonly state: 'reachable';
+        readonly status: number;
+    } | {
+        readonly state: 'unreachable';
+        readonly reason: string;
+    } | {
+        readonly state: 'unknown';
+        readonly reason: string;
+    };
+    /**
      * 现在的时间（ISO），用于给快照打时间戳。
      *
      * 从外面传进来而不是在这里 `new Date()`：这个函数必须是纯的，否则同一份

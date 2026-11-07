@@ -41,3 +41,15 @@ tmp/
 # 注意：lib/ 是刻意提交的。
 # 它让用户从 GitHub 安装插件后无需自己编译 TypeScript，
 # 这是本项目的发布约定，见 README「安装」一节。
+
+# 假 weibo-cli 包**必须入库**（v0.2.33）。
+#
+# 它按 npm 包的布局摆放（`node_modules/@weibo-ai/weibo-cli/dist/index.js`），
+# 因为产品就是按那个路径解析入口的——替换发生在文件系统与 PATH 这个产品本来就
+# 相信的边界上。但 `node_modules/` 在上面被忽略，于是它一直只存在于某台机器的
+# `tmp/` 里，换一台机器就复现不了桌面验收。
+#
+# 这两条例外让那个包进仓库，其余 node_modules 仍然忽略。
+!test/fixtures/fake-weibo-pkg/
+!test/fixtures/fake-weibo-pkg/node_modules/
+!test/fixtures/fake-weibo-pkg/node_modules/**

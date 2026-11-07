@@ -112,6 +112,19 @@ export interface WeiboDiagnostics {
    * 可选：没有这个字段的旧构造仍然合法，页面按「没有八项」渲染而不是按「全部通过」。
    */
   readonly readiness?: import('./readiness.js').ReadinessSnapshot
+  /**
+   * 最近一次读取的分阶段耗时（v0.2.33 §七）。
+   *
+   * ## 为什么把耗时放进诊断，而不是只写日志
+   *
+   * 「插件读一条微博要 40 秒」这句话里没有可以行动的信息：可能是进程启动、
+   * 可能是登录探测、可能是平台本身慢。分阶段之后，「探测 12 秒 + 平台 9 秒 +
+   * 投影 0 秒」是一个能对照代码复核的结论，而「40 秒」只能引起猜测。
+   *
+   * 只有跑过一次真实读取之后才有值。`undefined` 表示「本次进程还没读过」，
+   * 不是「读了 0 秒」。
+   */
+  readonly readTrace?: import('./trace.js').ReadTraceSnapshot
 }
 
 /** Mutable diagnostics recorder, kept per adapter instance. */

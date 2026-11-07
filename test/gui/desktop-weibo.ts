@@ -1,0 +1,744 @@
+/**
+ * 真 DSH Desktop 上的微博全链路验收（v0.2.33 §四）。
+ *
+ * ## 与 `e2e-weibo.ts` 的分工
+ *
+ * `e2e-weibo.ts` 跑在**浏览器 + dsh web** 上，验证的是「页面逻辑对不对」。
+ * 这个文件跑在**真 Electron 窗口**（`dsh-app://`）上，验证的是「普通用户在自己
+ * 的桌面应用里能不能走完这条链」：打开插件 → 输入微博链接 → 读取讨论 →
+ * 选目标 → 生成 → 编辑 → 确认 → 复制 → 重启后恢复。
+ *
+ * 两者的差别不是画布，是**入口**：桌面端没有「插件」页签，只有
+ * 左下角账号菜单 → 设置 → 侧栏「AI代吵架」。v0.2.31 就是在这里把
+ * 「设置打不开」当成产品缺陷报了一轮，实际是选择器写错了。
+ * 所以导航一律走 `desktop-shell.ts`，两个桌面脚本共用同一份。
+ *
+ * ## 数据从哪里来
+ *
+ * 真微博 API 需要有效的 OAuth 令牌，而隔离环境里没有、也不该有。所以读取走
+ * `test/fixtures/fake-weibo-pkg` 里那个**按 npm 包布局摆放的假 CLI**：
+ * 替换发生在文件系统 + PATH 这个产品本来就相信的边界上，产品代码零改动、
+ * 也不知道自己在被测试。
+ *
+ * **这份证据证明的是「桌面链路通」，不是「微博 API 今天这样返回」。**
+ * 报告里必须分开写。真实响应形态由 `v0232-weibo-real-shape` 与
+ * `v0233-paging-states` 两组单元用例钉住（用的是 2026-11-07 抓回来的原始 JSON）。
+ *
+ * ## 判定原则
+ *
+ * - 剪贴板：`readText()` 真读回来比对，不看页面自述。
+ * - 「复制成功」必须能读回正文；读不回就是没成功，页面写「已复制」也不算。
+ * - 任何 skipped 都不算通过。
+ */
+
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { EvidenceCollector } from './evidence.ts'
+import {
+  dismissOnboarding,
+  openPluginPage,
+  openSettings,
+  type ShellCtx,
+} from './desktop-shell.ts'
+
+const cdpPort = Number(process.env.DSH_E2E_CDP_PORT ?? '9400')
+const outDir = process.env.DSH_E2E_OUT_DIR ?? 'tmp/desk-weibo'
+const weiboHome = process.env.FAKE_WEIBO_HOME ?? ''
+const weiboLog = process.env.FAKE_WEIBO_LOG ?? ''
+const worktree = process.env.DSH_E2E_WORKTREE ?? process.cwd()
+
+mkdirSync(outDir, { recursive: true })
+
+interface Stage {
+  readonly name: string
+  readonly status: 'passed' | 'failed' | 'skipped'
+  readonly detail: string
+  readonly how: 'automation' | 'manual'
+}
+
+const stages: Stage[] = []
+function stage(name: string, status: Stage['status'], detail: string, how: Stage['how'] = 'automation'): void {
+  stages.push({ name, status, detail, how })
+  const mark = status === 'passed' ? '✔' : status === 'failed' ? '✘' : '·'
+  process.stdout.write(`${mark} ${name} — ${detail}\n`)
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+// ── CDP ────────────────────────────────────────────────────────────────────
+
+let nextId = 1
+const pending = new Map<number, (value: unknown) => void>()
+let ws: WebSocket
+const consoleErrors: string[] = []
+const exceptions: string[] = []
+
+const CDP_TIMEOUT_MS = 20_000
+
+async function connect(): Promise<{ url: string; ua: string }> {
+  const list = (await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json()) as {
+    type: string
+    url: string
+    webSocketDebuggerUrl: string
+  }[]
+
+  /**
+   * 挑 `dsh-app://` 那个页面。
+   *
+   * Electron 里通常有两个 page：启动画面（`file://`）与真正的应用窗口。
+   * 选错了会对着空白页断言「界面没渲染」，然后写一份错误的失败报告。
+   */
+  const appPage =
+    list.find((t) => t.type === 'page' && /^dsh-app:\/\//.test(t.url)) ??
+    list.find((t) => t.type === 'page' && /127\.0\.0\.1/.test(t.url)) ??
+    list.find((t) => t.type === 'page')
+
+  if (appPage === undefined) {
+    throw new Error(`没有可驱动的页面：${JSON.stringify(list.map((t) => `${t.type}:${t.url}`))}`)
+  }
+
+  ws = new WebSocket(appPage.webSocketDebuggerUrl)
+  await new Promise<void>((resolve, reject) => {
+    ws.onopen = (): void => resolve()
+    ws.onerror = (): void => reject(new Error('CDP 连接失败'))
+  })
+  ws.onmessage = (event): void => {
+    const msg = JSON.parse(String(event.data)) as {
+      id?: number
+      result?: unknown
+      method?: string
+      params?: { type?: string; args?: { value?: unknown }[]; exceptionDetails?: { text?: string } }
+    }
+    if (msg.id !== undefined) {
+      pending.get(msg.id)?.(msg.result)
+      pending.delete(msg.id)
+      return
+    }
+    if (msg.method === 'Runtime.exceptionThrown') {
+      exceptions.push(msg.params?.exceptionDetails?.text ?? 'unknown')
+    }
+    if (msg.method === 'Runtime.consoleAPICalled' && msg.params?.type === 'error') {
+      consoleErrors.push((msg.params.args ?? []).map((a) => String(a.value ?? '')).join(' ').slice(0, 200))
+    }
+  }
+  await send('Runtime.enable')
+  await send('Page.enable')
+  return { url: appPage.url, ua: await evaluate<string>('navigator.userAgent') }
+}
+
+function send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+  const id = nextId++
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pending.delete(id)
+      resolve(undefined)
+    }, CDP_TIMEOUT_MS)
+    pending.set(id, (value) => {
+      clearTimeout(timer)
+      resolve(value)
+    })
+    ws.send(JSON.stringify({ id, method, params }))
+  })
+}
+
+async function evaluate<T>(expression: string): Promise<T> {
+  const r = (await send('Runtime.evaluate', {
+    expression,
+    returnByValue: true,
+    awaitPromise: true,
+  })) as { result?: { value?: T }; exceptionDetails?: { text?: string } }
+  if (r?.exceptionDetails !== undefined) throw new Error(r.exceptionDetails.text ?? 'evaluate 失败')
+  return r?.result?.value as T
+}
+
+async function clickAt(x: number, y: number): Promise<void> {
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+  await sleep(1100)
+}
+
+async function clickByText(label: string): Promise<boolean> {
+  const pos = await evaluate<string>(`(() => {
+    const nodes = [...document.querySelectorAll('button,[role=button],[role=tab],a,[tabindex]')]
+    for (const n of nodes) {
+      const t = (n.innerText || n.textContent || '').trim()
+      if (t === ${JSON.stringify(label)}) {
+        const r = n.getBoundingClientRect()
+        if (r.width < 2 || r.height < 2) continue
+        return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) })
+      }
+    }
+    return 'not-found'
+  })()`)
+  if (pos === 'not-found') return false
+  const { x, y } = JSON.parse(pos) as { x: number; y: number }
+  await clickAt(x, y)
+  return true
+}
+
+async function screenshot(name: string): Promise<void> {
+  const r = (await send('Page.captureScreenshot', { format: 'png' })) as { data?: string }
+  if (typeof r?.data === 'string' && r.data !== '') {
+    writeFileSync(join(outDir, `${name}.png`), Buffer.from(r.data, 'base64'))
+    // 登记进证据清单。不登记的话 `evidence.json` 里 screenshots 是空的，
+    // 而磁盘上明明有一堆 png——报告与产物对不上，读报告的人会以为没截图。
+    evidence.screenshot(`${name}.png`)
+  }
+}
+
+const shellCtx = (): ShellCtx => ({
+  evaluate,
+  clickAt,
+  clickByText,
+  sleep,
+  viewport: async () => {
+    const m = (await send('Page.getLayoutMetrics')) as {
+      cssLayoutViewport?: { clientWidth: number; clientHeight: number }
+    }
+    return {
+      vw: m?.cssLayoutViewport?.clientWidth ?? 1275,
+      vh: m?.cssLayoutViewport?.clientHeight ?? 646,
+    }
+  },
+})
+
+const bodyText = async (): Promise<string> => evaluate<string>('document.body ? document.body.innerText : ""')
+
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await predicate()) return true
+    await sleep(500)
+  }
+  return false
+}
+
+/** 逐字符发键盘事件。`element.value = x` 不触发 React 的 onChange。 */
+async function typeText(text: string): Promise<void> {
+  for (const char of text) {
+    await send('Input.dispatchKeyEvent', { type: 'char', text: char })
+    await sleep(12)
+  }
+}
+
+// ── 假 CLI 场景切换 ────────────────────────────────────────────────────────
+
+function setWeiboScenario(patch: Record<string, unknown>): void {
+  if (weiboHome === '') return
+  let current: Record<string, unknown> = {}
+  if (existsSync(weiboHome)) {
+    try {
+      current = JSON.parse(readFileSync(weiboHome, 'utf8')) as Record<string, unknown>
+    } catch {
+      current = {}
+    }
+  }
+  writeFileSync(weiboHome, JSON.stringify({ ...current, ...patch }, null, 2), 'utf8')
+}
+
+/** 读假 CLI 的调用日志。它是「产品到底发了什么请求」的唯一事实来源。 */
+function weiboCalls(): string[][] {
+  if (weiboLog === '' || !existsSync(weiboLog)) return []
+  return readFileSync(weiboLog, 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== '')
+    .map((line) => {
+      try {
+        return JSON.parse(line) as string[]
+      } catch {
+        return []
+      }
+    })
+}
+
+
+/**
+ * 先滚进视野再点，用于长页面里位置不固定的按钮。
+ *
+ * ## 为什么不直接按文字点
+ *
+ * `getBoundingClientRect()` 给的是**相对视口**的坐标，而这块面板高度上万像素：
+ * 「生成候选」「复制回复」这类按钮在页面很下方，滚动前量到的 y 会落在视口之外
+ * （例如 y≈5600，而窗口只有 672 高）。那种点击派发出去什么也不会发生，
+ * 页面却看起来「按钮没了」。
+ *
+ * 所以：先 `scrollIntoView` 让它进视野，**再重新量**一次坐标，然后派发。
+ * 这是 v0.2.32 在贴吧复制的那个坑，这一版在微博页又踩了一次。
+ */
+async function clickScrolled(label: string): Promise<boolean> {
+  const found = await evaluate<boolean>(`(() => {
+    const nodes = [...document.querySelectorAll('button,[role=button]')]
+    const hit = nodes.find(n => (n.innerText || n.textContent || '').trim() === ${JSON.stringify(label)})
+    if (!hit) return false
+    const r = hit.getBoundingClientRect()
+    if (r.width < 2 || r.height < 2) return false
+    hit.scrollIntoView({ block: 'center' })
+    return true
+  })()`)
+  if (!found) return false
+  await sleep(600)
+  return clickByText(label)
+}
+
+const STATUS_ID = '5021243409116023'
+const OPPONENT_COMMENT_ID = '6002'
+const OPPONENT_NAME = '后说话的'
+
+const startedAt = new Date().toISOString()
+const evidence = new EvidenceCollector({
+  script: 'test/gui/desktop-weibo.ts',
+  scriptVersion: '1',
+  pageUrl: '',
+  cdpPort,
+  appPort: 0,
+  startedAt,
+})
+
+// ── 主流程 ─────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const surface = await connect()
+
+  /**
+   * 整个文件的地基：**证明被驱动的是 Desktop，不是浏览器。**
+   *
+   * `dsh-app://` 是 Electron 自定义协议，Edge 里不存在。只要 URL 是这个，
+   * 就排除了「拿浏览器冒充桌面」——而那正是 v0.2.31 留给这一版的问题。
+   */
+  const isDesktop = /^dsh-app:\/\//.test(surface.url)
+  stage('被驱动的是 Desktop 渲染进程（不是浏览器）', isDesktop ? 'passed' : 'failed', `URL = ${surface.url}`)
+  stage('userAgent 含 Electron', /Electron/.test(surface.ua) ? 'passed' : 'failed', surface.ua.slice(0, 90))
+
+  /**
+   * ## 必须先等插件加载完成，否则后面每一条都会红
+   *
+   * 桌面端启动画面是 `HARNESS / Loading plugins…`。CDP 一连上就能读到 DOM，
+   * 但那时它只有这一句话——没有账号菜单、没有侧栏、没有任何页签。
+   *
+   * 第一版没等，于是 25 个阶段里 15 个红，报告读起来像「产品全线崩溃」，
+   * 而实际只是脚本比界面快了 3 秒。这正是这一版要消灭的那类假失败：
+   * **它不是产品的问题，也不是环境的问题，是判据取早了。**
+   *
+   * 判据用「界面自己的文字」而不是固定秒数：加载慢的时候等得久，快的时候立刻过。
+   */
+  const uiReady = await waitFor(async () => {
+    const text = await bodyText()
+    if (text === '') return false
+    if (/Loading plugins/i.test(text)) return false
+    return /新会话|工作区|设置|插件/.test(text)
+  }, 90_000)
+  stage(
+    '桌面界面已加载完成（不是启动画面）',
+    uiReady ? 'passed' : 'failed',
+    uiReady ? (await bodyText()).split('\n').slice(0, 3).join(' / ').slice(0, 110) : `90 秒仍在启动画面：${(await bodyText()).slice(0, 120)}`,
+  )
+  await screenshot('00-surface')
+
+  const dismissed = await dismissOnboarding(shellCtx())
+  stage('启动引导已处理', /关不掉/.test(dismissed) ? 'failed' : 'passed', dismissed)
+  await screenshot('01-after-onboarding')
+
+  const settings = await openSettings(shellCtx())
+  stage('打开设置', settings.ok ? 'passed' : 'failed', settings.how)
+  await screenshot('02-settings')
+
+  const plugin = await openPluginPage(shellCtx(), {
+    markers: /离线讨论导入|主人贴吧数字 ID|当前步骤|平台|工作台/,
+  })
+  stage('进入插件分区', plugin.mounted ? 'passed' : 'failed', plugin.detail)
+  await screenshot('03-plugin')
+
+  // ── 平台页：微博必须在列表里，并且说清自己的状态 ───────────────────────
+  /**
+   * ## 桌面端没有「平台」页签，只有堆叠的分区
+   *
+   * `settings.section` 那一扇门把 11 个区块**全部堆在一页**上（设计如此：
+   * 侧栏是「全都给我看」的入口，带页签的卡片只存在于插件行那条旧路径）。
+   *
+   * 第一版照着浏览器版的写法去点「平台」页签，于是 4 条断言一起红——问的是
+   * 一个在这个入口下不存在的东西。这一版的判据改成「滚动到那一段，读它的文字」。
+   */
+  const scrollToSection = async (title: string): Promise<boolean> =>
+    evaluate<boolean>(`(() => {
+      const wanted = ${JSON.stringify(title)}
+      const nodes = [...document.querySelectorAll('.dsd-sect-title,.dsd-section-title,.dsd-card-title')]
+      const hit = nodes.find(n => (n.textContent || '').trim() === wanted)
+      if (!hit) return false
+      hit.scrollIntoView({ block: 'center', inline: 'nearest' })
+      return true
+    })()`)
+
+  /**
+   * 平台分区**没有**一个叫「平台」的标题。
+   *
+   * 它的结构是：一段导语（`platformsIntro`）+ 每个平台各一块，块标题是
+   * **平台自己的名字**（`百度贴吧` / `微博`）。所以定位「微博」那一块才是
+   * 正确判据——按「平台」这个总标题去找，永远找不到，而这不是产品缺陷。
+   */
+  const platformSection = await scrollToSection('微博')
+  stage('滚到「微博」分区', platformSection ? 'passed' : 'failed', platformSection ? '已定位到该分区' : '页面上没有「微博」分区标题')
+  if (platformSection) {
+    const weiboListed = await waitFor(async () => (await bodyText()).includes('微博'), 20_000)
+    stage(
+      '平台列表里有微博',
+      weiboListed ? 'passed' : 'failed',
+      weiboListed ? '页面出现「微博」' : `20 秒内没出现微博：${(await bodyText()).slice(0, 160).replace(/\n/g, ' / ')}`,
+    )
+    await screenshot('04-platforms')
+  }
+
+  // ── 工作台：读一条微博 ────────────────────────────────────────────────────
+  const workbenchSection = await scrollToSection('发表工作台')
+  stage('滚到「发表工作台」分区', workbenchSection ? 'passed' : 'failed', workbenchSection ? '已定位到该分区' : '页面上没有「发表工作台」')
+  await sleep(1200)
+
+  const linkReady = await evaluate<boolean>(`(() => {
+    // 链接标签是一段 <p>，输入框紧跟其后；这是这段里唯一用来输入链接的文本框。
+    const label = [...document.querySelectorAll('p')].find(p => (p.textContent || '').startsWith('讨论链接'))
+    const scope = label ? label.parentElement : document
+    const inputs = [...scope.querySelectorAll('input[type=text]')]
+    const input = inputs.find(i => !i.disabled)
+    if (!input) return false
+    input.scrollIntoView({ block: 'center' })
+    input.focus()
+    return document.activeElement === input
+  })()`)
+  stage('链接输入框可用', linkReady ? 'passed' : 'failed', linkReady ? '已聚焦' : '找不到输入框')
+
+  if (linkReady) {
+    // 先清空：续跑的会话会预填这个框，直接输入会得到两条拼在一起的 URL。
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+    await typeText(`https://m.weibo.cn/detail/${STATUS_ID}`)
+    await sleep(400)
+    const typed = await evaluate<string>(`(() => {
+      const label = [...document.querySelectorAll('p')].find(p => (p.textContent || '').startsWith('讨论链接'))
+      const scope = label ? label.parentElement : document
+      const input = [...scope.querySelectorAll('input[type=text]')].find(i => !i.disabled)
+      return input ? input.value : ''
+    })()`)
+    stage('输入框里是这条微博的链接', typed.includes(STATUS_ID) ? 'passed' : 'failed', typed === '' ? '输入框是空的' : typed.slice(0, 70))
+  }
+
+  const readClicked = await clickByLabelSafe('读取讨论')
+  stage('点击「读取讨论」', readClicked ? 'passed' : 'failed', readClicked ? '已点击真实按钮' : '按钮不可点')
+  await sleep(7000)
+  await screenshot('05-after-read')
+
+  const afterRead = await bodyText()
+  stage('评论列表渲染', afterRead.includes('评论列表') ? 'passed' : 'failed', afterRead.includes('评论列表') ? '页面出现评论列表' : '页面没有评论列表')
+  stage(
+    '读到正文与评论作者',
+    afterRead.includes('被围观的博主') && afterRead.includes(OPPONENT_NAME) ? 'passed' : 'failed',
+    afterRead.includes('被围观的博主') ? `看到博主与「${OPPONENT_NAME}」` : '没有看到假 CLI 里的作者',
+  )
+  // 这一条是「不能编造」的核心：微博评论没有楼层，页面不该出现第 0 楼。
+  stage(
+    '没有编造的楼层号',
+    afterRead.includes('第 0 楼') ? 'failed' : 'passed',
+    afterRead.includes('第 0 楼') ? '页面出现了「第 0 楼」' : '没有出现编造的楼层号',
+  )
+  stage(
+    '评论行显示真实 post id',
+    afterRead.includes(OPPONENT_COMMENT_ID) ? 'passed' : 'failed',
+    afterRead.includes(OPPONENT_COMMENT_ID) ? `显示 ${OPPONENT_COMMENT_ID}` : '评论行没有显示可操作的 id',
+  )
+
+  // ── 选目标 ───────────────────────────────────────────────────────────────
+  const picked = await evaluate<boolean>(`(() => {
+    const buttons = [...document.querySelectorAll('button')].filter(b => (b.textContent||'').trim() === '用这条')
+    const button = buttons.find((b) => {
+      const row = b.closest('li')
+      return row !== null && (row.textContent || '').includes(${JSON.stringify(OPPONENT_COMMENT_ID)})
+    })
+    if (!button) return false
+    const r = button.getBoundingClientRect()
+    if (r.width < 2 || r.height < 2) return false
+    // 列表在长页面的下方：先滚进视野，再量一次坐标。
+    button.scrollIntoView({ block: 'center' })
+    window.__dsdPickTarget = null
+    return true
+  })()`)
+  if (picked) {
+    // `getBoundingClientRect()` 是相对视口的；滚动之后必须重新量，不能复用滚动前的读数。
+    await sleep(600)
+    const point = await evaluate<{ x: number; y: number } | null>(`(() => {
+      const buttons = [...document.querySelectorAll('button')].filter(b => (b.textContent||'').trim() === '用这条')
+      const button = buttons.find((b) => {
+        const row = b.closest('li')
+        return row !== null && (row.textContent || '').includes(${JSON.stringify(OPPONENT_COMMENT_ID)})
+      })
+      if (!button) return null
+      const r = button.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) return null
+      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+    })()`)
+    if (point !== null) await clickAt(point.x, point.y)
+  }
+  stage('点击「用这条」', picked ? 'passed' : 'failed', picked ? `已选定 ${OPPONENT_COMMENT_ID}` : '找不到对应按钮')
+
+  if (picked) {
+    const hasTarget = await waitFor(async () => {
+      const text = await bodyText()
+      return text.split('\n').some((line) => line.trim().startsWith('目标：'))
+    }, 40_000)
+    const targetLine =
+      (await bodyText()).split('\n').find((line) => line.trim().startsWith('目标：')) ?? ''
+    stage(
+      '目标固定在被选中的那条评论上',
+      hasTarget && targetLine.includes(OPPONENT_COMMENT_ID) ? 'passed' : 'failed',
+      targetLine === '' ? '页面没有目标行' : targetLine.slice(0, 90),
+    )
+    await screenshot('06-picked')
+  }
+
+  // ── 生成候选 ─────────────────────────────────────────────────────────────
+  const candidateCount = async (): Promise<number> => {
+    const match = (await bodyText()).match(/候选\s*(\d+)\s*条/)
+    return match === null ? -1 : Number(match[1])
+  }
+  const before = await candidateCount()
+  const generated = await clickScrolled('生成候选')
+  stage('点击「生成候选」', generated ? 'passed' : 'failed', generated ? '已点击真实按钮' : '按钮不存在或不可点')
+
+  if (generated) {
+    const appeared = await waitFor(async () => {
+      const now = await candidateCount()
+      return now > Math.max(before, 0) || (before === -1 && now >= 1)
+    }, 45_000)
+    const after = await candidateCount()
+    stage(
+      '候选出现在页面上',
+      appeared ? 'passed' : 'failed',
+      appeared ? `候选从 ${before < 0 ? '未显示' : before} 条增加到 ${after} 条` : `45 秒内候选数没有增加（${before} → ${after}）`,
+    )
+    await screenshot('07-generated')
+  }
+
+  // ── 编辑正文 → 旧确认必须失效 ───────────────────────────────────────────
+  //
+  // 这一条不是「编辑功能好不好用」，而是「改过的正文还能不能带着旧批准被复制」。
+  // 允许的话，主人批准的是 A，复制走的是 B。
+  const edited = await evaluate<boolean>(`(() => {
+    const areas = [...document.querySelectorAll('textarea')]
+    const area = areas.find(a => !a.disabled && (a.value || '').trim() !== '')
+    if (!area) return false
+    area.focus()
+    return document.activeElement === area
+  })()`)
+  if (edited) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End', windowsVirtualKeyCode: 35 })
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End', windowsVirtualKeyCode: 35 })
+    await typeText('（这句是编辑加的）')
+    await sleep(1500)
+  }
+  const afterEdit = await bodyText()
+  stage(
+    '编辑正文后重新评估',
+    edited ? 'passed' : 'skipped',
+    edited
+      ? /待批准|需要重新|未批准|重新确认/.test(afterEdit)
+        ? '页面回到待批准状态'
+        : '编辑过，但页面仍显示已批准'
+      : '页面上没有可编辑的正文框',
+  )
+  await screenshot('08-edited')
+
+  // 保存修改：不保存的话复制按钮**本就该**是灰的（屏幕上的不是存下来的那一版）。
+  const saved = edited ? await clickScrolled('保存修改') : false
+  stage('点击「保存修改」', saved ? 'passed' : 'skipped', saved ? '已点击真实按钮' : '页面上没有保存按钮或未进入编辑')
+  if (saved) {
+    // 页面上的原文是「已保存。批准与安全评估已作废，需要重新批准才能发表。」
+    const saveOk = await waitFor(async () => /已保存/.test(await bodyText()), 20_000)
+    stage('修改被保存', saveOk ? 'passed' : 'failed', saveOk ? '页面显示已保存' : '20 秒内没有出现保存成功')
+  }
+
+  // ── 人工确认（批准）────────────────────────────────────────────────────────
+  //
+  // 微博是只读的，所以这条链的终点是「批准 + 复制」，不是发表。批准这一步必须先有，
+  // 否则复制按钮按设计就是灰的——那说明的是「还没确认」，不是「产品坏了」。
+  const approved = await clickScrolled('批准这一条')
+  stage('点击「批准这一条」', approved ? 'passed' : 'failed', approved ? '已点击真实按钮' : '找不到批准按钮（可能仍然缺少 AI 账号绑定）')
+  if (approved) {
+    const becameApproved = await waitFor(async () => {
+      const text = await bodyText()
+      return /内容已批准|已批准/.test(text)
+    }, 30_000)
+    stage('候选被标记为已批准', becameApproved ? 'passed' : 'failed', becameApproved ? '页面显示已批准' : '30 秒内没有出现已批准')
+    await screenshot('08b-approved')
+  }
+
+  // ── 复制：必须真读回系统剪贴板 ───────────────────────────────────────────
+  //
+  // 点之前先记下「按钮上写的是什么」：`复制回复` 说明已就绪，`还不能复制` 说明
+  // 还有前置条件没满足。两者的点击结果完全不同，混在一起判会把失败读成成功。
+  const copyLabel = await evaluate<string>(`(() => {
+    const b = [...document.querySelectorAll('button')].find(n => ['复制回复','还不能复制'].includes((n.innerText || '').trim()))
+    return b ? (b.innerText || '').trim() : 'missing'
+  })()`)
+  const copyClicked = await clickScrolled('复制回复')
+  stage(
+    '点击「复制回复」',
+    copyClicked ? 'passed' : 'failed',
+    copyClicked ? '按钮就绪，已点击' : `按钮当时写的是「${copyLabel}」：${copyLabel === '还不能复制' ? '前置条件没满足' : '找不到按钮'}`,
+  )
+  await sleep(1500)
+
+  const clipboard = await evaluate<string>(`(async () => {
+    try {
+      if (!navigator.clipboard || typeof navigator.clipboard.readText !== 'function') return 'unavailable'
+      const text = await navigator.clipboard.readText()
+      return text
+    } catch (error) {
+      return 'error:' + String(error && error.message ? error.message : error).slice(0, 80)
+    }
+  })()`)
+  const clipboardOk = clipboard !== 'unavailable' && !clipboard.startsWith('error:') && clipboard.trim() !== ''
+  stage(
+    '系统剪贴板里读回了正文',
+    clipboardOk ? 'passed' : 'failed',
+    clipboardOk
+      ? `读回 ${clipboard.length} 字符：${clipboard.slice(0, 40)}…`
+      : clipboard === 'unavailable'
+        ? '这个环境没有 navigator.clipboard.readText'
+        : clipboard.slice(0, 100),
+  )
+  await screenshot('09-copied')
+
+  // ── 刷新与重启后的恢复 ──────────────────────────────────────────────────
+  await send('Page.reload', { ignoreCache: false })
+  await sleep(4000)
+  await dismissOnboarding(shellCtx())
+  await openSettings(shellCtx())
+  const afterReload = await openPluginPage(shellCtx(), {
+    markers: /离线讨论导入|主人贴吧数字 ID|当前步骤|平台|工作台/,
+  })
+  // 刷新后同样要滚到工作台那一段（桌面端没有页签，见前面那段说明）。
+  const workbenchAgain = await scrollToSection('发表工作台')
+  // 进入分区本身也是一条证据：分区没挂上时，下面那句「会话丢了」会是假结论。
+  stage(
+    '刷新后重新进入插件分区',
+    afterReload.mounted && workbenchAgain ? 'passed' : 'failed',
+    afterReload.mounted ? (workbenchAgain ? '分区与工作台都在' : '分区在，但找不到工作台') : afterReload.detail,
+  )
+  await sleep(2500)
+  /**
+   * ## 判定与措辞必须来自同一个条件
+   *
+   * 第一版写成「pass 的条件」是一套，「detail 的措辞」是另一套，于是出现过
+   * 一次「✔ 刷新后仍读得到这条会话 — 刷新之后工作台说是空的」这种自相矛盾的行。
+   * 报告里一行自相矛盾，就足以让人不再相信另外那二十几行。
+   */
+  /**
+   * ## 判据必须只看工作台那一段
+   *
+   * 第一版在全页文字里找「还没有导入任何内容」——而那是**离线导入**分区的空状态
+   * 文案，会话在不在它都会出现。这个入口把 11 个区块堆在一页，全页搜索等于
+   * 把别的分区的空状态当成这个分区的结论，于是「刷新后会话丢了」这条一直是假红，
+   * 而实际上刷新之后页面明明显示着「当前步骤：人工批准」和两条候选。
+   *
+   * 正确的做法是先把工作台那一段的正文取出来，再在**它里面**判断。
+   */
+  const workbenchText = await evaluate<string>(`(() => {
+    const title = [...document.querySelectorAll('.dsd-sect-title,span')]
+      .find(n => (n.textContent || '').trim() === '发表工作台')
+    if (!title) return ''
+    let scope = title
+    for (let i = 0; i < 6 && scope.parentElement; i += 1) {
+      scope = scope.parentElement
+      if ((scope.textContent || '').includes('当前步骤')) break
+    }
+    return scope.textContent || ''
+  })()`)
+  const sessionBack = /当前步骤/.test(workbenchText) && /候选\s*\d+\s*条/.test(workbenchText)
+  stage(
+    '刷新后仍读得到这条会话',
+    sessionBack ? 'passed' : 'failed',
+    sessionBack
+      ? (workbenchText.split('\n').find((line) => /当前步骤|已读取/.test(line)) ?? workbenchText.slice(0, 80)).trim().slice(0, 100)
+      : `工作台里没有会话痕迹：${workbenchText.slice(0, 120).replace(/\s+/g, ' ')}`,
+  )
+  await screenshot('10-after-reload')
+
+  // ── 负向：未登录时必须说明原因 ───────────────────────────────────────────
+  setWeiboScenario({ doctor: 'not_authenticated' })
+  await scrollToSection('平台')
+  await sleep(1200)
+  const refreshed = await clickByText('重新检查') || (await clickByText('刷新'))
+  stage('触发一次重新诊断', refreshed ? 'passed' : 'skipped', refreshed ? '已点击刷新' : '页面上没有刷新按钮')
+  await sleep(2500)
+  const afterLogout = await bodyText()
+  stage(
+    '未登录时说明真实原因',
+    /登录|认证|开通|未就绪|令牌/.test(afterLogout) ? 'passed' : 'failed',
+    /登录|认证|开通|未就绪|令牌/.test(afterLogout) ? '页面提示登录/认证/开通' : `页面没有说明原因：${afterLogout.slice(0, 160).replace(/\n/g, ' / ')}`,
+  )
+  await screenshot('11-not-logged-in')
+
+  // ── 写请求：必须为 0 ────────────────────────────────────────────────────
+  const writeCalls = weiboCalls().filter((argv) =>
+    /(create|update|destroy|repost|remove|delete|publish|send)\b/i.test(argv.join(' ')),
+  )
+  stage(
+    '全程没有任何写请求到达 CLI',
+    writeCalls.length === 0 ? 'passed' : 'failed',
+    writeCalls.length === 0 ? '调用日志里 0 条写请求' : `出现了写请求：${writeCalls.map((a) => a.join(' ')).join('；')}`,
+  )
+
+  const readCalls = weiboCalls().filter((argv) => argv[0] === 'statuses' || argv[0] === 'comments')
+  stage(
+    '读取确实走了 CLI（不是页面自己造的）',
+    readCalls.length > 0 ? 'passed' : 'failed',
+    readCalls.length > 0 ? `${readCalls.length} 次真实 CLI 读取` : '调用日志里没有读取记录',
+  )
+}
+
+/** `clickByText` 在按钮被禁用时返回 false；这里不区分，交给调用方描述。 */
+function clickByLabelSafe(label: string): Promise<boolean> {
+  return clickByText(label)
+}
+
+// ── 收尾 ───────────────────────────────────────────────────────────────────
+
+try {
+  await main()
+} catch (error) {
+  stage('执行中断', 'failed', error instanceof Error ? error.message : String(error))
+  try {
+    await screenshot('99-crash')
+  } catch {
+    stage('失败截图', 'failed', '截图也失败了')
+  }
+}
+
+stage(
+  '控制台没有未捕获异常',
+  exceptions.length === 0 ? 'passed' : 'failed',
+  exceptions.length === 0 ? '0 条' : exceptions.slice(0, 3).join(' | '),
+)
+stage(
+  '控制台没有 error 级日志',
+  consoleErrors.length === 0 ? 'passed' : 'failed',
+  consoleErrors.length === 0 ? '0 条' : consoleErrors.slice(0, 3).join(' | '),
+)
+
+// 恢复健康场景，避免下一次运行从「未登录」开始。
+setWeiboScenario({ doctor: 'ok' })
+
+const bundle = evidence.finish({ outDir, stages, cwd: worktree })
+const passed = stages.filter((s) => s.status === 'passed').length
+const failed = stages.filter((s) => s.status === 'failed').length
+const skipped = stages.filter((s) => s.status === 'skipped').length
+writeFileSync(join(outDir, 'result.json'), JSON.stringify({ stages, passed, failed, skipped }, null, 2), 'utf8')
+
+process.stdout.write(
+  `\n结论：${failed === 0 ? 'passed' : 'failed'} —— ${stages.length} 阶段，` +
+    `${passed} 通过，${failed} 失败，${skipped} 跳过\n` +
+    `证据：${join(outDir, 'evidence.json')}\n` +
+    `被测代码指纹：${bundle.testedCodeSha.slice(0, 12)} · 测试指纹：${bundle.testedTestSha.slice(0, 12)} · 构建指纹：${bundle.testedBuildSha.slice(0, 12)}\n`,
+)
+process.exit(failed === 0 ? 0 : 1)

@@ -32,6 +32,45 @@ const text = async (ctx: ShellCtx): Promise<string> =>
   ctx.evaluate<string>('document.body ? document.body.innerText : ""')
 
 /**
+ * 点一个**真的能被点到**的按钮。
+ *
+ * ## 为什么不能只看「按钮存在」
+ *
+ * 桌面端的向导是分层的：`跳过` 之后弹一个确认框（`暂时跳过充值？` / `我知道了`），
+ * 而**下面那层的「跳过」按钮还在 DOM 里**。按文字找按钮、量坐标、派发鼠标事件，
+ * 事件落在确认框的遮罩上 —— 按钮自己是「找到了也点了」，但什么也没发生。
+ *
+ * 实测就停在这里：`e2e` 的日志是「跳过→跳过→…（12 次）」，向导一动不动。
+ * 报告读起来像「跳过按钮没实现」，实际是**点在了遮罩上**。
+ *
+ * 所以判据必须是 `elementFromPoint(中心)` 命中这个按钮（或它的子元素）。
+ * 被遮住就换下一个候选标签，而不是反复点同一个位置。
+ */
+export async function clickVisible(ctx: ShellCtx, label: string): Promise<boolean> {
+  const raw = await ctx.evaluate<string>(`(() => {
+    const wanted = ${JSON.stringify(label)}
+    const nodes = [...document.querySelectorAll('button,[role=button],[role=tab],a,[tabindex]')]
+    for (const n of nodes) {
+      const t = (n.innerText || n.textContent || '').trim()
+      if (t !== wanted) continue
+      const r = n.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) continue
+      const x = Math.round(r.x + r.width / 2)
+      const y = Math.round(r.y + r.height / 2)
+      const hit = document.elementFromPoint(x, y)
+      if (hit === null) continue
+      if (!(n === hit || n.contains(hit) || hit.contains(n))) continue
+      return JSON.stringify({ x, y })
+    }
+    return 'not-clickable'
+  })()`)
+  if (raw === 'not-clickable') return false
+  const point = JSON.parse(raw) as { x: number; y: number }
+  await ctx.clickAt(point.x, point.y)
+  return true
+}
+
+/**
  * 关掉启动引导，把界面带到可用状态。
  *
  * ## 桌面端和 Web 版的引导**不是同一个东西**
@@ -39,17 +78,24 @@ const text = async (ctx: ShellCtx): Promise<string> =>
  * Web 版：一个模态层（「开始使用」/「预览版说明」），按坐标点叉即可。
  *
  * 桌面端：一个**多步向导**——`开始设置` → 「准备可用额度」→ `跳过` →
- * 「我知道了」（二次确认）→ …。它是全屏的，会盖住整个工作区。不跳过它，
- * 后面所有查询都只能看到向导文字，于是「设置打不开」「插件没那项」全都会红
- * ——而产品其实好好的。
+ * 「暂时跳过充值？」→ `我知道了` → 完成。它是全屏的，会盖住整个工作区。
+ * 不跳过它，后面所有查询都只能看到向导文字，于是「设置打不开」「插件没那项」
+ * 全都会红——而产品其实好好的。
  *
- * 只点「跳过」会陷入死循环：跳过 → 弹确认框 → 确认框里没有跳过 → 退出循环 →
- * 向导还在。所以每一步都按 `开始设置 / 跳过 / 我知道了` 的顺序试一遍。
+ * ## v0.2.33 修掉的那一步
+ *
+ * v0.2.32 的写法是「按固定顺序试 `跳过` / `我知道了`」，只要 `跳过` 还在 DOM 里
+ * 就一直点它。而确认框弹出时，`跳过` 被遮住了：点击落在遮罩上，什么也没发生，
+ * 于是循环 12 次、向导原地不动，报告写「关不掉」。
+ *
+ * 现在每一步都先看**当前屏幕上的文字**决定该点哪个，并且只点 `elementFromPoint`
+ * 真的命中的那个按钮（见 {@link clickVisible}）。这两个改动一起，才让「点到的
+ * 就是看到的」成立。
  */
 export async function dismissOnboarding(ctx: ShellCtx): Promise<string> {
   const seen: string[] = []
 
-  // 第一段：模态层
+  // 第一段：模态层（Web 版形态，桌面端也可能先来一个）
   for (let round = 0; round < 3; round += 1) {
     const current = await text(ctx)
     if (!/开始使用|预览版说明/.test(current)) break
@@ -59,16 +105,26 @@ export async function dismissOnboarding(ctx: ShellCtx): Promise<string> {
     await ctx.sleep(600)
   }
 
-  // 第二段：多步向导（含二次确认框）
+  // 第二段：多步向导。每一步按「当前文字」选标签，而不是按固定顺序盲试。
   for (let round = 0; round < 12; round += 1) {
     const current = await text(ctx)
-    const order = /开始设置/.test(current)
-      ? (['开始设置', '跳过', '我知道了'] as const)
-      : (['跳过', '我知道了'] as const)
+    /**
+     * 顺序即优先级，且**从上层的对话框开始**：
+     *
+     * - 「暂时跳过充值？」确认框在向导之上，它的按钮必须先点；
+     * - 然后是「准备可用额度」这一步的「跳过」；
+     * - 最后是首屏的「开始设置」。
+     */
+    const candidates: string[] = []
+    if (/暂时跳过充值|稍后前往|无法开始新的任务/.test(current)) candidates.push('我知道了', '前往')
+    if (/准备可用额度/.test(current)) candidates.push('跳过')
+    if (/开始设置/.test(current)) candidates.push('开始设置')
+    // 兜底：文字判不出来时，按已知的三个标签依次试。仍然只点真的能点到的那个。
+    candidates.push('跳过', '我知道了')
 
     let clicked = ''
-    for (const label of order) {
-      if (await ctx.clickByText(label)) {
+    for (const label of candidates) {
+      if (await clickVisible(ctx, label)) {
         clicked = label
         break
       }
@@ -79,7 +135,7 @@ export async function dismissOnboarding(ctx: ShellCtx): Promise<string> {
   }
 
   const left = await text(ctx)
-  const blocked = /开始设置|准备可用额度|开始使用|预览版说明/.test(left)
+  const blocked = /开始设置|准备可用额度|开始使用|预览版说明|暂时跳过充值/.test(left)
   return blocked ? `关不掉（走过：${seen.join('→') || '无'}）` : `clean（${seen.join('→') || '无需处理'}）`
 }
 
