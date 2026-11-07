@@ -4134,6 +4134,35 @@ window.__ModuleLoader__.load({
       const flow = view && view.manualFlow
       const source = view && view.source
       const sessionId = view && view.sessionId
+
+      /**
+       * 进这个分区时补一次工作台读取（v0.2.32）。
+       *
+       * ## 为什么原来没有，现在必须有
+       *
+       * v0.2.30 把「读工作台」挂在 `setTab('manual')` 上——只有**点页签**才读。
+       * 那时这没问题，因为离线导入只存在于插件卡片的页签里。
+       *
+       * 0.2.2-rc.1 起，插件页不再渲染 `plugins.row.config`，配置只能从
+       * **设置侧栏**进（`settings.section`）。侧栏那扇门是「全部区块堆叠」，
+       * 没有页签，`setTab` 永远不会被调用——于是 `workbench` 一直是 `undefined`，
+       * 页面显示「还没有导入任何内容」。
+       *
+       * 而 store 里明明躺着刚导入、刚批准过的会话：刷新页面后用户看到的是
+       * 「我的内容没了」。**不是数据丢了，是那扇门后面没人去取。**
+       *
+       * ## 为什么依赖数组是空的
+       *
+       * 只在挂载时补一次。如果依赖 `state.workbench`，每次 `publish()` 都会重跑，
+       * 而 `loadWorkbench` 自己又会 `publish()`——一个自激循环，页面上表现为
+       * 无限闪烁。`workbenchState` 已经记着「读没读过」，用它判重。
+       */
+      useEffect(() => {
+        const read = state.workbenchState || { state: 'idle' }
+        if (read.state !== 'idle') return
+        store.loadWorkbench(store.workbenchSessionId())
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在挂载时补一次，理由见上
+      }, [])
       /** 预览阶段的修正清单要回传给服务端；工作台阶段用服务端的 `manual-revise`。 */
       const correctionsPayload = { version: 1, revisedAt: new Date().toISOString(), entries: corrections }
 
