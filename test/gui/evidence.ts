@@ -75,6 +75,47 @@ export interface EvidenceBundle {
    * **判定用这个**：文档改动不会让它变，代码改动一定会。
    */
   readonly testedCodeSha: string
+  /**
+   * 测试与测试工具代码的指纹（`test/`、`tsconfig.test.json`）。
+   *
+   * ## 为什么测试代码要单独一个指纹（v0.2.33 §十）
+   *
+   * v0.2.32 只有 `testedCodeSha`。它覆盖 `src`/`client`/`lib`/`package.json`——
+   * 也就是**产品代码**，完全不含 `test/`。
+   *
+   * 于是一条假命题成立了：
+   *
+   *     产品代码没变 → testedCodeSha 不变 → 「这份验收仍然有效」
+   *
+   * 而问的问题其实是「**这次验收**还是不是同一件事」。把断言改松、把某个阶段
+   * 直接 `return 'passed'`、把失败用例删掉，产品代码一个字符都没动，
+   * `testedCodeSha` 也不变——上一轮的报告看起来依然成立，但它描述的是另一套测试。
+   *
+   * 所以测试代码必须自己有一个指纹。它不用于「要不要重跑产品」，而用于
+   * 「这份报告能不能被引用」：指纹对不上，报告就只是历史记录。
+   */
+  readonly testedTestSha: string
+  /**
+   * 构建与发布脚本的指纹（`scripts/`、`package.json`、`pnpm-lock.yaml`、`tsconfig.json`）。
+   *
+   * ## 为什么构建规则也要单独一个（v0.2.33 §十）
+   *
+   * 同一条理由的另一半：`scripts/pack.mjs` 决定**包里装哪些文件**，
+   * `scripts/source-zip.mjs` 决定源码包里装哪些，`scripts/ship.mjs` 决定
+   * 什么算通过。改掉其中任何一个，产品代码和测试代码都可以完全不动，
+   * 而最终发出去的东西变了。
+   *
+   * 单独一个指纹让这句话可查：「测试跑在这份代码上，用的是**这一套**打包规则」。
+   */
+  readonly testedBuildSha: string
+  /**
+   * 当次运行引用的提交号（v0.2.33 §十）。
+   *
+   * 与 `headSha` 是两个字段而不是一个：`headSha` 是**取指纹那一刻**的 HEAD，
+   * 而这个字段是**脚本启动时**记下的提交引用。两者在正常情况下相同；
+   * 如果不同，说明验收期间仓库被切换过，那份报告自相矛盾，需要重跑。
+   */
+  readonly testedCommitSha: string
   readonly headDirty: boolean
   readonly startedAt: string
   readonly endedAt: string
@@ -98,6 +139,23 @@ export interface EvidenceBundle {
   readonly artifacts: readonly string[]
   /** 有任何 skipped 时说明为什么——「跳过」不能算通过。 */
   readonly skippedReasons: readonly string[]
+  /**
+   * 发布制品的 SHA-256（v0.2.33 §十）。
+   *
+   * ## 为什么它必须由**下载回来的文件**算出来
+   *
+   * 「发布的是哪个制品」这个问题，用本地打包时的哈希回答不了——那个文件没有
+   * 上传过，也没有被重新下载过。所以这个字段只由 `verify-release.mjs` 在
+   * **实际下载附件之后**填写；桌面验收这类不涉及发布的运行里它缺席。
+   *
+   * 缺席与「哈希为空」是两件事：前者表示这次运行不发布，后者表示发布了但
+   * 拿不到哈希——后者必须让报告变红。
+   */
+  readonly releaseArtifactSha256?: readonly {
+    readonly name: string
+    readonly sha256: string
+    readonly bytes: number
+  }[]
 }
 
 /** 本次运行的开始时间由调用方给，避免模块自己偷偷记时间。 */
@@ -221,18 +279,43 @@ export class EvidenceCollector {
     readonly sha: string
     readonly tree: string
     readonly code: string
+    readonly tests: string
+    readonly build: string
     readonly dirty: boolean
   } {
     try {
       const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8', shell: false }).trim()
       const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd, encoding: 'utf8', shell: false }).trim()
       const code = EvidenceCollector.codeShaOf(cwd, 'HEAD')
+      // 三类文件各算各的：产品、测试、构建规则。它们的「该不该重跑」不是一回事。
+      const tests = EvidenceCollector.shaOfPaths(cwd, 'HEAD', ['test', 'tsconfig.test.json'])
+      const build = EvidenceCollector.shaOfPaths(cwd, 'HEAD', [
+        'scripts',
+        'package.json',
+        'pnpm-lock.yaml',
+        'tsconfig.json',
+      ])
       const status = execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', shell: false }).trim()
-      return { sha, tree, code, dirty: status !== '' }
+      return { sha, tree, code, tests, build, dirty: status !== '' }
     } catch (error) {
       const why = `（取不到 HEAD：${(error as Error).message.split('\n')[0] ?? '未知'}）`
-      return { sha: why, tree: why, code: why, dirty: true }
+      return { sha: why, tree: why, code: why, tests: why, build: why, dirty: true }
     }
+  }
+
+  /** 任意路径集合的指纹。与 {@link codeShaOf} 同一算法，只是路径不同。 */
+  static shaOfPaths(cwd: string, rev: string, paths: readonly string[]): string {
+    const listed = execFileSync('git', ['ls-tree', '-r', rev, '--', ...paths], {
+      cwd,
+      encoding: 'utf8',
+      shell: false,
+    })
+    return execFileSync('git', ['hash-object', '--stdin'], {
+      cwd,
+      encoding: 'utf8',
+      shell: false,
+      input: listed,
+    }).trim()
   }
 
   /**
@@ -285,6 +368,16 @@ export class EvidenceCollector {
       headSha: head.sha,
       testedTreeSha: head.tree,
       testedCodeSha: head.code,
+      testedTestSha: head.tests,
+      testedBuildSha: head.build,
+      /**
+       * 「当次运行引用的提交」取脚本结束时读到的 HEAD。
+       *
+       * 正常情况下它与 `headSha` 相同（同一行代码读两次）。分开存在的意义是：
+       * 如果将来有人在运行中途切换了提交，这两个字段会分叉，报告自己就会说出
+       * 「这次验收跨了两个提交」——而不是安静地用最后一个覆盖前一个。
+       */
+      testedCommitSha: head.sha,
       headDirty: head.dirty,
       startedAt: this.init.startedAt,
       endedAt: new Date().toISOString(),

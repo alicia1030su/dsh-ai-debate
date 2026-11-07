@@ -233,6 +233,17 @@ export interface ReadinessProbe {
     readonly reason?: string
   }
   /**
+   * 授权主机的可达性（v0.2.33 §六）。
+   *
+   * 只在「有登录记录但拿不到令牌」时才有意义：它把「要么网络、要么令牌」这句
+   * 两难的话收敛成一条确定的结论。`undefined` 表示本次没有探测——措辞必须
+   * 退回两种可能，不能假装知道。
+   */
+  readonly network?:
+    | { readonly state: 'reachable'; readonly status: number }
+    | { readonly state: 'unreachable'; readonly reason: string }
+    | { readonly state: 'unknown'; readonly reason: string }
+  /**
    * 现在的时间（ISO），用于给快照打时间戳。
    *
    * 从外面传进来而不是在这里 `new Date()`：这个函数必须是纯的，否则同一份
@@ -331,6 +342,55 @@ function loginCheck(
     const who = credential.username === undefined ? '' : `（账号 ${credential.username}）`
     const when =
       credential.recordedAt === undefined ? '' : `，记录于 ${credential.recordedAt.slice(0, 16).replace('T', ' ')}`
+    /**
+     * ## 有探测结果时，把「两种可能」收敛成一条结论（v0.2.33 §六）
+     *
+     * v0.2.31 只能说「要么令牌失效、要么网络不通」——因为当时没有任何办法区分。
+     * 现在有一个**不带凭据**的 HTTPS 探测（见 `network-state.ts`），它问的只是
+     * 「这个域名在这台机器上答不答话」。
+     *
+     * 答话 + CLI 拿不到令牌 → 网络不是原因，那就是令牌被平台拒了。下一步很确定：
+     * 重新授权。反过来，不答话 → 先去修网络，此时重新登录只会再失败一次。
+     *
+     * 没有探测结果（`unknown`）时，措辞退回 v0.2.31 的两种可能——不知道就说不知道，
+     * 不拿一个猜出来的结论替用户做决定。
+     */
+    const network = probe.network
+    const reachable = network?.state === 'reachable'
+    const unreachable = network?.state === 'unreachable'
+
+    if (reachable) {
+      return {
+        id: 'login',
+        title: 'OAuth 登录',
+        state: 'blocked',
+        detail:
+          `本机有登录记录${who}${when}，但 CLI 拿不到可用令牌，而授权主机**刚才答话了**` +
+          `（HTTP ${network.status}）。所以这不是网络问题：平台拒绝了手上的令牌——` +
+          '它可能已被撤销、已过期，或这个账号在别处重新登录过。',
+        next: [
+          '运行 weibo-cli auth login 重新授权；没有图形界面时用 weibo-cli auth login --device',
+          '完成后重新运行 doctor 确认这一行为 ✓',
+        ],
+      }
+    }
+
+    if (unreachable) {
+      return {
+        id: 'login',
+        title: 'OAuth 登录',
+        state: 'blocked',
+        detail:
+          `本机有登录记录${who}${when}，但 CLI 拿不到可用令牌，且授权主机**连不上**：${network.reason}` +
+          '。这时重新登录同样会失败——先修网络。',
+        next: [
+          '确认这台机器能访问 open.weibo.com（浏览器打开一次即可）',
+          '如果走了代理，临时关掉再试：微博会拒绝来自代理出口的请求',
+          '网络恢复后运行 weibo-cli auth login 重新授权',
+        ],
+      }
+    }
+
     return {
       id: 'login',
       title: 'OAuth 登录',
@@ -341,7 +401,7 @@ function loginCheck(
         'CLI 对这两种情况给出的是同一个回答。',
       next: [
         '先确认网络能访问 open.weibo.com（断网时重新登录也会失败）',
-        '再运行 weibo-cli auth login 重新授权',
+        '再运行 weibo-cli auth login 重新授权；没有图形界面时用 weibo-cli auth login --device',
         '完成后重新运行 doctor 确认这一行为 ✓',
       ],
     }

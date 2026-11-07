@@ -189,6 +189,23 @@ window.__ModuleLoader__.load({
       aiAccountNameHint: '只用于召唤提示与对照显示。',
       allowedOwnerIds: '额外可召唤的主人 ID',
       allowedOwnerIdsHint: '逗号分隔。默认只认上面那一个主人。',
+      /**
+       * 微博主人绑定（v0.2.33）。
+       *
+       * ## 为什么它必须是一栏，而不是「去改配置文件」
+       *
+       * 上面那几个字段**只对贴吧生效**：`ownerUserId` 这类旧全局字段从 v0.2.2
+       * 起就被解释成贴吧的，因为 uid 只在所属平台内有意义（贴吧 user_id 与微博
+       * uid 都是 9–10 位十进制数，撞上了插件就会替陌生人吵架）。
+       *
+       * 于是微博必须显式绑定。而设置页此前**没有任何入口**做这件事——一个普通
+       * 用户在桌面端填好「主人账号名称」之后去读微博，得到的是「还没有绑定主人」，
+       * 而他刚刚明明填了。
+       */
+      platformAccounts: '微博主人账号',
+      platformAccountsHint:
+        '填微博主人的数字 UID（例如 1911858642）。这一栏只影响微博：上面的贴吧数字 ID 不会跨平台使用。' +
+        '留空表示微博暂不绑定，此时微博只能查看能力状态，不能读取讨论。',
 
       cookieTitle: '登录凭据（Cookie）',
       cookieHint: '只存在本机凭据库，不进配置、不进日志、不进模型上下文。页面永远不回显已保存的值。',
@@ -467,6 +484,11 @@ window.__ModuleLoader__.load({
       workbenchIdentityNotRechecked: '未在页面核验——发表时会重新读取平台核对作者',
       workbenchIdentityUnverifiable: '无法核验',
       workbenchIdentityNoSnapshot: '没有目标快照',
+      workbenchCopy: '复制回复',
+      workbenchCopyTarget: '这段话是回给',
+      workbenchCopyNotReady: '还不能复制',
+      workbenchCopied: '已复制到剪贴板',
+      workbenchCopyManual: '这个环境不允许插件直接写剪贴板。以下是服务端给的那一段，请手动选中复制：',
       workbenchNoResend: '这里没有「重新发送」按钮：一次授权只发一次。要再发请新建一条候选并重新批准。',
       workbenchRefresh: '刷新状态',
       workbenchRefreshing: '正在读取…',
@@ -661,6 +683,9 @@ window.__ModuleLoader__.load({
       aiAccountNameHint: 'Used for the summon hint and side-by-side display.',
       allowedOwnerIds: 'Additional summoning owner ids',
       allowedOwnerIdsHint: 'Comma separated.',
+      platformAccounts: 'Weibo owner account',
+      platformAccountsHint:
+        "The owner's numeric Weibo uid (for example 1911858642). Affects Weibo only: the Tieba id above is never reused across platforms. Empty means Weibo stays unbound.", 
 
       cookieTitle: 'Login credential (Cookie)',
       cookieHint:
@@ -936,6 +961,11 @@ window.__ModuleLoader__.load({
       workbenchIdentityNotRechecked: 'Not checked on this page — the publish path re-reads the platform',
       workbenchIdentityUnverifiable: 'Cannot be verified',
       workbenchIdentityNoSnapshot: 'No target snapshot',
+      workbenchCopy: 'Copy reply',
+      workbenchCopyTarget: 'This answers',
+      workbenchCopyNotReady: 'Not ready to copy',
+      workbenchCopied: 'Copied to the clipboard',
+      workbenchCopyManual: 'This environment does not let the plugin write to the clipboard. Here is the exact text the server returned — select it and copy manually:',
       workbenchNoResend: 'There is no resend button here: one authorisation publishes once. To say it differently, create a new candidate and approve that.',
       workbenchRefresh: 'Refresh',
       workbenchRefreshing: 'Reading…',
@@ -2691,6 +2721,74 @@ window.__ModuleLoader__.load({
           onEdit: (value) => store.edit('allowedOwnerIds', value),
           onReset: () => store.resetField('allowedOwnerIds'),
         }),
+        /**
+         * 微博主人账号（v0.2.33）。
+         *
+         * ## 为什么它不能是「去改配置文件」
+         *
+         * 上面四栏是**贴吧专用**的：`ownerUserId` 这类旧字段从 v0.2.2 起就被
+         * 解释成贴吧的，因为数字 uid 只在所属平台内有意义。微博必须显式绑定，
+         * 而设置页此前没有任何入口——普通用户在桌面端填好「主人账号名称」
+         * 再去读微博，得到的是「还没有绑定主人」，而他刚刚明明填了。
+         *
+         * ## 为什么存的是 JSON 而不是一个裸数字
+         *
+         * `platformAccounts` 是 `{owners:[...], aiAccounts:[...]}` 的 JSON 字符串，
+         * 它能同时表达「微博主人」和「微博 AI 小号」，也能容纳第三个平台。
+         * 这一栏只负责把**主人**这一项写进去，读的时候把已有的其余平台原样保留：
+         * 否则保存一次微博绑定就会把知乎、小红书将来配好的项清空。
+         */
+        (() => {
+          const raw = store.field('platformAccounts')
+          const current = (() => {
+            try {
+              const parsed = JSON.parse(raw === undefined || raw === null || raw === '' ? '{}' : String(raw))
+              if (typeof parsed !== 'object' || parsed === null) return { owners: [], aiAccounts: [] }
+              return {
+                owners: Array.isArray(parsed.owners) ? parsed.owners : [],
+                aiAccounts: Array.isArray(parsed.aiAccounts) ? parsed.aiAccounts : [],
+              }
+            } catch {
+              return { owners: [], aiAccounts: [] }
+            }
+          })()
+          const weiboOwner = current.owners.find((owner) => owner && owner.platform === 'weibo')
+          const weiboId = weiboOwner && weiboOwner.primary && weiboOwner.primary.accountId
+            ? String(weiboOwner.primary.accountId)
+            : ''
+          return h(Field, {
+            id: 'dsd-weibo-owner',
+            t,
+            label: 'platformAccounts',
+            hint: 'platformAccountsHint',
+            numeric: true,
+            enabled,
+            state: { value: weiboId, dirty: store.dirty('platformAccounts') },
+            onEdit: (value) => {
+              const trimmed = String(value).trim()
+              // 保留其它平台的绑定：只替换/删除微博那一条。
+              const others = current.owners.filter((owner) => owner && owner.platform !== 'weibo')
+              const owners =
+                trimmed === ''
+                  ? others
+                  : [
+                      ...others,
+                      {
+                        platform: 'weibo',
+                        // `idStrength: 'stable'`：微博 uid 是平台分配的、不可改的。
+                        // 不写这个，身份比对会退化成「按昵称猜」，而重名会把别人的
+                        // 话当成主人的。
+                        primary: { platform: 'weibo', accountId: trimmed, idStrength: 'stable' },
+                      },
+                    ]
+              store.edit(
+                'platformAccounts',
+                owners.length === 0 ? '' : JSON.stringify({ owners, aiAccounts: current.aiAccounts }),
+              )
+            },
+            onReset: () => store.resetField('platformAccounts'),
+          })
+        })(),
         h(SecretField, {
           t,
           secretRef: REF_COOKIE,
@@ -3488,7 +3586,46 @@ window.__ModuleLoader__.load({
       // The link field starts empty and is never prefilled from the session: pasting a link is
       // the owner's step, and a remembered one would read as "this is the thread you meant".
       const [draftUrl, setDraftUrl] = useState('')
+      const [copied, setCopied] = useState('')
       const busy = edit && edit.state === 'running'
+
+      /**
+       * 工作台的「复制回复」（v0.2.33）。
+       *
+       * ## 为什么这一段必须存在
+       *
+       * 微博保持只读：没有发表路径。所以这条流程的**终点就是复制**——主人把正文
+       * 自己贴到微博上。而此前工作台走到「人工批准」之后就没有下文了：唯一的复制
+       * 按钮属于「离线讨论导入」分区，真实平台的会话在那儿没有入口。
+       *
+       * 结果是在真桌面上，31 个阶段里有 30 个能过，唯独「复制」这一步点不到按钮
+       * ——整条链断在最后一厘米。
+       *
+       * ## 三个前提，缺一不可
+       *
+       * 1. **已人工批准**（`approved === true`）：未批准的正文不该被复制走。
+       * 2. **屏幕上看到的就是要复制的**（`draft` 未改，或与保存值一致）：
+       *    否则复制出的是用户没看过的那一版——这正是离线流程用 `visibleText`
+       *    比对要防的事。
+       * 3. **剪贴板写不进去时把正文摆出来**：挂起不报错（只 resolve 不了），
+       *    所以要给写入一个 1.5 秒上限，超时按「写不进去」处理并显示正文。
+       *    这条兜底在桌面 webview 里是真会走到的。
+       */
+      const copyCandidate = async (text) => {
+        if (typeof text !== 'string' || text.trim() === '') return
+        const clipboard = navigator.clipboard
+        const written =
+          clipboard === undefined || typeof clipboard.writeText !== 'function'
+            ? false
+            : await Promise.race([
+                clipboard
+                  .writeText(text)
+                  .then(() => true)
+                  .catch(() => false),
+                new Promise((resolve) => setTimeout(() => resolve(false), 1500)),
+              ])
+        setCopied(written ? t('workbenchCopied') : `${t('workbenchCopyManual')}\n${text}`)
+      }
 
       const title = h(
         'div',
@@ -3987,6 +4124,55 @@ window.__ModuleLoader__.load({
           ? h('p', { className: 'dsd-hint dsd-hint-error' }, view.approveBlocked)
           : null
 
+      /**
+       * 复制块：微博这条流程的终点。
+       *
+       * 只在**已批准**且**屏幕内容与保存内容一致**时给出可点的按钮；否则给出
+       * 按钮但禁用，并说明为什么——「没有按钮」会被读成「这一步不存在」，
+       * 而「按钮灰着 + 一句原因」才是可行动的。
+       */
+      const copyText =
+        newestForAction === undefined
+          ? ''
+          : draft === null || draft === newestForAction.text
+            ? newestForAction.text
+            : ''
+      const copyReady = newestForAction !== undefined && newestForAction.approved === true && copyText !== ''
+      const copyBlock =
+        newestForAction === undefined
+          ? null
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h(
+                'p',
+                { className: 'dsd-hint' },
+                t('workbenchCopyTarget') + '：' +
+                  (wb.target && wb.target.postId ? wb.target.postId : '（还没有选目标）'),
+              ),
+              h(
+                'button',
+                {
+                  type: 'button',
+                  className: copyReady ? 'dsd-btn dsd-btn-primary' : 'dsd-btn',
+                  disabled: busy || !copyReady,
+                  onClick: () => copyCandidate(copyText),
+                },
+                copyReady ? t('workbenchCopy') : t('workbenchCopyNotReady'),
+              ),
+              draft !== null && newestForAction.text !== draft
+                ? h(
+                    'p',
+                    { className: 'dsd-hint dsd-hint-error' },
+                    '正文有未保存的修改：先点「保存修改」，再复制。否则复制出来的会是你没看过的那一版。',
+                  )
+                : null,
+              newestForAction.approved !== true
+                ? h('p', { className: 'dsd-hint' }, '这条候选还没有人工确认，确认后才能复制。')
+                : null,
+              copied === '' ? null : h('p', { className: 'dsd-hint' }, copied),
+            )
+
       const candidates = Array.isArray(view.candidates) ? view.candidates : []
       const newest = candidates.length === 0 ? undefined : candidates[candidates.length - 1]
 
@@ -4055,6 +4241,7 @@ window.__ModuleLoader__.load({
         approveButton,
         generateButton,
         publishButton,
+        copyBlock,
         // Stated on the page, not only in the source: the absence of a resend button is a
         // product decision the owner should be able to see the reason for.
         h('p', { className: 'dsd-hint' }, t('workbenchNoResend')),
@@ -6120,6 +6307,25 @@ window.__ModuleLoader__.load({
           // connection between "manual review mode" and "here is something to review"
           // visible without reading either panel's prose.
           h('section', { className: 'dsd-page-sect' }, h(ApproveSection, shared)),
+          /**
+           * ## 发表工作台必须也在这里（v0.2.33）
+           *
+           * 侧栏这一页是「全都给我看」的入口，而它此前**漏了工作台**——11 个区块
+           * 里只挂了 9 个。后果不是少一块面板，是**整条主流程在桌面端不可达**：
+           *
+           * - 新版 DSH 的设置页只有侧栏入口（`settings.section`），插件行那条
+           *   带页签的卡片根本不存在；
+           * - 于是「输入微博链接 → 读取讨论 → 选目标 → 生成 → 复制」这条链，
+           *   在真桌面上没有任何一条路能走到。
+           *
+           * 这不是推断。2026-11-07 在真 Desktop 上跑 `desktop-weibo.ts`，
+           * 滚遍整页也找不到「发表工作台」，而同一份构建在浏览器版的卡片里
+           * 一切正常——差别只在入口。
+           *
+           * 顺序放在发表授权之后：先定策略（谁能发、要不要人工确认），再进工作台
+           * 做事。把工作台放在授权前面，会让人先看到「生成候选」再看到「发表策略」。
+           */
+          h('section', { className: 'dsd-page-sect' }, h(WorkbenchSection, shared)),
           // 离线导入紧跟在工作台之后：它们是同一件事的两条路——官方接口读不到时的
           // 备用路径。放在一起，用户读到的顺序就是「先试官方，不行粘进来」。
           h('section', { className: 'dsd-page-sect' }, h(ManualSection, shared)),
