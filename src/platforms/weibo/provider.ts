@@ -49,6 +49,7 @@ import {
 import {
   buildReadiness,
 } from './readiness.js'
+import { probeCredentialPresence } from './credential-state.js'
 import {
   inspectCommand,
   listAvailableCommands,
@@ -93,25 +94,30 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
 }
 
 /**
- * Why the read rows say what they say (v0.2.11).
+ * Why the read rows say what they say.
  *
- * Two separate facts, and the task book asks for them to stay separate:
+ * 静态声明描述**这份构建的代码状态**，不描述**这台机器此刻的状态**。两者必须分开：
  *
- * 1. **The CLI adapter exists.** `cli.ts` can detect the binary, discover commands,
- *    parse JSON, classify failures, scrub credentials and enforce a timeout. That is
- *    code, and it has tests.
- * 2. **No read has ever run against the live platform.** This machine has no
- *    `weibo-cli`, no developer qualification and no OAuth login. So none of the read
- *    rows may say `supported`.
+ * - 代码状态是版本级的：这一版有没有写好 CLI 探测、命令校验、JSON 投影、失败分类、
+ *   凭据擦除、超时；
+ * - 机器状态是时刻级的：这台机器上 CLI 装没装、登录没登录、服务开没开。
  *
- * `unverified` is exactly the state that means "implemented, never confirmed against a
- * real account" — which is the truth for the read path as of this version, and it is a
- * deliberate change from v0.2.10's blanket `permission_required`: the permission story
- * is now concrete (a CLI login plus a service entitlement), not a hypothetical.
+ * ## v0.2.32 修正的一处「说假话」
+ *
+ * 原来这段文案写的是「本机构建尚未安装 CLI、也没有开发者认证与 OAuth 登录」。
+ * 那句话在写下的当天是真的，之后主人完成了开发者认证与登录，它就成了假话——
+ * 而且是最坏的一类假话：它出现在**能力矩阵**里，正是用户用来判断「能不能用」的地方。
+ *
+ * 现在静态声明只说代码状态（`unverified` = 这份构建从未记录过一次真实读取），
+ * 机器状态交给运行时探测：`checkAuthentication()` 与 `getCapabilities()` 探测之后
+ * 会覆盖这里的结论，页面读到的是事实而不是模板。
+ *
+ * 这也是 v0.2.31 那条教训的另一半：**别把会过期的观测写成静态结论**。
  */
 const READ_REASON =
-  '微博只读接入走官方 weibo-cli。本机构建尚未安装 CLI、也没有开发者认证与 OAuth 登录，' +
-  '所以这条读取路径的代码已经存在但从未对真实接口执行过——状态是「已实现、未验证」，不是「可用」。'
+  '微博只读接入走官方 weibo-cli：探测、命令 schema 校验、JSON 投影、失败分类、' +
+  '凭据擦除与超时都有实现和测试。但这份构建没有附带任何一次真实读取的记录，' +
+  '所以静态声明停在「已实现、未验证」；本机此刻到底能不能读，以运行时探测为准。'
 
 /** Why nothing can be written: no write scope, and the AI-content labelling rule. */
 const WRITE_REASON =
@@ -179,9 +185,11 @@ function describeCapabilities(): PlatformCapabilityMatrix {
     'comment.locate': row('unverified', `${READ_REASON}按 id 定位单条评论依赖读取命令的筛选参数。`, {
       requiredPermissions: ['weibo-cli OAuth 登录', '服务开通'],
     }),
-    'identity.verify': row('unverified', '确认登录账号走 weibo-cli 的账号命令；本机未登录，故未验证。', {
-      requiredPermissions: ['weibo-cli OAuth 登录'],
-    }),
+    'identity.verify': row(
+      'unverified',
+      '确认登录账号走 weibo-cli 的账号命令。静态声明不猜测本机登录状态——那由运行时探测回答。',
+      { requiredPermissions: ['weibo-cli OAuth 登录'] },
+    ),
     'event.mentions': row('unavailable', '微博的艾特通知不对外开放给第三方读取；请让主人手动提供微博链接。'),
     'comment.publish': row('permission_required', `${WRITE_REASON}评论发表本版不开放。`, {
       requiredPermissions: ['评论写入授权', 'AI 生成内容标识'],
@@ -773,6 +781,14 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
                   output: resolved.readiness.message,
                 },
               }),
+          /**
+           * 本机凭据记录的**存在性**（v0.2.31 §六）。
+           *
+           * 只看磁盘上那个指向保管库的引用文件，不读保管库、不读令牌。
+           * 它存在的唯一作用是让「从没登录过」与「登录过但令牌失效」分开显示——
+           * `doctor` 对这两种情况给的是同一个 `×`。
+           */
+          credential: probeCredentialPresence(),
           // 额度：本进程不查，理由随快照带出去（`unknown` 而不是 `unavailable`）。
           quota: {
             known: false,

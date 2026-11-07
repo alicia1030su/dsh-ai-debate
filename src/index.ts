@@ -42,7 +42,9 @@ import { tiebaProvider } from './platforms/tieba/provider.js'
 import { weiboProvider } from './platforms/weibo/provider.js'
 import { sourceOf } from './import/source.js'
 import { parseImport, toCollectedThread } from './import/manual.js'
-import { toStoredImport, MAX_IMPORTED_CHARS } from './import/session.js'
+import { toStoredImport, MAX_IMPORTED_CHARS, collectedFromStored, correctedDiscussion } from './import/session.js'
+import { applyCorrections, sanitizeCorrections } from './import/corrections.js'
+import { describeCollected, describeImport, targetContextOf } from './import/preview.js'
 import {
   analyzeImport,
   approveImportedCandidate,
@@ -51,6 +53,7 @@ import {
   generateForImport,
   personaOf,
   reselectImport,
+  reviseImport,
 } from './import/workflow.js'
 import {
   completedSteps,
@@ -1679,10 +1682,27 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
             })),
           }
         }
-        const overlong = comments.filter((comment) => comment.text.length > MAX_IMPORTED_CHARS)
-        const overlongRoot = parsed.discussion.root.text.length > MAX_IMPORTED_CHARS
+        /**
+         * 预览阶段应用修正（v0.2.31 §四）。
+         *
+         * 修正清单由页面持有并回传：预览 → 改 → 再预览 → 确认，四步共用同一份。
+         * 这样「确认的数据」与「预览的数据」是同一个函数的同一次计算，
+         * 而不是两次「应该一样」的计算。
+         */
+        const corrections = sanitizeCorrections(input.corrections)
+        const applied = applyCorrections(parsed.discussion, corrections)
+        const discussion = applied.discussion
+        const overlong = discussion.comments.filter(
+          (comment) => comment.text.length > MAX_IMPORTED_CHARS,
+        )
+        const overlongRoot = discussion.root.text.length > MAX_IMPORTED_CHARS
         const previewIssues = [
           ...parsed.issues.map((issue) => ({
+            severity: issue.severity,
+            code: issue.code,
+            message: issue.message,
+          })),
+          ...applied.issues.map((issue) => ({
             severity: issue.severity,
             code: issue.code,
             message: issue.message,
@@ -1699,15 +1719,16 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
                 },
               ]),
         ]
-        const collected = toCollectedThread(parsed.discussion)
+        const collected = toCollectedThread(discussion)
+        const structure = describeCollected(discussion, collected)
         return {
           ok: true,
           issues: previewIssues,
           discussion: {
-            title: parsed.discussion.title,
-            author: parsed.discussion.root.author,
-            text: parsed.discussion.root.text,
-            comments: parsed.discussion.comments.map((comment) => ({
+            title: discussion.title,
+            author: discussion.root.author,
+            text: discussion.root.text,
+            comments: discussion.comments.map((comment) => ({
               id: comment.id,
               author: comment.author,
               text: comment.text,
@@ -1715,10 +1736,13 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
             })),
             // 导入内容里出现过的作者名，按首次出现排序。页面用它让用户选「哪个是你」。
             participants: [
-              parsed.discussion.root.author,
-              ...parsed.discussion.comments.map((comment) => comment.author),
+              discussion.root.author,
+              ...discussion.comments.map((comment) => comment.author),
             ].filter((name, index, all) => name.trim() !== '' && all.indexOf(name) === index),
           },
+          structure,
+          audit: applied.audit,
+          ...(corrections === undefined ? {} : { corrections }),
           // 解析阶段就算出来的结构问题，页面要在确认之前显示。
           ...(collected.issues.length === 0 ? {} : { structuralIssues: collected.issues }),
         } as never
@@ -1737,8 +1761,17 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
             reason: parsed.issues.find((issue) => issue.severity === 'error')?.message ?? '解析失败。',
           }
         }
+        /**
+         * 修正必须在**落盘之前**应用。
+         *
+         * 顺序反了会得到一份「存的是原文、分析的是修正后」的会话：界面显示修正生效，
+         * 刷新之后又变回原来的样子。`toStoredImport` 收的是应用之后的讨论，
+         * 修正清单随讨论一起落进 `StoredImport.corrections`。
+         */
+        const corrections = sanitizeCorrections(input.corrections)
+        const applied = applyCorrections(parsed.discussion, corrections)
         const config = effectiveConfig()
-        const imported = toStoredImport(parsed.discussion, new Date().toISOString())
+        const imported = toStoredImport(applied.discussion, new Date().toISOString())
         const analyzed = await analyzeImport(runtimeView.store, {
           imported,
           ...(input.ownerName === undefined ? {} : { ownerName: input.ownerName }),
@@ -1755,6 +1788,42 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           participants: analyzed.value.participants,
           securityNotes: analyzed.value.securityNotes,
         }
+      },
+      revise: async (input) => {
+        const config = effectiveConfig()
+        const result = await reviseImport(runtimeView.store, {
+          sessionId: input.sessionId,
+          corrections: input.corrections,
+          persona: personaOf(undefined, config),
+          config,
+        })
+        if (!result.ok || result.value === undefined) {
+          return { ok: false, reason: result.reason ?? '修正失败。', next: result.next ?? [] }
+        }
+        return {
+          ok: true,
+          structure: result.value.structure,
+          audit: result.value.audit,
+          discardedCandidates: result.value.discardedCandidates,
+        }
+      },
+      context: async (input) => {
+        const session = runtimeView.store.getSession(input.sessionId)
+        if (session === undefined) {
+          return { ok: false, reason: `找不到会话 ${input.sessionId}`, context: undefined }
+        }
+        if (session.imported === undefined) {
+          return { ok: false, reason: '这条会话不是人工导入的，没有可展示的上下文。' }
+        }
+        const collected = collectedFromStored(session.imported)
+        const context = targetContextOf(collected, input.postId, session.threadTitle)
+        if (context === undefined) {
+          return {
+            ok: false,
+            reason: `「${input.postId}」不在这次导入的内容里。可能是内容被修正过，请刷新页面。`,
+          }
+        }
+        return { ok: true, context }
       },
       select: async (input) => {
         const config = effectiveConfig()
@@ -2235,6 +2304,28 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
               const target = latest === undefined ? undefined : findImportedTarget(session, latest)
               const step = stepOf(session)
               const done = new Set(completedSteps(session))
+              /**
+               * 结构快照（v0.2.31 §五）。
+               *
+               * ## 为什么在这里算，而不是让页面自己拉
+               *
+               * 页面需要「全部发言 + 关系 + 同位同名 + 依据」才能做好纠错界面。
+               * 让它自己调一个接口拿，意味着刷新时先显示会话、再显示结构，
+               * 而结构到位的这段时间里用户可能已经点了一个基于旧结构的按钮。
+               * 一次返回，页面就永远看到一份自洽的视图。
+               *
+               * 代价是每次读工作台都重算一次投影。6000 条的实测是 200ms——
+               * 只在用户手动刷新时发生，可以接受。
+               */
+              const structure = (() => {
+                try {
+                  return describeImport(correctedDiscussion(session.imported).discussion)
+                } catch {
+                  // 结构算不出来时不要连带把整个工作台打挂：会话本身仍然可读。
+                  return undefined
+                }
+              })()
+              const audited = correctedDiscussion(session.imported)
               return {
                 step,
                 stepTitle: MANUAL_STEP_TITLES[step],
@@ -2250,6 +2341,9 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
                   ? {}
                   : { importedAt: session.imported.importedAt }),
                 importSource: session.imported.source,
+                ...(structure === undefined ? {} : { structure }),
+                ...(audited.audit.length === 0 ? {} : { corrections: audited.audit }),
+                ...(audited.issues.length === 0 ? {} : { correctionIssues: audited.issues }),
                 ...(target === undefined ? {} : { copyTarget: target }),
                 copyAllowed: blockers.length === 0,
                 ...(blockers.length === 0 ? {} : { copyBlockers: blockers }),

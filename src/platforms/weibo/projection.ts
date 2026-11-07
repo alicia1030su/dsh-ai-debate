@@ -61,6 +61,40 @@ function textOf(value: unknown): string | undefined {
 }
 
 /**
+ * 分页游标。
+ *
+ * ## `next_cursor: 0` 是「没有下一页」，不是「下一页是第 0 条」（v0.2.32 真实接口实测）
+ *
+ * 微博把游标编码成一个数字，**末页写的是 `0`**。`textOf(0)` 返回字符串 `"0"`，
+ * 于是 `cursor !== undefined` 成立、`hasMore` 判成 `true`——一次已经读完的读取
+ * 会声称「还有更多」，采集器于是继续翻页，翻到一个内容相同的「下一页」。
+
+ * 实测（2026-11-07，`comments show/all --id 4769386810049975`）：
+ *
+ *     第 1 页：5 条，next_cursor = 4769389788533551
+ *     第 2 页：2 条，next_cursor = 0            ← 一共 7 条，已经到底
+ *
+ * `0` 之前被当成一个合法游标，因为这段代码只判断「有没有值」。修法是把 `0`
+ * 与空串一样对待：**它是结束标记，不是位置**。
+ *
+ * 注意 `"0"` 这个字符串也按 0 处理：同一个字段在某些接口里是数字、某些里是字符串，
+ * 按类型区分会让「换个接口就出错」。
+ */
+function cursorOf(value: unknown): { readonly cursor?: string; readonly ended: boolean } {
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return { ended: false }
+    return value === 0 ? { ended: true } : { cursor: String(value), ended: false }
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    if (trimmed === '') return { ended: false }
+    if (trimmed === '0') return { ended: true }
+    return { cursor: trimmed, ended: false }
+  }
+  return { ended: false }
+}
+
+/**
  * The status id, preferring the string form.
  *
  * `idstr` is a string and `id` may be a number that has already lost precision by the time
@@ -398,7 +432,9 @@ export function unwrapComments(raw: unknown): {
         ? Number(total)
         : undefined
 
-  const cursor = textOf(container.next_cursor) ?? textOf(record.next_cursor)
+  const rawCursor = container.next_cursor ?? record.next_cursor
+  const parsedCursor = cursorOf(rawCursor)
+  const cursor = parsedCursor.cursor
   const moreFlag = container.has_more ?? record.has_more
   // `has_more` may be a boolean or 0/1/"0"/"1". Anything else is unknown.
   const state: 'more' | 'done' | 'unknown' =
@@ -410,9 +446,11 @@ export function unwrapComments(raw: unknown): {
         ? 'more'
         : moreFlag === 0 || moreFlag === '0'
           ? 'done'
-          : cursor !== undefined
-            ? 'more'
-            : 'unknown'
+          : parsedCursor.ended
+            ? 'done'
+            : cursor !== undefined
+              ? 'more'
+              : 'unknown'
 
   return {
     comments,

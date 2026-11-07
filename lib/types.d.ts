@@ -250,6 +250,22 @@ export interface NestedReply extends AuthorFields {
     readonly authorName?: string;
     /** Display name of the user being answered, as the platform renders it. */
     readonly replyToName?: string;
+    /**
+     * Where the `replyToPostId` came from, in the words of whoever produced it.
+     *
+     * ## Why this is carried rather than assumed
+     *
+     * The graph bridge used to hard-code "the platform returned the replied post
+     * id" on every `replies_to` edge. That is true for a platform adapter and
+     * false for a manual import, where the id came from the owner reading a
+     * pasted transcript — or from them picking the target in the correction UI.
+     * The edge is the same shape either way, so without this field the graph
+     * states a provenance it cannot know.
+     *
+     * Absent means "the producer did not say"; the bridge then keeps its
+     * platform wording, which is the pre-existing behaviour for adapters.
+     */
+    readonly replyBasis?: string;
     readonly content: string;
     readonly createdAt?: string;
     /** True when the platform did not state an explicit parent relation. */

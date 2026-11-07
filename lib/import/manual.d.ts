@@ -30,6 +30,7 @@
 import type { CollectedThread } from '../collector.js';
 import type { ConversationGraph } from '../conversation.js';
 import type { PlatformId } from '../types.js';
+import type { ImportCorrections } from './corrections.js';
 /**
  * 离线来源的平台标识。
  *
@@ -39,6 +40,13 @@ import type { PlatformId } from '../types.js';
  * 取适配器会抛错，而不是悄悄联网。
  */
 export declare const MANUAL_PLATFORM: "manual";
+/**
+ * 「你手工指定它在回复原帖」的依据文案。
+ *
+ * 定义成常量而不是两处各写一份：修正层写它，投影层读它。两处字面量不一致时
+ * 不会报错，只会让「标为原帖」这个动作静默失效——一个只有用户能发现的失败。
+ */
+export declare const MANUAL_ROOT_BASIS = "\u4F60\u624B\u5DE5\u6307\u5B9A\u5B83\u5728\u56DE\u590D\u539F\u5E16";
 /** 界面上给 `manual` 用的名字。平台注册表里没有它，所以这里自带一份。 */
 export declare const MANUAL_DISPLAY_NAME: "\u4EBA\u5DE5\u5BFC\u5165";
 /** 一条导入的发言。 */
@@ -50,6 +58,22 @@ export interface ImportedComment {
     readonly authorId?: string;
     readonly text: string;
     readonly createdAt?: string;
+    /** 楼层号，仅在原文里明确写了的时候才有（`#3`、`3 楼`、`3L`）。 */
+    readonly floor?: number;
+    /**
+     * 这条发言在原文里的样子（含作者行，未做任何改写）。
+     *
+     * ## 为什么必须留着
+     *
+     * 解析器会剥装饰、拆作者名、抽楼层号。每一步都可能把用户的原文解释错，
+     * 而用户是唯一能判断「这里到底是谁在说话」的人。只要原文在，他就能逐条核对；
+     * 不在了，他只能相信解析结果——而我们刚刚才证明过解析会出错。
+     *
+     * 它与 `text` 的区别是：`text` 是**给分析器读的正文**，`raw` 是**给人核对的原文**。
+     */
+    readonly raw?: string;
+    /** 这条在原文中的起始行号（1 起）。用来把界面上的「第 12 行」指回原文。 */
+    readonly rawLine?: number;
     /** 这条在回复哪一条（id 或昵称，由 `replyToKind` 说明是哪一种）。 */
     readonly replyTo?: string;
     /**
@@ -59,6 +83,25 @@ export interface ImportedComment {
      * 合成一个字段会让图上两种边长得一样，而下游据此决定「能不能说对方讲过这句话」。
      */
     readonly replyToKind?: 'id' | 'name';
+    /**
+     * 判定这条回复关系的依据，一句话。
+     *
+     * 只有 `replyToKind === 'name'` 时才需要——那种关系是**推测**的，
+     * 推测必须能解释。`stated` 的依据是平台给的 id，不需要额外解释。
+     */
+    readonly replyBasis?: string;
+    /**
+     * 用户明确说了「这条关系确认不了」（v0.2.31 §四）。
+     *
+     * ## 为什么它不等于「删掉关系」
+     *
+     * 删掉关系是断言「它没有在回谁」，而这恰恰是用户不知道的事。标记成不可确认
+     * 保住了两条信息：这条发言**声称**在回某人（原话还在），以及**我们不敢确定**。
+     *
+     * 投影时它会让这条边落成 `inferred`（即使原本有 id），并且在预览里显示
+     * 「你说过这条不确定」——分析器据此不会把对方的原话引作已核实的对立观点。
+     */
+    readonly replyUnconfirmed?: boolean;
 }
 /** 一段导入的讨论。 */
 export interface ImportedDiscussion {
@@ -75,7 +118,21 @@ export interface ImportedDiscussion {
         readonly text: string;
         readonly createdAt?: string;
     };
+    /** 原帖的楼层号，文本解析时若原文写了才有。 */
+    readonly rootFloor?: number;
+    /** 原帖在原文里的样子，供预览逐条核对。 */
+    readonly rootRaw?: string;
     readonly comments: readonly ImportedComment[];
+    /**
+     * 用户对这份内容的修正（v0.2.31 §四）。
+     *
+     * ## 为什么它挂在讨论上，而不是替换掉讨论
+     *
+     * 讨论里的每条发言是**解析结果**，这份清单是**用户说的话**。两者分开存，
+     * 才能回答「插件当时看懂了什么」和「人改了什么」——第三层是 `comment.raw`
+     * 里的原文。三层都在，出错时才查得动。
+     */
+    readonly corrections?: ImportCorrections;
 }
 /** 一条解析问题。`severity` 决定它出现在预览的哪一栏。 */
 export interface ImportIssue {
