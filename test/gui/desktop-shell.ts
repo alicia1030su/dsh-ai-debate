@@ -170,26 +170,44 @@ export async function openSettings(ctx: ShellCtx): Promise<{ ok: boolean; how: s
   if (accountMenu === 'not-found') return { ok: false, how: '找不到账号菜单' }
 
   const menu = JSON.parse(accountMenu) as { x: number; y: number }
-  await ctx.clickAt(menu.x, menu.y)
-  await ctx.sleep(1200)
-
-  const settingsPos = await ctx.evaluate<string>(`(() => {
-    const el = [...document.querySelectorAll('button,[role=menuitem],[tabindex]')]
-      .find(e => /^设置(\\s|$)/.test((e.innerText || '').trim()) && (e.innerText || '').trim().length < 20)
-    if (!el) return 'not-found'
-    const r = el.getBoundingClientRect()
-    if (r.width < 2 || r.height < 2) return 'zero-size'
-    return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) })
-  })()`)
-  if (settingsPos === 'not-found' || settingsPos === 'zero-size') {
-    return { ok: false, how: `菜单里没有可点的「设置」（${settingsPos}）` }
+  /**
+   * ## 菜单要「点开 → 看有没有 → 没有就再点一次」
+   *
+   * 一次点击不保证菜单已经渲染出来。真实撞到过一次：点击 1200ms 后菜单里找不到
+   * 「设置」，于是整份报告从第一行起全红——看起来像插件坏了，实际上只是那一次
+   * 点早了。重试的代价是几秒，误判的代价是一份不可信的失败报告。
+   */
+  let settingsPos = 'not-found'
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) {
+      await ctx.clickAt(menu.x, menu.y)
+      await ctx.sleep(900)
+    }
+    settingsPos = await ctx.evaluate<string>(`(() => {
+      const el = [...document.querySelectorAll('button,[role=menuitem],[tabindex]')]
+        .find(e => /^设置(\\s|$)/.test((e.innerText || '').trim()) && (e.innerText || '').trim().length < 20)
+      if (!el) return 'not-found'
+      const r = el.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) return 'zero-size'
+      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) })
+    })()`)
+    if (settingsPos.startsWith('{')) break
+  }
+  if (!settingsPos.startsWith('{')) {
+    return { ok: false, how: `菜单里没有可点的「设置」（${settingsPos}，试了 3 次）` }
   }
 
   const pos = JSON.parse(settingsPos) as { x: number; y: number }
   await ctx.clickAt(pos.x, pos.y)
   await ctx.sleep(2500)
 
-  const opened = SETTINGS_MARKS.test(await text(ctx))
+  let opened = SETTINGS_MARKS.test(await text(ctx))
+  if (!opened) {
+    // 视图切换同理：点到了不等于已经切过去。再给一次机会，仍然不行才判失败。
+    await ctx.clickAt(pos.x, pos.y)
+    await ctx.sleep(2500)
+    opened = SETTINGS_MARKS.test(await text(ctx))
+  }
   return { ok: opened, how: opened ? `账号菜单 → 设置 @${pos.x},${pos.y}` : '点到了，但没切到设置视图' }
 }
 
