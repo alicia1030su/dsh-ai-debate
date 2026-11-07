@@ -35,6 +35,8 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs'
 
+import { EvidenceCollector } from './evidence.ts'
+
 import {
   dismissOnboarding,
   openPluginPage,
@@ -60,6 +62,8 @@ function stage(name: string, status: Stage['status'], detail: string): void {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const startedAt = new Date().toISOString()
+/** 脚本版本。改动断言时要一起改它，否则结果里无法区分「同一份脚本的两次改动」。 */
+const CLIPBOARD_SCRIPT_VERSION = '2026-11-07.1'
 
 let nextId = 1
 const pending = new Map<number, (v: unknown) => void>()
@@ -471,12 +475,30 @@ async function main(): Promise<void> {
   const failed = stages.filter((s) => s.status === 'failed')
   const skipped = stages.filter((s) => s.status === 'skipped')
 
+  /**
+   * 落盘时一并记下「这是在哪份代码上跑的」。
+   *
+   * ## 没有这一段的后果
+   *
+   * 这份文件的 `clipboard-result.json` 原来只有阶段与时间。于是「13 项全过」
+   * 这句话**没有主语**：过的是哪一版？如果之后 src 改了再没重跑，这份结果
+   * 会一直躺在目录里，谁看到都会以为它还是有效的。
+   *
+   * 与 `e2e-manual-import` 用同一套 `headOf`：同一份代码树在两个脚本里必须
+   * 算出同一个值，否则「绑定」这件事就只是各自的说法。
+   */
+  const head = EvidenceCollector.headOf('.')
+
   mkdirSync(outDir, { recursive: true })
   writeFileSync(
     `${outDir}/clipboard-result.json`,
     JSON.stringify(
       {
         script: 'desktop-clipboard.ts',
+        scriptVersion: CLIPBOARD_SCRIPT_VERSION,
+        headSha: head.sha,
+        testedTreeSha: head.tree,
+        headDirty: head.dirty,
         startedAt,
         finishedAt: new Date().toISOString(),
         stages,
