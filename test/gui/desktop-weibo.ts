@@ -182,6 +182,9 @@ async function screenshot(name: string): Promise<void> {
   const r = (await send('Page.captureScreenshot', { format: 'png' })) as { data?: string }
   if (typeof r?.data === 'string' && r.data !== '') {
     writeFileSync(join(outDir, `${name}.png`), Buffer.from(r.data, 'base64'))
+    // 登记进证据清单。不登记的话 `evidence.json` 里 screenshots 是空的，
+    // 而磁盘上明明有一堆 png——报告与产物对不上，读报告的人会以为没截图。
+    evidence.screenshot(`${name}.png`)
   }
 }
 
