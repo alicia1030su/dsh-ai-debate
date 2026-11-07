@@ -498,6 +498,7 @@ async function main(): Promise<void> {
         scriptVersion: CLIPBOARD_SCRIPT_VERSION,
         headSha: head.sha,
         testedTreeSha: head.tree,
+        testedCodeSha: head.code,
         headDirty: head.dirty,
         startedAt,
         finishedAt: new Date().toISOString(),
