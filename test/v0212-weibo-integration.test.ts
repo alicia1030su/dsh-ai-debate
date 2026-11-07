@@ -26,6 +26,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { __setCliInvocation } from '../lib/platforms/weibo/cli.js'
 import { weiboProvider } from '../lib/platforms/weibo/provider.js'
 import { parseWeiboUrl } from '../lib/platforms/weibo/url.js'
 
@@ -44,31 +45,43 @@ const REF = (() => {
 // ---------------------------------------------------------------------------
 
 test('断点：getThread 不得永远抛「未授权」——它必须先问 CLI 状态（v0.2.12）', async () => {
-  // ## 这个断言在 v0.2.11 上失败，那是它的用途
-  //
-  // v0.2.11 的 getThread 无条件 `notAuthorised('读取微博正文')`。本机确实没装 CLI，
-  // 所以**拒绝本身是对的**；错的是**拒绝的理由**：它说「需要开放平台授权」，而真实
-  // 原因是「这台机器上没有 weibo-cli」。
-  //
-  // 这两句话对主人意味着完全不同的动作：前者是「去申请权限」，后者是「去装个命令」。
-  // 所以这里断言错误里要能区分出 CLI 缺失，而不是笼统的授权错误。
-  const a = adapter()
-  const error = await a.getThread(REF).then(
-    () => undefined,
-    (reason: unknown) => reason as Error & { code?: string },
-  )
-  assert.ok(error !== undefined, '没装 CLI 时必须失败，不能假装读到了')
-  // The provider must have consulted the CLI layer, which yields a specific code.
-  assert.notEqual(
-    error!.code,
-    'weibo_not_authorised',
-    `不该笼统报「未授权」；实际 code=${error!.code} message=${error!.message}`,
-  )
-  assert.equal(
-    ['cli_missing', 'not_authenticated', 'service_inactive'].includes(error!.code ?? ''),
-    true,
-    `错误码应能指向具体环节，实际 ${error!.code}`,
-  )
+  /**
+   * ## 这条断言原来在赌这台机器的状态，v0.2.32 改掉了
+   *
+   * 它原来直接读本机真实 CLI，断言「必须失败」。那在 2026-11 之前是对的：
+   * 当时没装 CLI，失败是必然的。
+   *
+   * 但主人完成开发者认证与 OAuth 之后，**同一台机器上 getThread 会真的读到东西**
+   * ——这条断言就开始假红：产品没退化，是测试在赌环境。全量跑里它偶发失败过一次
+   * （24 秒超时后读到真数据），正是这个原因。
+   *
+   * 现在的写法把环境变成**明确的输入**：把 CLI 指到一个不存在的可执行文件。
+   * 无论这台机器装没装、登录没登录，这条都在测同一件事——
+   * **拒绝的理由能不能指向具体环节**，而不是笼统的「未授权」。
+   */
+  const missing = 'C:/nonexistent-dsh-ai-debate/weibo-cli.exe'
+  __setCliInvocation({ file: missing, prefixArgs: [] })
+  try {
+    const a = adapter()
+    const error = await a.getThread(REF).then(
+      () => undefined,
+      (reason: unknown) => reason as Error & { code?: string },
+    )
+    assert.ok(error !== undefined, 'CLI 不存在时必须失败，不能假装读到了')
+    // The provider must have consulted the CLI layer, which yields a specific code.
+    assert.notEqual(
+      error!.code,
+      'weibo_not_authorised',
+      `不该笼统报「未授权」；实际 code=${error!.code} message=${error!.message}`,
+    )
+    assert.equal(
+      ['cli_missing', 'not_authenticated', 'service_inactive'].includes(error!.code ?? ''),
+      true,
+      `错误码应能指向具体环节，实际 ${error!.code}`,
+    )
+  } finally {
+    __setCliInvocation(undefined)
+  }
 })
 
 test('断点：适配器不得声明自己能读（能力必须来自 CLI 实测，不是常量）', async () => {

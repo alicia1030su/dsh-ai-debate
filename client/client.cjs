@@ -307,7 +307,9 @@ window.__ModuleLoader__.load({
       manualKindFile: '本地文件',
       manualKindHint:
         '文本格式：先写原帖「作者：内容」，再写一行 ---，之后每条评论一行「作者：内容」。' +
-        '「作者 回复 某人：内容」会被解析成回复关系。',
+        '「作者 回复 某人：内容」会被解析成回复关系。' +
+        '楼层号（2 楼 / #2 / 2L）、时间戳（2024-01-01 12:00 / 刚刚 / 3 小时前）、' +
+        '`>> 甲` 与 `@甲` 也认；=== / *** / ___ / ··· 都能当分隔符。原文逐条保留，不会被改写。',
       manualPlaceholder: '原帖作者：我觉得这个价格翻倍是合理的……\n---\n路人甲：你先把数据拿出来。',
       manualTitleField: '标题（可选）',
       manualUrlField: '原帖链接（可选，只作展示，插件不会去读它）',
@@ -338,6 +340,45 @@ window.__ModuleLoader__.load({
       manualSecurityBlock: '安全评估：阻止',
       manualSecurityUnknown: '安全评估：无记录',
       manualStepNow: '当前步骤',
+      // v0.2.31 §三/§四：结构化预览与交互式纠错。
+      manualStructure: '解析结构',
+      manualRelationStated: '确定',
+      manualRelationInferred: '推测',
+      manualRelationUnresolved: '未解析',
+      manualRelationNone: '没有回复对象',
+      manualBasis: '依据',
+      manualFloor: '楼',
+      manualRaw: '原文',
+      manualRawHidden: '原文（点开核对）',
+      manualSameName: '同名提示',
+      manualFixTitle: '解析错了？在这里改',
+      manualFixHint:
+        '改的是解析结果，原文不会被改写。修正只影响分析与复制，不会让这条会话获得发表权限。',
+      manualFixAuthor: '作者名',
+      manualFixReplyTo: '在回哪一条',
+      manualFixReplyNone: '没有在回谁（单独成层）',
+      manualFixReplyRoot: '在回原帖',
+      manualFixUnconfirmed: '这条关系我确认不了',
+      manualFixMarkRoot: '这条其实是原帖',
+      manualFixSplitIdentity: '这是另一个人（同名）',
+      manualApplyFix: '应用修改',
+      manualAudit: '你改了什么',
+      manualRevise: '保存修正并重新分析',
+      manualReviseHint:
+        '修正会重跑分析：已有的候选回复会被作废，因为它们是对着改之前的讨论写的。',
+      manualReviseDone: '修正已生效，候选已清空',
+      manualDiscarded: '因修正作废的候选',
+      manualSearch: '搜索参与者',
+      manualSearchEmpty: '没有匹配的参与者',
+      manualAllComments: '全部发言',
+      manualPerFloor: '按层看',
+      manualTargetContext: '目标上下文',
+      manualPickTarget: '用这条当回复目标',
+      manualCandidates: '候选对比',
+      manualCandidateN: '候选',
+      manualLatest: '最新',
+      manualUseThis: '用这一条',
+      manualExportStructure: '导出结构（JSON）',
       manualNoPublish:
         '离线流程不提供发表：这里的终点是复制正文，由你自己贴到平台上。' +
         '插件不会把剪贴板内容当成一条真实帖子去发。',
@@ -736,7 +777,10 @@ window.__ModuleLoader__.load({
       manualKindFile: 'Local file',
       manualKindHint:
         'Text format: the opening post as "author: text", then a --- line, then one comment per line as "author: text". ' +
-        '"author reply someone: text" becomes a reply relation.',
+        '"author reply someone: text" becomes a reply relation. ' +
+        'Floor markers (2 楼 / #2 / 2L), timestamps (2024-01-01 12:00 / 刚刚 / 3 小时前), ' +
+        '`>> name` and `@name` are recognised too; === / *** / ___ / ··· all work as separators. ' +
+        'The original text is kept verbatim — the parser never rewrites it.',
       manualPlaceholder: 'Author: I think doubling the price is fair…\n---\nPasserby: show me the data first.',
       manualTitleField: 'Title (optional)',
       manualUrlField: 'Original link (optional, display only — the plugin never fetches it)',
@@ -766,6 +810,47 @@ window.__ModuleLoader__.load({
       manualSecurityBlock: 'Security: blocked',
       manualSecurityUnknown: 'Security: no record',
       manualStepNow: 'Current step',
+      // v0.2.31 §三/§四: structured preview and interactive corrections.
+      manualStructure: 'Parsed structure',
+      manualRelationStated: 'stated',
+      manualRelationInferred: 'inferred',
+      manualRelationUnresolved: 'unresolved',
+      manualRelationNone: 'no reply target',
+      manualBasis: 'basis',
+      manualFloor: 'floor',
+      manualRaw: 'Original text',
+      manualRawHidden: 'Original text (expand to check)',
+      manualSameName: 'Same-name note',
+      manualFixTitle: 'Parsed something wrong? Fix it here',
+      manualFixHint:
+        'This changes the parsed result; the original text is never rewritten. ' +
+        'Corrections only affect analysis and copying — they cannot grant this session any publish permission.',
+      manualFixAuthor: 'Author',
+      manualFixReplyTo: 'Replies to',
+      manualFixReplyNone: 'Replies to nobody (its own floor)',
+      manualFixReplyRoot: 'Replies to the opening post',
+      manualFixUnconfirmed: 'I cannot confirm this relation',
+      manualFixMarkRoot: 'This is actually the opening post',
+      manualFixSplitIdentity: 'A different person (same name)',
+      manualApplyFix: 'Apply',
+      manualAudit: 'What you changed',
+      manualRevise: 'Save corrections and re-analyse',
+      manualReviseHint:
+        'Correcting re-runs the analysis: existing candidates are discarded, ' +
+        'because they were written against the discussion as it was before your fix.',
+      manualReviseDone: 'Corrections applied, candidates cleared',
+      manualDiscarded: 'Candidates discarded by the correction',
+      manualSearch: 'Search people',
+      manualSearchEmpty: 'No matching people',
+      manualAllComments: 'All comments',
+      manualPerFloor: 'By floor',
+      manualTargetContext: 'Target context',
+      manualPickTarget: 'Answer this one',
+      manualCandidates: 'Compare candidates',
+      manualCandidateN: 'Candidate',
+      manualLatest: 'latest',
+      manualUseThis: 'Use this one',
+      manualExportStructure: 'Export structure (JSON)',
       manualNoPublish:
         'The offline flow has no publish step: it ends at the copied text, which you paste yourself. ' +
         'The plugin will not treat clipboard content as a real post.',
@@ -4025,11 +4110,61 @@ window.__ModuleLoader__.load({
       const [error, setError] = useState('')
       const [draft, setDraft] = useState('')
       const [copied, setCopied] = useState('')
+      /**
+       * 人工修正的草稿（v0.2.31 §四）。
+       *
+       * ## 为什么修正放在页面状态里，而不是每改一个字段就发一次请求
+       *
+       * 一次纠错常常要改三四条（「甲认错了、乙的回复目标也错了、那条其实是原帖」）。
+       * 每改一处就落盘，会让服务端在一次纠错过程中看到几个**互相矛盾**的中间状态，
+       * 而每个中间状态都要重跑一次分析。
+       *
+       * 所以页面持有一份清单，用户点「应用」时一次性提交。清单与预览回传的那份
+       * 是同一个结构，确认时原样带上——于是「确认的数据」与「预览的数据」是
+       * 同一次计算的结果，而不是两次「应该一样」的计算。
+       */
+      const [corrections, setCorrections] = useState([])
+      const [correctionNote, setCorrectionNote] = useState('')
+      const [search, setSearch] = useState('')
+      const [expanded, setExpanded] = useState({})
+      const [context, setContext] = useState(null)
+      const [exported, setExported] = useState('')
       const running = state.manualState && state.manualState.state === 'running'
       const view = state.workbench
       const flow = view && view.manualFlow
       const source = view && view.source
       const sessionId = view && view.sessionId
+
+      /**
+       * 进这个分区时补一次工作台读取（v0.2.32）。
+       *
+       * ## 为什么原来没有，现在必须有
+       *
+       * v0.2.30 把「读工作台」挂在 `setTab('manual')` 上——只有**点页签**才读。
+       * 那时这没问题，因为离线导入只存在于插件卡片的页签里。
+       *
+       * 0.2.2-rc.1 起，插件页不再渲染 `plugins.row.config`，配置只能从
+       * **设置侧栏**进（`settings.section`）。侧栏那扇门是「全部区块堆叠」，
+       * 没有页签，`setTab` 永远不会被调用——于是 `workbench` 一直是 `undefined`，
+       * 页面显示「还没有导入任何内容」。
+       *
+       * 而 store 里明明躺着刚导入、刚批准过的会话：刷新页面后用户看到的是
+       * 「我的内容没了」。**不是数据丢了，是那扇门后面没人去取。**
+       *
+       * ## 为什么依赖数组是空的
+       *
+       * 只在挂载时补一次。如果依赖 `state.workbench`，每次 `publish()` 都会重跑，
+       * 而 `loadWorkbench` 自己又会 `publish()`——一个自激循环，页面上表现为
+       * 无限闪烁。`workbenchState` 已经记着「读没读过」，用它判重。
+       */
+      useEffect(() => {
+        const read = state.workbenchState || { state: 'idle' }
+        if (read.state !== 'idle') return
+        store.loadWorkbench(store.workbenchSessionId())
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在挂载时补一次，理由见上
+      }, [])
+      /** 预览阶段的修正清单要回传给服务端；工作台阶段用服务端的 `manual-revise`。 */
+      const correctionsPayload = { version: 1, revisedAt: new Date().toISOString(), entries: corrections }
 
       const run = async (action, payload) => {
         setError('')
@@ -4039,6 +4174,47 @@ window.__ModuleLoader__.load({
           setError([answer.reason || '', ...(answer.next || [])].filter(Boolean).join(' ｜ '))
         }
         return answer
+      }
+
+      /**
+       * 改一条修正并立刻重新预览。
+       *
+       * ## 为什么改完就重算，而不是等用户点「应用」
+       *
+       * 修正的效果（这条关系变成什么、原帖换成了谁、同名拆开之后参与者变成几个）
+       * 只有重算之后才知道。让用户盲改再点应用，他会在应用后才发现「我以为的」与
+       * 「实际生效的」不一样——那正是这一版要消灭的体验。
+       */
+      const patchCorrection = (id, patch) => {
+        setCorrections((previous) => {
+          const index = previous.findIndex((entry) => entry.id === id)
+          const existing = index === -1 ? { id } : previous[index]
+          const merged = { ...existing, ...patch }
+          // 空字符串表示「不改这一项」：留着会让服务端收到一条什么都没改的修正，
+          // 而它会在审计里出现一行「没变化」。
+          for (const key of ['author', 'localIdentity', 'replyTo']) {
+            if (merged[key] === '' || merged[key] === undefined) delete merged[key]
+          }
+          if (merged.unconfirmed !== true) delete merged.unconfirmed
+          const rest = index === -1 ? previous : previous.filter((_, i) => i !== index)
+          const next = Object.keys(merged).length <= 1 ? rest : [...rest, merged]
+          void replayPreview(next)
+          return next
+        })
+      }
+
+      const replayPreview = async (entries) => {
+        if (preview === null || content.trim() === '') return
+        const answer = await store.runManualAction('manual-preview', {
+          kind,
+          content,
+          ...(title.trim() === '' ? {} : { title: title.trim() }),
+          ...(url.trim() === '' ? {} : { url: url.trim() }),
+          ...(fileHint === '' ? {} : { fileName: fileHint }),
+          corrections: { version: 1, revisedAt: new Date().toISOString(), entries },
+        })
+        if (answer && answer.ok === true) setPreview(answer)
+        else if (answer && answer.ok === false) setError([answer.reason || '', ...(answer.next || [])].filter(Boolean).join(' ｜ '))
       }
 
       const pickFile = (event) => {
@@ -4212,6 +4388,261 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      /**
+       * 一条发言的结构化展示 + 就地纠错（v0.2.31 §四）。
+       *
+       * ## 为什么「原文」要能展开
+       *
+       * 解析器会剥装饰、拆作者、抽楼层。每一步都可能解释错，而用户是唯一能判断
+       * 「这里到底是谁在说话」的人。原文折叠起来放在旁边，他看到不对就能核对，
+       * 而不是只能相信那个可能错了的结论。
+       */
+      const relationBadge = (node) => {
+        if (node.unconfirmed === true) {
+          return h('span', { className: 'dsd-badge dsd-badge-warn' }, t('manualFixUnconfirmed'))
+        }
+        if (node.certainty === 'stated') {
+          return h('span', { className: 'dsd-badge' }, t('manualRelationStated'))
+        }
+        if (node.certainty === 'inferred') {
+          return h('span', { className: 'dsd-badge dsd-badge-warn' }, t('manualRelationInferred'))
+        }
+        if (node.certainty === 'unresolved') {
+          return h('span', { className: 'dsd-badge dsd-badge-error' }, t('manualRelationUnresolved'))
+        }
+        return null
+      }
+
+      const nodeRow = (node, options) => {
+        const isOpen = expanded[node.id] === true
+        const options_ = options || {}
+        const replyChoice = corrections.find((entry) => entry.id === node.id) || {}
+        return h(
+          'div',
+          { key: node.id, className: 'dsd-sect', style: { borderLeft: '3px solid rgba(0,0,0,0.08)' } },
+          h(
+            'div',
+            { className: 'dsd-inline' },
+            h('strong', null, node.author),
+            node.floor === undefined ? null : h('span', { className: 'dsd-hint' }, `${node.floor} ${t('manualFloor')}`),
+            node.createdAt === undefined ? null : h('span', { className: 'dsd-hint' }, node.createdAt),
+            relationBadge(node),
+            h('span', { className: 'dsd-hint' }, node.id),
+          ),
+          h('p', { style: { margin: '4px 0' } }, node.excerpt),
+          node.certainty === undefined || node.basis === undefined
+            ? null
+            : h('p', { className: 'dsd-hint' }, `${t('manualBasis')}：${node.basis}`),
+          node.replyTo === undefined
+            ? null
+            : h('p', { className: 'dsd-hint' }, `→ ${node.replyTo}${node.replyToId === undefined ? '' : `（${node.replyToId}）`}`),
+          h(
+            'div',
+            { className: 'dsd-inline' },
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsd-btn dsd-btn-ghost',
+                onClick: () => setExpanded({ ...expanded, [node.id]: !isOpen }),
+              },
+              isOpen ? t('manualRaw') : t('manualRawHidden'),
+            ),
+            options_.selectable === false
+              ? null
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn dsd-btn-ghost',
+                    onClick: () => setTargetPostId(node.id),
+                  },
+                  t('manualPickTarget'),
+                ),
+            options_.sessionId === undefined
+              ? null
+              : h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn dsd-btn-ghost',
+                    onClick: async () => {
+                      const answer = await run('manual-context', {
+                        sessionId: options_.sessionId,
+                        postId: node.id,
+                      })
+                      if (answer && answer.ok === true) setContext(answer.context)
+                      else setContext(null)
+                    },
+                  },
+                  t('manualTargetContext'),
+                ),
+          ),
+          isOpen && node.raw !== undefined
+            ? h(
+                'pre',
+                {
+                  className: 'dsd-hint',
+                  style: { whiteSpace: 'pre-wrap', margin: 0, fontSize: 11, opacity: 0.8 },
+                },
+                node.raw,
+              )
+            : null,
+          options_.editable === false
+            ? null
+            : h(
+                'div',
+                { style: { marginTop: 6 } },
+                h('p', { className: 'dsd-hint' }, t('manualFixTitle')),
+                h(
+                  'div',
+                  { className: 'dsd-inline' },
+                  h('input', {
+                    type: 'text',
+                    className: 'dsd-field',
+                    placeholder: t('manualFixAuthor'),
+                    value: replyChoice.author === undefined ? '' : replyChoice.author,
+                    onChange: (event) => patchCorrection(node.id, { author: event.target.value }),
+                  }),
+                  h(
+                    'select',
+                    {
+                      className: 'dsd-field',
+                      value: replyChoice.replyTo === undefined ? '' : replyChoice.replyTo,
+                      onChange: (event) => {
+                        const value = event.target.value
+                        patchCorrection(node.id, { replyTo: value })
+                      },
+                    },
+                    h('option', { value: '' }, t('manualRelationNone')),
+                    h('option', { value: 'none' }, t('manualFixReplyNone')),
+                    h('option', { value: 'root' }, t('manualFixReplyRoot')),
+                    ...((options_.candidates || []).map((candidate) =>
+                      h(
+                        'option',
+                        { key: candidate.id, value: candidate.id },
+                        `${candidate.id} ${candidate.author}：${candidate.excerpt}`,
+                      ),
+                    )),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsd-btn dsd-btn-ghost',
+                      onClick: () => patchCorrection(node.id, { unconfirmed: replyChoice.unconfirmed !== true }),
+                    },
+                    replyChoice.unconfirmed === true ? `✔ ${t('manualFixUnconfirmed')}` : t('manualFixUnconfirmed'),
+                  ),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsd-btn dsd-btn-ghost',
+                      onClick: () => patchCorrection(node.id, { localIdentity: '另一个人' }),
+                    },
+                    t('manualFixSplitIdentity'),
+                  ),
+                  options_.canPromote === true
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'dsd-btn dsd-btn-ghost',
+                          onClick: () => {
+                            const next = corrections.filter((entry) => entry.id !== node.id)
+                            setCorrections(next)
+                            void replayPreview(next)
+                            setTargetPostId('')
+                          },
+                        },
+                        t('manualFixMarkRoot'),
+                      )
+                    : null,
+                ),
+              ),
+        )
+      }
+
+      const structureOf = (data) => (data && data.structure ? data.structure : null)
+
+      const renderStructure = (structure, options) => {
+        if (structure == null) return null
+        const opts = options || {}
+        const matches = (node) =>
+          search.trim() === '' || node.author.toLowerCase().includes(search.trim().toLowerCase())
+        const list = structure.comments.filter(matches)
+        const rootMatches = matches(structure.root)
+        return h(
+          'div',
+          { className: 'dsd-sect' },
+          h('strong', null, t('manualStructure')),
+          h(
+            'p',
+            { className: 'dsd-hint' },
+            `${structure.stats.comments} ${t('manualComments')} · ${structure.stats.floors} 层 · ` +
+              `确定 ${structure.stats.stated} / 推测 ${structure.stats.inferred} / 未解析 ${structure.stats.unresolved}` +
+              (structure.stats.unconfirmed === 0 ? '' : ` / 你标为不确定 ${structure.stats.unconfirmed}`),
+          ),
+          structure.issues.length === 0
+            ? null
+            : h(
+                'ul',
+                { className: 'dsd-hint' },
+                ...structure.issues.map((issue, index) =>
+                  h('li', { key: `${issue.code}-${index}` }, issue.message),
+                ),
+              ),
+          h(
+            'div',
+            { className: 'dsd-inline' },
+            h('input', {
+              type: 'text',
+              className: 'dsd-field',
+              placeholder: t('manualSearch'),
+              value: search,
+              onChange: (event) => setSearch(event.target.value),
+            }),
+            h(
+              'button',
+              {
+                type: 'button',
+                className: 'dsd-btn dsd-btn-ghost',
+                onClick: () => {
+                  const text = JSON.stringify(structure, null, 2)
+                  setExported(text)
+                },
+              },
+              t('manualExportStructure'),
+            ),
+          ),
+          h('p', { className: 'dsd-hint' }, `${t('manualParticipants')}：${structure.participants.join('、')}`),
+          rootMatches ? nodeRow(structure.root, { selectable: false, canPromote: false, editable: false }) : null,
+          list.length === 0
+            ? h('p', { className: 'dsd-hint' }, t('manualSearchEmpty'))
+            : h(
+                'div',
+                null,
+                ...list.map((node) =>
+                  nodeRow(node, {
+                    selectable: true,
+                    canPromote: true,
+                    editable: opts.editable !== false,
+                    ...(opts.sessionId === undefined ? {} : { sessionId: opts.sessionId }),
+                    candidates: [structure.root, ...structure.comments].filter((other) => other.id !== node.id),
+                  }),
+                ),
+              ),
+          exported === ''
+            ? null
+            : h(
+                'pre',
+                { className: 'dsd-hint', style: { whiteSpace: 'pre-wrap', maxHeight: 200, overflow: 'auto' } },
+                exported,
+              ),
+        )
+      }
+
       const previewBlock =
         preview === null || preview.discussion === undefined
           ? null
@@ -4230,6 +4661,17 @@ window.__ModuleLoader__.load({
                     h('strong', null, t('manualIssues')),
                     h('ul', null, (preview.issues || []).map((issue, index) => h('li', { key: `${issue.code}-${index}` }, issue.message))),
                   ),
+              (preview.audit || []).length === 0
+                ? null
+                : h(
+                    'div',
+                    { className: 'dsd-hint' },
+                    h('strong', null, t('manualAudit')),
+                    h('ul', null, ...(preview.audit || []).map((entry, index) =>
+                      h('li', { key: `${entry.id}-${entry.field}-${index}` }, entry.note),
+                    )),
+                  ),
+              renderStructure(structureOf(preview), { editable: true }),
               h(
                 'p',
                 { className: 'dsd-hint dsd-hint-error' },
@@ -4259,6 +4701,7 @@ window.__ModuleLoader__.load({
                     className: 'dsd-btn',
                     disabled: running,
                     onClick: async () => {
+                      // 确认时把修正清单原样带上：这是「确认的数据 = 预览的数据」的实现方式。
                       const answer = await run('manual-confirm', {
                         kind,
                         content,
@@ -4268,9 +4711,11 @@ window.__ModuleLoader__.load({
                         ...(ownerName.trim() === '' ? {} : { ownerName: ownerName.trim() }),
                         ...(targetPostId.trim() === '' ? {} : { targetPostId: targetPostId.trim() }),
                         persona,
+                        ...(corrections.length === 0 ? {} : { corrections: correctionsPayload }),
                       })
                       if (answer && answer.ok === true) {
                         setPreview(null)
+                        setCorrections([])
                         await store.loadWorkbench(answer.sessionId)
                       }
                     },
@@ -4339,6 +4784,67 @@ window.__ModuleLoader__.load({
                   t('manualGenerate'),
                 ),
               ),
+              /**
+               * 已确认会话上的纠错入口（v0.2.31 §四）。
+               *
+               * ## 为什么改完必须重新分析
+               *
+               * 会话里的候选、`ownerKey`、对手、`disputeFloorPostId` 全是分析产物。
+               * 只改 `imported` 而不重跑分析，会得到一条「内容改了、结论还是旧的」会话，
+               * 而界面会显示修正已生效——用户于是对着一个不存在的人写回复。
+               *
+               * 服务端的 `manual-revise` 会清空候选并重跑分析；作废条数会回传到页面，
+               * 因为「刚才那段草稿没了」是用户必须知道的事。
+               */
+              flow.structure === undefined
+                ? null
+                : h(
+                    'div',
+                    { className: 'dsd-sect' },
+                    h('p', { className: 'dsd-hint' }, t('manualFixHint')),
+                    renderStructure(flow.structure, { editable: true, sessionId }),
+                    h(
+                      'div',
+                      { className: 'dsd-inline' },
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'dsd-btn',
+                          disabled: running || corrections.length === 0,
+                          onClick: async () => {
+                            const answer = await run('manual-revise', {
+                              sessionId,
+                              corrections: correctionsPayload,
+                            })
+                            if (answer && answer.ok === true) {
+                              setCorrections([])
+                              setCorrectionNote(
+                                `${t('manualReviseDone')}` +
+                                  (answer.discardedCandidates === 0
+                                    ? ''
+                                    : `；${t('manualDiscarded')} ${answer.discardedCandidates} 条`),
+                              )
+                              await store.loadWorkbench(sessionId)
+                            }
+                          },
+                        },
+                        t('manualRevise'),
+                      ),
+                      h('span', { className: 'dsd-hint' }, t('manualReviseHint')),
+                    ),
+                    correctionNote === '' ? null : h('p', { className: 'dsd-hint' }, correctionNote),
+                  ),
+              (flow.corrections || []).length === 0
+                ? null
+                : h(
+                    'div',
+                    { className: 'dsd-hint' },
+                    h('strong', null, t('manualAudit')),
+                    h('ul', null, ...(flow.corrections || []).map((entry, index) =>
+                      h('li', { key: `${entry.id}-${entry.field}-${index}` }, entry.note),
+                    )),
+                  ),
             )
 
       const candidates = (view && view.candidates) || []
@@ -4439,6 +4945,99 @@ window.__ModuleLoader__.load({
               h('p', { className: 'dsd-hint' }, t('manualNoPublish')),
             )
 
+      /**
+       * 目标上下文（v0.2.31 §五）。
+       *
+       * ## 为什么要给上下文，而不是只显示作者名
+       *
+       * 「回给谁」是离线流程里最容易搞错的一步：用户选了一个人，但他真正想回的
+       * 是那个人刚说的那句话。只显示作者名时，两个都叫「甲」的不同发言看起来
+       * 一模一样。上下文里有同一层的其他发言，用户能认出是哪一处。
+       */
+      const contextBlock =
+        context == null
+          ? null
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h('strong', null, t('manualTargetContext')),
+              h(
+                'p',
+                { className: 'dsd-hint' },
+                `${context.floorLabel} · ${context.threadTitle}`,
+              ),
+              h('p', null, `${context.author === undefined ? '（未知）' : context.author}：${context.text}`),
+              (context.siblings || []).length === 0
+                ? null
+                : h(
+                    'ul',
+                    { className: 'dsd-hint' },
+                    ...(context.siblings || []).map((entry) =>
+                      h('li', { key: entry.postId }, `${entry.author === undefined ? '（未知）' : entry.author}：${entry.excerpt}`),
+                    ),
+                  ),
+              h(
+                'div',
+                { className: 'dsd-inline' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn dsd-btn-ghost',
+                    onClick: () => setTargetPostId(context.postId),
+                  },
+                  t('manualPickTarget'),
+                ),
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn dsd-btn-ghost',
+                    onClick: () => setContext(null),
+                  },
+                  '关闭',
+                ),
+              ),
+            )
+
+      /**
+       * 候选对比（v0.2.31 §五）。
+       *
+       * 只列最近三条：更早的候选是对着更早的目标写的，把它们并排放在一起会让
+       * 用户以为它们是同一个问题的三个答案。每条都标明版本号与是否已确认。
+       */
+      const compareBlock =
+        candidates.length <= 1
+          ? null
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h('strong', null, t('manualCandidates')),
+              ...candidates.slice(-3).map((entry) =>
+                h(
+                  'div',
+                  { key: entry.replyId, className: 'dsd-sect' },
+                  h(
+                    'p',
+                    { className: 'dsd-hint' },
+                    `${t('manualCandidateN')} ${entry.candidateVersion}${entry.approved === true ? ' · 已确认' : ''}` +
+                      `${entry.securityDecision === undefined ? '' : ` · ${decisionLabel[entry.securityDecision] || entry.securityDecision}`}`,
+                  ),
+                  h('p', { style: { margin: '4px 0' } }, entry.text),
+                  h(
+                    'button',
+                    {
+                      type: 'button',
+                      className: 'dsd-btn dsd-btn-ghost',
+                      disabled: running,
+                      onClick: () => setDraft(entry.text),
+                    },
+                    t('manualUseThis'),
+                  ),
+                ),
+              ),
+            )
+
       return h(
         'div',
         { className: 'dsd-sect' },
@@ -4448,6 +5047,8 @@ window.__ModuleLoader__.load({
         form,
         previewBlock,
         stepBlock,
+        contextBlock,
+        compareBlock,
         candidateBlock,
       )
     }

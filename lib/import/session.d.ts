@@ -26,7 +26,8 @@ import type { CollectedThread } from '../collector.js';
 import type { Dispute } from '../analyzer.js';
 import type { StoredSession } from '../store.js';
 import type { ReplyContext, TargetSnapshot } from '../types.js';
-import type { ImportedComment, ImportedDiscussion } from './manual.js';
+import type { ImportedComment, ImportedDiscussion, ImportIssue } from './manual.js';
+import type { CorrectionAudit, ImportCorrections } from './corrections.js';
 /**
  * 落盘时的上限。
  *
@@ -50,16 +51,42 @@ export interface StoredImport {
         readonly text: string;
         readonly createdAt?: string;
     };
+    /** 原帖在原文里的样子（v0.2.31）。有它才能在预览里核对解析器有没有改原文。 */
+    readonly rootRaw?: string;
     readonly comments: readonly ImportedComment[];
     /** 因上限被丢掉的条数。0 表示全都存下了。 */
     readonly droppedComments: number;
     /** 被截断正文的条数。 */
     readonly truncatedComments: number;
+    /**
+     * 用户的修正清单（v0.2.31 §四）。
+     *
+     * ## 为什么存清单而不是存修正后的结果
+     *
+     * 存结果就只能回答「现在是什么样」；存清单还能回答「原来是什么样、谁改的、
+     * 改了什么」。而且清单更小，重放的结果也确定（`applyCorrections` 是纯函数）。
+     */
+    readonly corrections?: ImportCorrections;
 }
 /** 把导入内容压到可落盘的尺寸，并如实记录丢了多少。 */
 export declare function toStoredImport(discussion: ImportedDiscussion, now: string): StoredImport;
 /** 还原成解析层的形状，供重新投影使用。 */
 export declare function fromStoredImport(stored: StoredImport): ImportedDiscussion;
+/**
+ * 应用修正后的讨论。
+ *
+ * ## 唯一的入口
+ *
+ * 所有需要「真实的当前内容」的地方都必须走这里，而不是 `fromStoredImport`：
+ * 后者给的是**解析结果**，用户的修正不在里面。两处各读一个，就会出现
+ * 「分析用的是修正后的、目标校验用的是修正前的」——目标校验会立刻失败，
+ * 而错误消息会说是「内容被改动过」。
+ */
+export declare function correctedDiscussion(stored: StoredImport): {
+    readonly discussion: ImportedDiscussion;
+    readonly audit: readonly CorrectionAudit[];
+    readonly issues: readonly ImportIssue[];
+};
 /**
  * 会话的线程 id。
  *

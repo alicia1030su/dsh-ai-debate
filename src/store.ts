@@ -262,10 +262,42 @@ export interface StoredManualImport {
     readonly createdAt?: string
   }
   readonly comments: readonly StoredManualComment[]
+  /** 原帖在原文里的样子（v0.2.31）。用来在预览里核对解析结果。 */
+  readonly rootRaw?: string
+  /**
+   * 用户对这份内容的修正（v0.2.31 §四）。
+   *
+   * 与 `comments` 的分工：后者是**解析结果**，这个字段是**人说的话**。
+   * 读的时候两者叠加（`correctedDiscussion`），永远不合并写回——
+   * 合并之后就无法回答「插件当时看懂了什么」。
+   */
+  readonly corrections?: StoredImportCorrections
   /** 因上限没保存的条数。0 表示全都存下了。 */
   readonly droppedComments: number
   /** 正文被截断的条数。 */
   readonly truncatedComments: number
+}
+
+/**
+ * 落盘的修正清单。
+ *
+ * 字段与 `src/import/corrections.ts` 的 `ImportCorrections` 一一对应，
+ * 但这里刻意重新声明一遍而不是直接 import：
+ * `store.ts` 是会话文件格式的定义处，它不应该依赖解析层的实现文件。
+ * 两边不一致时编译会报错（`toStoredImport` 赋值处），所以不会静默漂移。
+ */
+export interface StoredImportCorrections {
+  readonly version: 1
+  readonly revisedAt: string
+  readonly entries: readonly {
+    readonly id: string
+    readonly author?: string
+    readonly localIdentity?: string
+    readonly replyTo?: string
+    readonly unconfirmed?: boolean
+  }[]
+  readonly rootFromCommentId?: string
+  readonly demoteRoot?: boolean
 }
 
 /** One discussion session, scoped to a single thread + owner + opponent. */export interface StoredSession {

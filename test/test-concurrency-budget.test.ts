@@ -71,6 +71,38 @@ test('每一个跑全量测试的工作流步骤都用同一个并发上限', ()
   }
 })
 
+test('发布脚本跑测试时也用同一个并发上限', () => {
+  /**
+   * ## 这一处漏了整整一版（v0.2.31）
+   *
+   * 上面的两条断言守着 `package.json` 与两个工作流，唯独漏掉了 `scripts/ship.mjs`
+   * ——而它恰好是交付链路上的**最后一道门**。于是出现了三条不同的测试命令：
+   * 本地 `npm test` 用 8、CI 用 8、ship 用默认值（本机 16）。
+   *
+   * 后果在 v0.2.31 实测到了：ship 报「测试失败（? 项）」，同一份套件单独跑却全绿。
+   * 原因是默认并发下有个真实 CLI 探测被拖过 20 秒超时，而同一台机器单独跑只要
+   * 4.5 秒。**这不是产品退化，是门槛自己在抖。**
+   *
+   * 断言写成「源码里出现 `--test-concurrency=8`」而不是解析 AST：
+   * 这个脚本只有一个地方跑测试，字符串足够，也让失败信息直指那一行。
+   */
+  const source = read('scripts/ship.mjs')
+  const lines = source.split(/\r?\n/).filter((line) => /'--test'/.test(line) || /"--test"/.test(line))
+  assert.ok(lines.length > 0, 'ship.mjs 里找不到跑测试的地方——这段逻辑被搬走了？请更新这条断言')
+  const usesFlag = /test-concurrency=\$\{TEST_CONCURRENCY\}|test-concurrency=8/.test(source)
+  assert.equal(
+    usesFlag,
+    true,
+    'ship.mjs 跑测试时没有限制并发：默认并发（=核数）在文件数超过 110 后会偶发整体停滞，' +
+      '而 ship 是最后一道门——它抖起来的表现是「测试失败」，不是「并发太高」',
+  )
+  assert.match(
+    source,
+    /const TEST_CONCURRENCY = 8/,
+    '并发上限在 ship.mjs 里必须是显式的常量，不能从别处读（读出来就能被悄悄改掉）',
+  )
+})
+
 test('发布工作流的 pipefail 没有被这次改动弄丢', () => {
   // 并发参数是加在同一行上的，改这一行很容易顺手把 `set -euo pipefail` 也动了。
   const source = read(join('.github', 'workflows', 'release.yml'))

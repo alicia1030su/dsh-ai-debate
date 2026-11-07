@@ -31,6 +31,8 @@ import type { ResolvedConfig } from '../config.js';
 import type { LlmClient } from '../llm.js';
 import type { DebateStore, StoredManualImport, StoredSession } from '../store.js';
 import type { CopyableReply } from './session.js';
+import type { CorrectionAudit } from './corrections.js';
+import type { ImportStructure } from './preview.js';
 import { MANUAL_CAPABILITIES, MANUAL_IMPORT } from './source.js';
 /**
  * 工作流的十一步。
@@ -128,6 +130,40 @@ export interface ManualSelectInput {
  * 它们是对着旧的主人和旧的对手写的。
  */
 export declare function reselectImport(store: DebateStore, input: ManualSelectInput): Promise<StepResult<ManualAnalyzeOutput>>;
+export interface ManualReviseInput {
+    readonly sessionId: string;
+    /** 修正清单。会经过 `sanitizeCorrections`，非法字段被丢弃。 */
+    readonly corrections: unknown;
+    readonly persona: PersonaConfig;
+    readonly config: ResolvedConfig;
+    readonly now?: () => number;
+}
+export interface ManualReviseOutput {
+    readonly session: StoredSession;
+    readonly structure: ImportStructure;
+    readonly audit: readonly CorrectionAudit[];
+    /** 因修正而作废的候选数。 */
+    readonly discardedCandidates: number;
+}
+/**
+ * 对已建好的会话应用一批修正。
+ *
+ * ## 与 `reselectImport` 的分工
+ *
+ * `reselectImport` 改的是「谁在说话、回给谁」（主人与目标），内容不变；
+ * 这里是内容本身被纠正了（作者认错、回复目标错了、原帖标错了）。
+ *
+ * 两者都必须重跑分析，而且都必须**清空候选**——原因一样：已有候选是对着
+ * 旧的那份讨论写的，而它的安全评估引用的是旧正文里的证据。留下它们，
+ * 「这段文字通过了安全评估」这句话就会指向一份已经不存在的讨论。
+ *
+ * ## 为什么不能靠改 `imported` 就完事
+ *
+ * `imported` 只存原始解析结果 + 修正清单。会话上的 `comments`、`ownerKey`、
+ * `disputeFloorPostId`、`triggerPostId` 全是分析产物，必须一起重算，
+ * 否则「会话显示的作者」与「分析用的作者」会分叉。
+ */
+export declare function reviseImport(store: DebateStore, input: ManualReviseInput): Promise<StepResult<ManualReviseOutput>>;
 export interface ManualGenerateInput {
     readonly sessionId: string;
     /** 要回复哪一条。不填时用会话记下的那一条。 */
