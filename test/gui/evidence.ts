@@ -38,13 +38,33 @@ export interface EvidenceSignal {
   readonly at: string
 }
 
-/** 一次运行的完整证据。 */
+/**
+ * 一次运行的完整证据。
+ *
+ * ## 为什么 `headSha` 不够，还要 `treeSha`
+ *
+ * `git rev-parse HEAD` 给的是**提交**。同一个代码树可以有多个提交（比如只加
+ * 一段注释、改一个文档），而验收要回答的是「哪一份文件内容被跑过了」。
+ * `git rev-parse HEAD^{tree}` 给的就是这个——它对文档改动敏感（文档改了树就变），
+ * 但对「同一条提交被 rebase」不敏感（内容没变，树没变）。
+ *
+ * 发布链路上核对的是 `testedTreeSha` 与最终代码树是否相同：相同就可以说
+ * 「这次验收覆盖了要发的代码」，不同就必须重跑。用提交号核对会在
+ * 「合并产生新提交但内容没变」时误报不一致，逼着人重跑一次没有意义的验收。
+ */
 export interface EvidenceBundle {
   /** 被验收的源码提交。取不到时写明原因，不写空字符串。 */
   readonly headSha: string
+  /** 该提交对应的 git tree。验收要对齐的是这个，不是提交号。 */
+  readonly testedTreeSha: string
   readonly headDirty: boolean
   readonly startedAt: string
   readonly endedAt: string
+  /** 脚本标识（与 script/scriptVersion 分开：这一组描述「用什么测的」）。 */
+  readonly testSuite: {
+    readonly script: string
+    readonly scriptVersion: string
+  }
   /** 脚本自身的标识：哪个脚本、哪个版本。 */
   readonly script: string
   readonly scriptVersion: string
@@ -179,13 +199,15 @@ export class EvidenceCollector {
    * 取不到时返回一个说明原因的值，**不返回空字符串**：空字符串在报告里会被
    * 渲染成「未知」，而「未知」很容易被读成「大概就是最新那个」。
    */
-  static headOf(cwd: string): { readonly sha: string; readonly dirty: boolean } {
+  static headOf(cwd: string): { readonly sha: string; readonly tree: string; readonly dirty: boolean } {
     try {
       const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8', shell: false }).trim()
+      const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd, encoding: 'utf8', shell: false }).trim()
       const status = execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', shell: false }).trim()
-      return { sha, dirty: status !== '' }
+      return { sha, tree, dirty: status !== '' }
     } catch (error) {
-      return { sha: `（取不到 HEAD：${(error as Error).message.split('\n')[0] ?? '未知'}）`, dirty: true }
+      const why = `（取不到 HEAD：${(error as Error).message.split('\n')[0] ?? '未知'}）`
+      return { sha: why, tree: why, dirty: true }
     }
   }
 
@@ -207,9 +229,11 @@ export class EvidenceCollector {
     const skipped = input.stages.filter((stage) => stage.status === 'skipped').length
     const bundle: EvidenceBundle = {
       headSha: head.sha,
+      testedTreeSha: head.tree,
       headDirty: head.dirty,
       startedAt: this.init.startedAt,
       endedAt: new Date().toISOString(),
+      testSuite: { script: this.init.script, scriptVersion: this.init.scriptVersion },
       script: this.init.script,
       scriptVersion: this.init.scriptVersion,
       pageUrl: this.init.pageUrl,
