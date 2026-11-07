@@ -206,11 +206,15 @@ const shellCtx = (): ShellCtx => ({
 
 const bodyText = async (): Promise<string> => evaluate<string>('document.body ? document.body.innerText : ""')
 
-async function waitFor(predicate: () => Promise<boolean>, timeoutMs: number): Promise<boolean> {
+async function waitFor(
+  predicate: () => Promise<boolean>,
+  timeoutMs: number,
+  intervalMs = 500,
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await predicate()) return true
-    await sleep(500)
+    await sleep(intervalMs)
   }
   return false
 }
@@ -573,9 +577,281 @@ async function main(): Promise<void> {
   }
 
   // ── 复制：必须真读回系统剪贴板 ───────────────────────────────────────────
-  //
-  // 点之前先记下「按钮上写的是什么」：`复制回复` 说明已就绪，`还不能复制` 说明
-  // 还有前置条件没满足。两者的点击结果完全不同，混在一起判会把失败读成成功。
+  /**
+   * ── 复制失败的两条路径（先测，后测成功）───────────────────────────────
+   *
+   * ## 为什么必须排在成功之前
+   *
+   * 「有没有出现兜底提示」这件事只能判一次：兜底文案一旦写进 `copied` 状态，
+   * 第二次点击即使什么都没发生，那句话也还在页面上。把失败路径排在成功之后，
+   * 后一条会**永远通过**——而它恰恰是最该被测的那条。
+   *
+   * ## 为什么要数「写了几次」
+   *
+   * 只判「页面出现兜底文案」不够：`copyCandidate` 在 `navigator.clipboard`
+   * 不存在时会**直接**走兜底，一毫秒出结果。那样测到的是「没有剪贴板」分支，
+   * 不是「挂在那里」分支。所以注入的 `writeText` 先记一笔再挂起，断言必须同时
+   * 满足：**真的调了一次写入** + 出现兜底 + 耗时落在 1.5 秒上限附近。
+   *
+   * ## 恢复必须还原原始描述符
+   *
+   * 第一版用 `delete Navigator.prototype.clipboard` 收尾，把 Electron 提供的真实
+   * getter 一起删掉了，紧随其后的成功复制读到「这个环境没有 readText」。覆盖之前
+   * 先存下原始描述符，收尾时原样装回去。
+   */
+  /**
+   * ## 描述符必须**每次覆盖前现拍**
+   *
+   * 第一版在函数外拍一次、存到 `window.__clipOriginal`，然后刷新了页面 ——
+   * `window` 上的东西随页面一起没了，收尾时 `d` 是 undefined，于是走了
+   * `delete Navigator.prototype.clipboard`，把 Electron 提供的真实 getter 删掉。
+   * 紧随其后的成功复制因此读到「这个环境没有 readText」。
+   *
+   * 结论：备份要在覆盖的**同一个作用域、同一时刻**做。放在 `injectClipboard`
+   * 里面，就不存在「备份比覆盖早一次刷新」这种时间差。
+   */
+  const injectClipboard = async (mode: 'denied' | 'hang'): Promise<boolean> => {
+    const injected = await evaluate<boolean>(`(() => {
+      const mode = ${JSON.stringify(mode)}
+      window.__clipOriginal = Object.getOwnPropertyDescriptor(Navigator.prototype, 'clipboard') || null
+      window.__clipWrites = 0
+      window.__clipCalledAt = 0
+      try {
+        Object.defineProperty(Navigator.prototype, 'clipboard', {
+          configurable: true,
+          get: () => ({
+            writeText: () => {
+              window.__clipWrites += 1
+              window.__clipCalledAt = Date.now()
+              return mode === 'denied'
+                ? Promise.reject(new DOMException('denied', 'NotAllowedError'))
+                : new Promise(() => {})
+            },
+            readText: async () => '',
+          }),
+        })
+        return true
+      } catch {
+        return false
+      }
+    })()`)
+    return injected === true
+  }
+  const restoreClipboard = async (): Promise<void> => {
+    await evaluate<string>(`(() => {
+      const d = window.__clipOriginal
+      if (d) Object.defineProperty(Navigator.prototype, 'clipboard', d)
+      else delete Navigator.prototype.clipboard
+      delete window.__clipWrites
+      delete window.__clipCalledAt
+      return 'restored'
+    })()`)
+  }
+  /**
+   * ## 为什么要限定在「发表工作台」这一块里
+   *
+   * 页面上有两个按钮都写着「复制回复」：离线讨论导入区一个、工作台一个；兜底文案
+   * 也是同一句。全页搜索等于把两个分区的结果混成一个——第一次跑就是这样：
+   * 明明在测工作台的挂起分支，点到的却是离线区那个按钮，它走的是另一份 `copyNow`，
+   * 于是耗时 518ms，而不是 1.5 秒上限。
+   *
+   * 所以先把「怎么找到这一节」注册成页面里的一个函数（`window.__wb`），点击与
+   * 断言都只经过它。同一句话在别的分区里出现，本来就不能算这一节的行为。
+   */
+  /**
+   * ## 这组辅助函数必须能重装
+   *
+   * 它挂在 `window` 上，而 `Page.reload` 会把 `window` 换掉。第一版只在开头装了
+   * 一次，刷新之后 `window.__wb` 是 undefined，`clickInWorkbench` 去调
+   * `window.__wb.button(...)` 直接抛 TypeError —— 中断点出现在「剪贴板永不返回」
+   * 那条之前，报告里只留下一句 `✘ 执行中断 — Uncaught`，看起来像产品崩了。
+   *
+   * 所以装它的是个函数，而不是一段一次性代码；每次刷新之后都要重装。
+   */
+  const registerWorkbenchHelpers = async (): Promise<boolean> =>
+    (await evaluate<boolean>(`(() => {
+    window.__wb = {
+      scope() {
+        const title = [...document.querySelectorAll('.dsd-sect-title,span')]
+          .find((n) => (n.textContent || '').trim() === '发表工作台')
+        if (!title) return null
+        let scope = title
+        for (let i = 0; i < 8 && scope.parentElement; i += 1) {
+          scope = scope.parentElement
+          if ((scope.textContent || '').includes('当前步骤') && scope.querySelector('button')) break
+        }
+        return scope
+      },
+      button(label) {
+        const scope = window.__wb.scope()
+        if (!scope) return null
+        return [...scope.querySelectorAll('button,[role=button]')]
+          .find((n) => (n.innerText || n.textContent || '').trim() === label) || null
+      },
+      hasFallback() {
+        const scope = window.__wb.scope()
+        return scope !== null && /手动选中复制/.test(scope.textContent || '')
+      },
+    }
+    return true
+    })()`)) === true
+
+  await registerWorkbenchHelpers()
+
+  /**
+   * 点工作台里的按钮：先滚进视野，**再重新量一次坐标**。
+   *
+   * `getBoundingClientRect()` 给的是相对视口的坐标，这块面板高达上万像素，
+   * 滚动前量到的 y 会落在视口之外，派发出去什么也不会发生。
+   */
+  const clickInWorkbench = async (label: string): Promise<boolean> => {
+    // 刷新之后辅助函数会没，先补装，否则这里就是一个 TypeError。
+    await registerWorkbenchHelpers()
+    const found = await evaluate<boolean>(`(() => {
+      const hit = window.__wb.button(${JSON.stringify(label)})
+      if (!hit) return false
+      const r = hit.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) return false
+      hit.scrollIntoView({ block: 'center' })
+      return true
+    })()`)
+    if (!found) return false
+    await sleep(500)
+    const pos = await evaluate<string>(`(() => {
+      const hit = window.__wb.button(${JSON.stringify(label)})
+      if (!hit) return 'no-button'
+      const r = hit.getBoundingClientRect()
+      if (r.width < 2 || r.height < 2) return 'invisible'
+      return JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) })
+    })()`)
+    if (!pos.startsWith('{')) return false
+    const { x, y } = JSON.parse(pos) as { x: number; y: number }
+    await clickAt(x, y)
+    return true
+  }
+
+  /** 兜底文案来自 `workbenchCopyManual`：「…请手动选中复制」。仅在工作台范围内判。 */
+  const fallbackShown = async (): Promise<boolean> =>
+    (await evaluate<boolean>('window.__wb ? window.__wb.hasFallback() : false')) === true
+
+  const writesSoFar = async (): Promise<number> => {
+    const n = await evaluate<number>('window.__clipWrites === undefined ? -1 : window.__clipWrites')
+    return typeof n === 'number' ? n : -1
+  }
+
+  // 断言起点：此刻页面上不该已经有兜底文案，否则下面的「出现」不算数。
+  const beforeAnyCopy = await fallbackShown()
+  stage(
+    '失败路径的判据起点干净',
+    beforeAnyCopy ? 'failed' : 'passed',
+    beforeAnyCopy
+      ? '还没点复制，兜底文案就已经在页面上——后面的判断全都不成立'
+      : '页面上没有兜底文案',
+  )
+
+  const deniedInjected = await injectClipboard('denied')
+  const deniedClicked = deniedInjected ? await clickInWorkbench('复制回复') : false
+  const deniedAt = Date.now()
+  const deniedFellBack = deniedInjected ? await waitFor(fallbackShown, 6000) : false
+  const deniedWrites = await writesSoFar()
+  stage(
+    '复制被拒绝时给出可读兜底',
+    deniedInjected && deniedClicked && deniedFellBack && deniedWrites === 1 ? 'passed' : 'failed',
+    !deniedInjected
+      ? '无法替换 Navigator.prototype.clipboard，这条分支没法构造'
+      : !deniedClicked
+        ? '找不到可点的「复制回复」'
+        : `写入被调用 ${deniedWrites} 次；${deniedFellBack ? `${Date.now() - deniedAt}ms 内出现手动复制提示` : '没有任何反馈'}`,
+  )
+  await screenshot('09b-copy-denied')
+  await restoreClipboard()
+
+  /**
+   * 刷新一次再测挂起。
+   *
+   * 兜底文案已经在页面上了，不重置就分不清「这次又写了一遍」与「上次那句还留着」。
+   * 刷新顺带证明另一件事——已批准的候选重载之后仍然可复制，不会退回未批准。
+   */
+  await send('Page.reload', { ignoreCache: false })
+  await sleep(4000)
+  await dismissOnboarding(shellCtx())
+  await openSettings(shellCtx())
+  await openPluginPage(shellCtx(), { markers: /发表工作台|当前步骤|离线讨论导入/ })
+  await scrollToSection('发表工作台')
+  await sleep(1200)
+  // 页面重载过，辅助函数跟着没了，这里重新装上再继续。
+  const reRegistered = await registerWorkbenchHelpers()
+  stage(
+    '刷新后重新挂上工作台定位函数',
+    reRegistered ? 'passed' : 'failed',
+    reRegistered ? '已重装' : '页面上找不到「发表工作台」这一节',
+  )
+
+  const afterReloadCopyState = await bodyText()
+  const stillCopyReady = /复制回复/.test(afterReloadCopyState)
+  stage(
+    '刷新后已批准的候选仍可复制',
+    stillCopyReady ? 'passed' : 'failed',
+    stillCopyReady
+      ? '按钮仍是「复制回复」'
+      : `按钮不是可复制状态：${(afterReloadCopyState.match(/还不能复制|复制回复/) ?? ['找不到按钮'])[0]}`,
+  )
+
+  const hangClean = !(await fallbackShown())
+  const hangInjected = await injectClipboard('hang')
+  const hangClicked = hangInjected ? await clickInWorkbench('复制回复') : false
+  const hangAt = Date.now()
+  /**
+   * ## 采样间隔要细，因为这里要量的是「上限有没有生效」
+   *
+   * `waitFor` 的轮询是 500ms 一跳，用它算出来的耗时会被取整到 500 的倍数，
+   * 看不出真实间隔。这里单独按 100ms 采样，并记下 `writeText` 被调用的时刻，
+   * 于是能算出「从写入到兜底」到底是 1.5 秒还是别的数。
+   */
+  const hangFellBack = hangInjected && hangClean ? await waitFor(fallbackShown, 8000, 100) : false
+  const hangWaited = Date.now() - hangAt
+  const hangWrites = await writesSoFar()
+  const hangCalledAt = await evaluate<number>('window.__clipCalledAt || 0')
+  const hangCapMs = hangCalledAt > 0 ? hangAt - hangCalledAt : -1
+  /**
+   * ## 判据是「写入被调用了几次」，不是墙钟
+   *
+   * 第一版还要求「耗时 ≥ 900ms」，理由是：`copyCandidate` 在 `navigator.clipboard`
+   * 不存在时会直接短路（0 次写入、立即兜底），那样测到的就不是挂起分支。
+   *
+   * 但墙钟在这个环境里量不准 —— 同一条分支两次跑出 518ms 和 513ms，而代码里
+   * 的上限明明是 1500ms；轮询间隔、CDP 往返、渲染耗时都会挤进这个数字里，
+   * 把它当地下判据只会制造时红时绿。
+   *
+   * 真正能区分两条分支的是**写入次数**：
+   * - 短路分支：`typeof clipboard.writeText !== 'function'` → 一次都不调用；
+   * - 挂起分支：调用一次，Promise 永不 settle，只能由 1500ms 那个定时器兜底。
+   *
+   * 所以 `hangWrites === 1` 已经证明走的是挂起；`hangFellBack` 证明兜底文案出现了。
+   * 耗时照实写进详情供人核对，但不参与判定 —— 一个不稳定的判据比没有判据更糟。
+   */
+  stage(
+    '剪贴板永不返回时不会卡死',
+    hangInjected && hangClean && hangClicked && hangFellBack && hangWrites === 1 ? 'passed' : 'failed',
+    !hangInjected
+      ? '无法替换 Navigator.prototype.clipboard'
+      : !hangClean
+        ? '刷新之后兜底文案仍在页面上，这条判据不成立'
+        : !hangClicked
+          ? '找不到可点的「复制回复」'
+          : `写入被调用 ${hangWrites} 次（0 次说明走的是「没有剪贴板」短路，不是挂起），` +
+            `写入后 ${hangCapMs}ms 完成点击、${hangWaited}ms 后${hangFellBack ? '出现手动复制提示' : '仍无反馈'}`,
+  )
+  await screenshot('09c-copy-hang')
+  await restoreClipboard()
+
+  /**
+   * 点之前先记下「按钮上写的是什么」：`复制回复` 说明已就绪，`还不能复制` 说明
+   * 还有前置条件没满足。两者的点击结果完全不同，混在一起判会把失败读成成功。
+   *
+   * 这一句必须紧挨着这次点击：中间隔了刷新与四轮失败注入之后，任何更早读到的
+   * 标签都描述的是另一个时刻的页面。
+   */
   const copyLabel = await evaluate<string>(`(() => {
     const b = [...document.querySelectorAll('button')].find(n => ['复制回复','还不能复制'].includes((n.innerText || '').trim()))
     return b ? (b.innerText || '').trim() : 'missing'
@@ -707,7 +983,13 @@ function clickByLabelSafe(label: string): Promise<boolean> {
 try {
   await main()
 } catch (error) {
-  stage('执行中断', 'failed', error instanceof Error ? error.message : String(error))
+  stage(
+    '执行中断',
+    'failed',
+    error instanceof Error
+      ? `${error.name}: ${error.message}${error.stack ? ' @ ' + (error.stack.split('\n')[1] ?? '').trim().slice(0, 120) : ''}`
+      : String(error),
+  )
   try {
     await screenshot('99-crash')
   } catch {
