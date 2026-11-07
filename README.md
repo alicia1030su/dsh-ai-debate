@@ -59,7 +59,7 @@
 | 平台 | 状态 | 说明 |
 | --- | --- | --- |
 | 百度贴吧 | ✅ **已实现；真实发表尚未完成闭环** | 帖子 / 楼层分页 / 部分楼中楼读取 / 分析 / 人工批准 / 发表接口 / 回读核对**都有实现和测试**；但本机 IP 对贴吧持续 403，**从未在真实已登录账号上完成一次受控发表** |
-| 微博 | 🟡 **本机曾有登录记录；令牌已失效，开发者认证与服务仍未开通** | URL 解析、ID 规范化、ConversationGraph 转换、官方 `weibo-cli` 适配层均已实现。v0.2.12 起 Provider 真正调用 CLI（探测 → `commands show` 校验参数 → 执行读取 → `projection.ts` 投影）。**v0.2.31 实测：本机存在登录记录（账号 `一个天真的矿哥`，`2026-11-05 15:12` 创建），但平台对该令牌返回 `401 invalid_grant`，`doctor` 第一行已变回 `×`；`developer_identity.status: unverified`、`service_status.kind: none`，因此 `commands list --available` 返回 `total: 75, available_count: 0`**，真实读取一次都没跑成。测试全部是命令级假 CLI 与投影层断言，不是端到端。剩下的三步见下文「微博真实读取需要的授权」 |
+| 微博 | 🟡 **本机只剩一条登录记录，保管库里已经没有令牌** | URL 解析、ID 规范化、ConversationGraph 转换、官方 `weibo-cli` 适配层均已实现。v0.2.12 起 Provider 真正调用 CLI（探测 → `commands show` 校验参数 → 执行读取 → `projection.ts` 投影）。**v0.2.32 实测（2026-11-07）：`credential-ref.json` 仍在（账号 `一个天真的矿哥`，`2026-11-05 15:12` 创建，storage=keychain），但 Windows 凭据保管库里 `weibo-cli` 的条目数为 0——令牌不是过期，是**没了**。`auth whoami` 直接报「缺少登录令牌」，`doctor` 三项全红。网络是通的（`open.weibo.com` 200，361ms），所以这不是网络问题**。真实读取一次都没跑成。测试全部是命令级假 CLI 与投影层断言，不是端到端。剩下的三步见下文「微博真实读取需要的授权」 |
 | 知乎 | ⬜ 规划阶段 | 只有能力清单，没有适配器 |
 | 小红书 | ⬜ 规划阶段 | 同上 |
 | 抖音 | ⬜ 规划阶段 | 同上 |
@@ -78,13 +78,37 @@
 > - 插件在诊断里区分「从没登录过」与「登录过但令牌不可用」，并给出不同的下一步；
 > - 每份诊断快照都带 `checkedAt`，超过 10 分钟就标注为旧结果。
 
-### 微博真实读取需要的授权（v0.2.31 实测记录）
+### 微博真实读取需要的授权（v0.2.32 实测记录）
 
 本机装的是 `@weibo-ai/weibo-cli@0.9.8`，并且**曾经完成过一次真实登录**
 （`~/.weibo-cli/credential-ref.json` 记录：账号 `一个天真的矿哥`，`2026-11-05 15:12` 创建，
 storage 为系统保管库）。
 
-`weibo-cli doctor` 的输出（v0.2.31 实测，**三项全红**）：
+> **v0.2.32 复测（2026-11-07）——与 v0.2.31 记录的差别，值得单独说**
+>
+> v0.2.31 记的是「令牌被平台判定失效（`401 invalid_grant`）」。这一轮重新查，
+> 事实变成：**保管库里根本没有条目**。
+>
+> | 检查 | 结果 |
+> | --- | --- |
+> | `~/.weibo-cli/credential-ref.json` | 存在，账号 `一个天真的矿哥`，`2026-11-05 15:12` |
+> | Windows `PasswordVault` 里 `resource=weibo-cli` 的条目数 | **0** |
+> | `~/.weibo-cli/credentials/`（加密文件回退） | 不存在 |
+> | `WEIBO_CLI_TOKEN` / `WEIBO_CLI_REFRESH_TOKEN` | 都没设 |
+> | `weibo-cli auth whoami` | `缺少登录令牌` |
+> | `open.weibo.com` 可达性 | **200，361ms** |
+>
+> 两条结论：
+>
+> 1. **不是网络问题**——`401 invalid_grant` 那次是「拿到了令牌但被拒」，这次连
+>    令牌都取不出来。把两者说成同一件事，会让人跑去排查网络或重新授权，而实际
+>    要做的是**重新登录**（授权已从本机消失，重试刷新没有意义）。
+> 2. **`credential-ref.json` 存在不等于凭据可用。** 这正是 v0.2.31 引入
+>    「三态措辞」的原因，但它当时只有两态可区分（有记录 / 没记录）。这一轮实测
+>    暴露出第三态：**记录在，保管库里的东西没了**。插件现在的措辞能覆盖它
+>    （「有登录记录但拿不到可用令牌」），但读者要自己从这句话里读出「去重新登录」。
+
+`weibo-cli doctor` 的输出（v0.2.32 复测，**三项全红**）：
 
 ```
 使用准备检查
@@ -297,14 +321,14 @@ POST https://open.weibo.com/cli/api/oauth/token
 ### 方式一：GitHub 直接安装（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.31
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.32
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
 ### 方式二：本地 .tgz 安装包
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.31) 下载
+从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.32) 下载
 `dsh-ai-debate-0.2.31.tgz`，或在仓库根目录自行构建：
 
 ```bash
@@ -312,7 +336,7 @@ node scripts/pack.mjs
 dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.31.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.2.31.zip`（含 `pnpm-lock.yaml` 与编译好的
+发布页同时附上 `dsh-ai-debate-source-0.2.32.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
 Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
