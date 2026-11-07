@@ -234,6 +234,21 @@ export interface FloorWalk {
      */
     readonly truncated: boolean;
     /**
+     * True when a page said it was a degraded subset of itself.
+     *
+     * Distinct from `truncated`: `truncated` is "the platform promised more and we
+     * did not get it"; `degraded` is "this page does not know what it does not
+     * know". v0.2.33: the weibo adapter reports `incomplete: true` when the paging
+     * cursor is missing or unrecognisable — the platform answered, but its answer
+     * carries no statement about whether the list ends here.
+     *
+     * Without this field the walk reported `repeated_page` + `complete: false` +
+     * `truncated: false` + **no issues at all** for that case: it knew it had not
+     * finished, and could not say why. Callers reading `truncated` alone saw
+     * "nothing is missing".
+     */
+    readonly degraded?: boolean;
+    /**
      * Human-readable notes about coverage, including signal contradictions.
      *
      * v0.2.2: the walk can end while platform signals disagree, and that fact is
