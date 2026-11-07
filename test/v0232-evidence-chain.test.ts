@@ -31,7 +31,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -155,33 +155,26 @@ test('有 skipped 时证据必须点名是哪几条：「跳过」不算通过',
  * 免得「报告里说一致、脚本里说重跑」。
  */
 function bindingVerdict(input: {
-  readonly testedTreeSha: string
-  readonly finalCodeTreeSha: string
+  readonly testedCodeSha: string
+  readonly finalCodeSha: string
   readonly headDirty: boolean
 }): { readonly ok: boolean; readonly why: string } {
   if (input.headDirty) {
     return { ok: false, why: '验收时工作树是脏的：跑的代码不在任何提交里，无法核对' }
   }
-  if (input.testedTreeSha !== input.finalCodeTreeSha) {
+  if (input.testedCodeSha !== input.finalCodeSha) {
     return {
       ok: false,
-      why: `代码树变了（测的是 ${input.testedTreeSha.slice(0, 8)}，最终是 ${input.finalCodeTreeSha.slice(0, 8)}）：必须重跑`,
+      why: `要发的代码变了（测的是 ${input.testedCodeSha.slice(0, 8)}，最终是 ${input.finalCodeSha.slice(0, 8)}）：必须重跑`,
     }
   }
-  return { ok: true, why: '一致' }
+  return { ok: true, why: '要发的代码与验收时一致' }
 }
 
-test('绑定判定：树相同且工作树干净才算一致', () => {
-  const same = bindingVerdict({ testedTreeSha: 'a'.repeat(40), finalCodeTreeSha: 'a'.repeat(40), headDirty: false })
-  assert.equal(same.ok, true)
-
-  const dirty = bindingVerdict({ testedTreeSha: 'a'.repeat(40), finalCodeTreeSha: 'a'.repeat(40), headDirty: true })
+test('绑定判定：工作树脏时一律不一致（跑的代码不在任何提交里）', () => {
+  const dirty = bindingVerdict({ testedCodeSha: 'a'.repeat(40), finalCodeSha: 'a'.repeat(40), headDirty: true })
   assert.equal(dirty.ok, false, '工作树脏时必须判不一致')
   assert.match(dirty.why, /脏|不在任何提交/, '理由要能让人知道该做什么')
-
-  const drifted = bindingVerdict({ testedTreeSha: 'a'.repeat(40), finalCodeTreeSha: 'b'.repeat(40), headDirty: false })
-  assert.equal(drifted.ok, false, '树不同必须判不一致')
-  assert.match(drifted.why, /重跑/, '理由必须给出动作')
 })
 
 test('打包产物的哈希可复算：同一条命令两次算同一个值', () => {
@@ -202,4 +195,83 @@ test('打包产物的哈希可复算：同一条命令两次算同一个值', ()
   const second = sha(file)
   assert.equal(first, second, '同一个文件两次哈希必须相同')
   assert.match(first, /^[0-9a-f]{64}$/)
+})
+
+test('代码指纹只看运行时会变的文件：改文档不动它，改 src 一定动它', () => {
+  /**
+   * ## 这一条解决的是自引用循环
+   *
+   * 用整棵树当判定标准时，写验收报告本身就会让树变——于是刚跑完的证据立刻
+   * 「过期」，重跑一次再写报告又过期。任务书把这叫「交付记录形成自我引用的循环」。
+   *
+   * 代码指纹只覆盖 `src`/`client`/`lib`/`package.json`：
+   * 文档、测试、脚本怎么改都不动它。判定问的是「要发的代码被跑过没有」，
+   * 不是「工作区一个字节都没动过」。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'v0232-codesha-'))
+  const run = (...args: string[]): string =>
+    execFileSync('git', args, {
+      cwd: dir,
+      encoding: 'utf8',
+      shell: false,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'test',
+        GIT_AUTHOR_EMAIL: 't@example.com',
+        GIT_COMMITTER_NAME: 'test',
+        GIT_COMMITTER_EMAIL: 't@example.com',
+      },
+    }).trim()
+
+  run('init', '-q')
+  mkdirSync(join(dir, 'src'), { recursive: true })
+  writeFileSync(join(dir, 'src', 'a.ts'), 'export const a = 1\n', 'utf8')
+  writeFileSync(join(dir, 'package.json'), '{}\n', 'utf8')
+  writeFileSync(join(dir, 'README.md'), '# one\n', 'utf8')
+  run('add', '-A')
+  run('commit', '-q', '-m', 'base')
+
+  const base = EvidenceCollector.codeShaOf(dir)
+  // 树号要用**这个临时仓库**的，不能用外层仓库的辅助函数
+  const treeOf = (): string => run('rev-parse', 'HEAD^{tree}')
+  const baseTree = treeOf()
+
+  // 只改文档
+  writeFileSync(join(dir, 'README.md'), '# two\n', 'utf8')
+  run('add', '-A')
+  run('commit', '-q', '-m', 'docs only')
+  assert.equal(
+    EvidenceCollector.codeShaOf(dir),
+    base,
+    '只改文档时代码指纹不能变——否则「写完报告证据就过期」的循环无法打破',
+  )
+  assert.notEqual(treeOf(), baseTree, '整棵树确实变了')
+
+  // 改 src
+  writeFileSync(join(dir, 'src', 'a.ts'), 'export const a = 2\n', 'utf8')
+  run('add', '-A')
+  run('commit', '-q', '-m', 'code change')
+  assert.notEqual(EvidenceCollector.codeShaOf(dir), base, '改 src 之后代码指纹必须变')
+})
+
+test('代码指纹可指定历史 revision：两份证据能互相比', () => {
+  /**
+   * 验收跑在提交 A，之后又有提交 B。要回答「B 有没有动过代码」，
+   * 就得能分别算出两者——只算 `HEAD` 的接口做不到这件事。
+   */
+  const first = EvidenceCollector.codeShaOf(repoRoot, 'HEAD')
+  assert.match(first, /^[0-9a-f]{40}$/)
+  assert.equal(EvidenceCollector.codeShaOf(repoRoot, 'HEAD'), first, '同一 revision 两次必须相同')
+})
+
+test('判定改用代码指纹：文档改动不要求重跑，代码改动要求重跑', () => {
+  const same = bindingVerdict({ testedCodeSha: 'a'.repeat(40), finalCodeSha: 'a'.repeat(40), headDirty: false })
+  assert.equal(same.ok, true)
+
+  const docDrift = bindingVerdict({ testedCodeSha: 'a'.repeat(40), finalCodeSha: 'a'.repeat(40), headDirty: false })
+  assert.equal(docDrift.ok, true, '代码没变就不必重跑，哪怕整棵树变了')
+
+  const codeDrift = bindingVerdict({ testedCodeSha: 'a'.repeat(40), finalCodeSha: 'b'.repeat(40), headDirty: false })
+  assert.equal(codeDrift.ok, false, '代码变了必须重跑')
+  assert.match(codeDrift.why, /重跑/)
 })

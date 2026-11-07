@@ -41,22 +41,40 @@ export interface EvidenceSignal {
 /**
  * 一次运行的完整证据。
  *
- * ## 为什么 `headSha` 不够，还要 `treeSha`
+ * ## 为什么要三个指纹，而不是一个
  *
- * `git rev-parse HEAD` 给的是**提交**。同一个代码树可以有多个提交（比如只加
- * 一段注释、改一个文档），而验收要回答的是「哪一份文件内容被跑过了」。
- * `git rev-parse HEAD^{tree}` 给的就是这个——它对文档改动敏感（文档改了树就变），
- * 但对「同一条提交被 rebase」不敏感（内容没变，树没变）。
+ * 这一版踩过完整的坑，按顺序记：
  *
- * 发布链路上核对的是 `testedTreeSha` 与最终代码树是否相同：相同就可以说
- * 「这次验收覆盖了要发的代码」，不同就必须重跑。用提交号核对会在
- * 「合并产生新提交但内容没变」时误报不一致，逼着人重跑一次没有意义的验收。
+ * 1. **只有 `headSha`（提交号）**：合并、rebase、空提交都会让它变，
+ *    但内容没变——于是「必须重跑」的告警天天响，响久了就没人看了。
+ * 2. **改成 `testedTreeSha`（整棵树）**：rebase 不再误报，但**改一个文档
+ *    也会让整棵树变**。而验收报告、CHANGELOG、README 恰恰在验收之后才会写。
+ *    于是刚跑完的证据立刻「过期」，陷入任务书点名的那个自引用循环：
+ *
+ *        写报告 → 树变 → 证据失效 → 重跑 → 再写报告 → 树又变
+ *
+ * 3. **现在分成两个**：
+ *    - `testedTreeSha`：整棵树。记录用，回答「当时工作区长什么样」；
+ *    - `testedCodeSha`：**只覆盖会影响运行结果的文件**
+ *      （`src/`、`client/`、`lib/`、`package.json`）。判定用，回答
+ *      「要发的代码被跑过没有」。
+ *
+ *    算法是 `git ls-tree -r <rev> -- <这些路径> | git hash-object --stdin`：
+ *    它只随这些路径的内容变，文档怎么改都不动。
+ *
+ * 判定的正确问法是「**要发的代码**被跑过没有」，不是「工作区一个字节都没动过」。
+ * 把后者当成标准，只会逼人为了让记录好看而少写文档。
  */
 export interface EvidenceBundle {
   /** 被验收的源码提交。取不到时写明原因，不写空字符串。 */
   readonly headSha: string
-  /** 该提交对应的 git tree。验收要对齐的是这个，不是提交号。 */
+  /** 该提交对应的整棵 git tree。记录用，不用于判定。 */
   readonly testedTreeSha: string
+  /**
+   * 影响运行结果的那些文件的指纹（`src/`、`client/`、`lib/`、`package.json`）。
+   * **判定用这个**：文档改动不会让它变，代码改动一定会。
+   */
+  readonly testedCodeSha: string
   readonly headDirty: boolean
   readonly startedAt: string
   readonly endedAt: string
@@ -199,16 +217,52 @@ export class EvidenceCollector {
    * 取不到时返回一个说明原因的值，**不返回空字符串**：空字符串在报告里会被
    * 渲染成「未知」，而「未知」很容易被读成「大概就是最新那个」。
    */
-  static headOf(cwd: string): { readonly sha: string; readonly tree: string; readonly dirty: boolean } {
+  static headOf(cwd: string): {
+    readonly sha: string
+    readonly tree: string
+    readonly code: string
+    readonly dirty: boolean
+  } {
     try {
       const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8', shell: false }).trim()
       const tree = execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { cwd, encoding: 'utf8', shell: false }).trim()
+      const code = EvidenceCollector.codeShaOf(cwd, 'HEAD')
       const status = execFileSync('git', ['status', '--porcelain'], { cwd, encoding: 'utf8', shell: false }).trim()
-      return { sha, tree, dirty: status !== '' }
+      return { sha, tree, code, dirty: status !== '' }
     } catch (error) {
       const why = `（取不到 HEAD：${(error as Error).message.split('\n')[0] ?? '未知'}）`
-      return { sha: why, tree: why, dirty: true }
+      return { sha: why, tree: why, code: why, dirty: true }
     }
+  }
+
+  /**
+   * 运行时代码的指纹，可以指定任意 revision 来比对。
+   *
+   * ## 为什么不是一个自定义的文件遍历
+   *
+   * 用 `git ls-tree` 而不是 `fs.readdir`：前者服从 `.gitignore`、只算已跟踪的文件，
+   * 与「这份提交要发什么」是同一套口径。自己遍历会把 `lib/` 里那些本地编译产物
+   * 与 `.map` 也搅进来，两人算出的值就对不上了。
+   *
+   * ## 路径清单是显式的，不是 `git ls-tree -r HEAD` 全量
+   *
+   * 全量就是整棵树——那就退回第 2 条那个循环了。这里只列会影响运行结果的：
+   * 插件本体（`src`/`lib`）、客户端脚本（`client`）、依赖与入口声明（`package.json`）。
+   * 文档、测试、脚本不计入：验收是对着**打包产物**跑的，那些文件不进包。
+   */
+  static codeShaOf(cwd: string, rev = 'HEAD'): string {
+    const paths = ['src', 'client', 'lib', 'package.json']
+    const listed = execFileSync('git', ['ls-tree', '-r', rev, '--', ...paths], {
+      cwd,
+      encoding: 'utf8',
+      shell: false,
+    })
+    return execFileSync('git', ['hash-object', '--stdin'], {
+      cwd,
+      encoding: 'utf8',
+      shell: false,
+      input: listed,
+    }).trim()
   }
 
   /**
@@ -230,6 +284,7 @@ export class EvidenceCollector {
     const bundle: EvidenceBundle = {
       headSha: head.sha,
       testedTreeSha: head.tree,
+      testedCodeSha: head.code,
       headDirty: head.dirty,
       startedAt: this.init.startedAt,
       endedAt: new Date().toISOString(),
