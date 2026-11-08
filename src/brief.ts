@@ -143,8 +143,14 @@ export interface DebateBrief {
    * - `opponentArguments` 是对方说过的论据，不论主人回没回。
    *
    * 两者可以有重叠，但用途不同：前者用于「补上欠的回答」，后者用于「直接反驳」。
+   *
+   * ## 为什么可选
+   *
+   * 与 `bystanders` 同一条理由：**缺省**表示「这条路径没有收集对方论据」（旧调用方），
+   * `[]` 表示「收集了，对方没给出可抽取的论据」。把两者合成一个空数组，会让
+   * 「我们没看」和「对方没说过」变成同一句话。
    */
-  readonly opponentArguments: readonly BriefArgument[]
+  readonly opponentArguments?: readonly BriefArgument[]
   readonly challenges: readonly BriefChallenge[]
   /**
    * Questions the **opponent** put to the owner that the owner never answered.

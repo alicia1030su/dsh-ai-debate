@@ -17,8 +17,8 @@ import test from 'node:test'
 
 import { buildBrief, renderBriefCompact } from '../lib/brief-builder.js'
 import { renderBrief, validateBrief } from '../lib/brief.js'
-import { analyzeDispute } from '../lib/analyzer.js'
-import type { CollectedThread, OwnerIdentity } from '../lib/types.js'
+import { analyzeDispute, type OwnerIdentity } from '../lib/analyzer.js'
+import type { CollectedThread } from '../lib/collector.js'
 
 /** 一条微博形状的讨论：主人发了正文，评论里在吵。 */
 function thread(): CollectedThread {
@@ -76,8 +76,9 @@ test('对方的多条论据都进简报，且各自带自己的 postId', () => {
   const dispute = analyzeDispute(collected, owner, { postId: '8002' })
   const { brief } = buildBrief({ dispute, platform: 'weibo', threadId: '8001', collected })
 
-  assert.ok(brief.opponentArguments.length >= 2, `期望至少两条对方论据，实际 ${brief.opponentArguments.length}`)
-  for (const argument of brief.opponentArguments) {
+  const opponentArguments = brief.opponentArguments ?? []
+  assert.ok(opponentArguments.length >= 2, `期望至少两条对方论据，实际 ${opponentArguments.length}`)
+  for (const argument of opponentArguments) {
     assert.ok(argument.evidence.length > 0, `论据「${argument.claim}」没有出处`)
     assert.ok(
       ['8002', '8003'].includes(argument.evidence[0]!),
@@ -91,7 +92,7 @@ test('主人的论据里不出现对方的话，反之亦然', () => {
   const dispute = analyzeDispute(collected, owner, { postId: '8002' })
   const { brief } = buildBrief({ dispute, platform: 'weibo', threadId: '8001', collected })
 
-  const opponentTexts = brief.opponentArguments.map((item) => item.claim).join('\n')
+  const opponentTexts = (brief.opponentArguments ?? []).map((item) => item.claim).join('\n')
   const ownerTexts = brief.arguments.map((item) => item.claim).join('\n')
 
   // 对方说的是「成本至少翻一倍」，主人说的是「预算我算过」——两边的关键词不能串。
