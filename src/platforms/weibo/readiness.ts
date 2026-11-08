@@ -231,6 +231,22 @@ export interface ReadinessProbe {
     readonly recordedAt?: string
     readonly storage?: string
     readonly reason?: string
+    /** 本进程看到的凭据环境（v0.2.34）。 */
+    readonly env?: 'production' | 'development'
+    /** 本进程实际查找的配置目录（路径本身不含秘密）。 */
+    readonly configDir?: string
+    /** 当前环境没有记录、另一套有：这就是「登录状态消失」的共同形状。 */
+    readonly otherEnv?: {
+      readonly env: 'production' | 'development'
+      readonly recordedAt?: string
+      readonly username?: string
+    }
+    /** 刷新锁的存在性。新鲜（stale=false）说明另一个进程正在刷新。 */
+    readonly refreshLock?: {
+      readonly present: boolean
+      readonly ageMs?: number
+      readonly stale?: boolean
+    }
   }
   /**
    * 授权主机的可达性（v0.2.33 §六）。
@@ -326,6 +342,37 @@ function loginCheck(
   if (credential === undefined) return fallback
 
   if (credential.state === 'absent') {
+    /**
+     * ## 「没登录」与「找错目录」（v0.2.34）
+     *
+     * CLI 用 `NODE_ENV` 把凭据分成两套互不可见的目录。本插件用 `execFile` 起子进程，
+     * 默认继承宿主环境；宿主是开发构建时，子进程会去 `~/.weibo-cli-dev` 找一个从没
+     * 存在过的记录，然后如实回答「缺少登录令牌」。
+     *
+     * 这时候面板如果说「从来没有完成过 OAuth 登录」，主人会觉得它在撒谎——他十二
+     * 小时前刚扫过码。所以先看另一套环境：如果那儿有记录，就把话说清楚，并说明
+     * 插件已经让子进程改用那一套（`credentialEnvForCli`），不需要主人做任何事。
+     */
+    if (credential.otherEnv !== undefined) {
+      const when =
+        credential.otherEnv.recordedAt === undefined
+          ? ''
+          : `，记录于 ${credential.otherEnv.recordedAt.slice(0, 16).replace('T', ' ')}`
+      const who = credential.otherEnv.username === undefined ? '' : `（账号 ${credential.otherEnv.username}）`
+      return {
+        id: 'login',
+        title: 'OAuth 登录',
+        state: 'blocked',
+        detail:
+          `登录记录在 **${credential.otherEnv.env}** 那一套里${who}${when}，而当前进程看到的是 ` +
+          `${credential.env ?? 'production'}。CLI 用 NODE_ENV 把两套凭据完全隔开，所以刚才那次读取` +
+          '去错了目录，报成了「缺少登录令牌」。',
+        next: [
+          '不需要重新登录：插件已让 weibo-cli 子进程改用记录所在的那一套环境',
+          '如果这一项仍然显示 ×，请把当前宿主进程的 NODE_ENV 与应用日志一并提供给维护者',
+        ],
+      }
+    }
     return {
       id: 'login',
       title: 'OAuth 登录',
@@ -358,6 +405,35 @@ function loginCheck(
     const network = probe.network
     const reachable = network?.state === 'reachable'
     const unreachable = network?.state === 'unreachable'
+
+    /**
+     * ## 先排除「另一个进程正在刷新」（v0.2.34）
+     *
+     * CLI 的每次刷新都要拿一把文件锁，等 15 秒拿不到就 `catch` 掉异常返回 null，
+     * 然后打印「缺少登录令牌」。而一次刷新要在持锁期间做两次 PowerShell 保管库
+     * 访问（本机实测读 1876ms、写 3597ms），所以三个子进程同时要令牌时，第三个
+     * 会正好等到超时。
+     *
+     * 判据是**锁还在且没过期**：如果锁已经消失，说明那次刷新结束了，这条不是原因。
+     * 这一条排在网络之前，因为它的下一步是「等一下再试」，而重新登录对它是无效动作。
+     */
+    const lock = credential.refreshLock
+    if (lock?.present === true && lock.stale !== true) {
+      const age = lock.ageMs === undefined ? '' : `（已存在 ${Math.round(lock.ageMs / 1000)} 秒）`
+      return {
+        id: 'login',
+        title: 'OAuth 登录',
+        state: 'blocked',
+        detail:
+          `本机有登录记录${who}${when}，但此刻**另一个 weibo-cli 进程正在刷新令牌**${age}。` +
+          'CLI 的刷新是串行的：前一个进程持锁期间，后面的进程最多等 15 秒，超时就返回' +
+          '「缺少登录令牌」——那句话在这里不代表登录失效。',
+        next: [
+          '等几秒后重新点一次「检查状态」，不需要重新登录',
+          '如果每次检查都停在这里，说明有僵死的 weibo-cli 进程占着锁，重启 DSH 即可清掉',
+        ],
+      }
+    }
 
     if (reachable) {
       return {

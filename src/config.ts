@@ -140,6 +140,17 @@ export const Config = z.object({
   llmApiKey: z.string().role('secret').default('').volatile(),
   /** Model name. */
   llmModel: z.string().default('').volatile(),
+  /**
+   * 模型接口的请求形状（v0.2.34 §3.1）。
+   *
+   * `chat` = `/chat/completions`（读 `choices[0].message.content`）；
+   * `responses` = `/responses`（读 `output_text` 或 `output[].content[].text`）。
+   *
+   * 为什么要人填：同一个 Base URL 上两种协议都可能有，而它们的失败方式不同 ——
+   * 协议填错时对方通常返回 200 但结构不对，看起来像「模型没说话」。靠名字猜
+   * （例如「gpt-5 大概是 responses」）会在换模型的那天悄悄坏掉。
+   */
+  llmProtocol: z.union([z.const('chat'), z.const('responses')]).default('chat').volatile(),
   /** Per-request timeout. */
   llmTimeoutMs: z.number().min(1000).max(600000).default(120000).volatile(),
   /**
@@ -250,6 +261,7 @@ export const DEFAULT_CONFIG = {
   llmBaseUrl: '',
   llmApiKey: '',
   llmModel: '',
+  llmProtocol: 'chat' as 'chat' | 'responses',
   llmTimeoutMs: 120000,
   llmRetries: 0,
   llmTemperature: 0.4,
@@ -347,6 +359,7 @@ export function resolveConfig(input: unknown): ResolvedConfig {
     llmBaseUrl: readString(raw.llmBaseUrl, '').trim(),
     llmApiKey: readString(raw.llmApiKey, '').trim(),
     llmModel: readString(raw.llmModel, '').trim(),
+    llmProtocol: readString(raw.llmProtocol, DEFAULT_CONFIG.llmProtocol) === 'responses' ? ('responses' as const) : ('chat' as const),
     llmTimeoutMs: readNumber(raw.llmTimeoutMs, DEFAULT_CONFIG.llmTimeoutMs),
     llmRetries: clampNumber(readNumber(raw.llmRetries, DEFAULT_CONFIG.llmRetries), 0, 4, DEFAULT_CONFIG.llmRetries),
     llmTemperature: clampNumber(

@@ -90,6 +90,21 @@ export interface OpenAiClientOptions {
   readonly baseUrl: string
   readonly apiKey: string
   readonly model: string
+  /**
+   * 用哪一套请求/响应形状（v0.2.34）。
+   *
+   * ## 为什么必须显式配置，而不是「看起来像就猜」
+   *
+   * 同一个 Base URL 上可能同时挂着 `/chat/completions` 与 `/responses`，而两家
+   * 的 JSON 形状完全不同：前者读 `choices[0].message.content`，后者读
+   * `output_text`（或 `output[].content[].text`）。用返回体去猜「这大概是哪一种」
+   * 在成功时看不出问题，在**失败时会把「协议不对」报成「模型没说话」**——
+   * 那正是最难查的一类故障。
+   *
+   * 所以这里要求调用方说清楚。默认 `chat`：它是最普遍的兼容形状，也是 v0.2.33
+   * 之前唯一支持的形状，升级不该改变既有部署的行为。
+   */
+  readonly protocol?: 'chat' | 'responses'
   readonly timeoutMs?: number
   readonly fetchImpl?: typeof fetch
   /**
@@ -207,6 +222,8 @@ export class OpenAiCompatibleClient implements LlmClient {
     if (!baseUrl) throw new LlmError('没有配置模型接口地址（baseUrl）', 'unavailable')
     if (!model) throw new LlmError('没有配置模型名称（model）', 'unavailable')
 
+    const protocol = this.options.protocol ?? 'chat'
+
     const messages: LlmMessage[] = []
     if (request.system) messages.push({ role: 'system', content: request.system })
     messages.push(...request.messages)
@@ -217,60 +234,26 @@ export class OpenAiCompatibleClient implements LlmClient {
     request.signal?.addEventListener('abort', onAbort, { once: true })
 
     try {
-      const response = await this.fetchImpl(`${baseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      const response = await this.fetchImpl(`${baseUrl.replace(/\/+$/, '')}/${protocol === 'responses' ? 'responses' : 'chat/completions'}`, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
           ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}),
         },
-        body: JSON.stringify({
-          model,
-          messages,
-          temperature: request.temperature ?? 0.8,
-          max_tokens: request.maxTokens ?? 900,
-        }),
+        body: JSON.stringify(
+          protocol === 'responses'
+            ? responsesBody(model, messages, request)
+            : chatBody(model, messages, request),
+        ),
         signal: controller.signal,
       })
 
       const raw = await response.text()
       if (!response.ok) throw classifyHttpFailure(response.status, raw)
 
-      let parsed: {
-        choices?: { message?: { content?: string }; finish_reason?: string }[]
-        usage?: { prompt_tokens?: number; completion_tokens?: number }
-      }
-      try {
-        parsed = JSON.parse(raw)
-      } catch {
-        throw new LlmError(`模型返回了非 JSON 内容：${raw.slice(0, 160)}`, 'bad_response')
-      }
+      const parsed = parseJsonBody(raw)
 
-      // A 200 with no `choices` is a response the caller cannot use, and saying "empty
-      // content" hides that the *shape* was wrong — which is the difference between "the
-      // model had nothing to say" and "this endpoint is not a chat-completions API".
-      if (!Array.isArray(parsed.choices)) {
-        throw new LlmError(
-          '模型响应缺少 choices 字段：这个地址可能不是 chat/completions 接口，或协议不兼容',
-          'bad_response',
-        )
-      }
-
-      const choice = parsed.choices[0]
-      const text = choice?.message?.content ?? ''
-      if (!text.trim()) throw new LlmError('模型返回了空内容', 'bad_response')
-
-      // `finish_reason: 'length'` means the provider stopped at the token cap. The bytes we
-      // got are real, and half a sentence can still parse as a plausible reply — which is
-      // exactly why this must be reported rather than left for the content check to guess.
-      const finishReason = typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined
-      return {
-        text,
-        inputTokens: parsed.usage?.prompt_tokens,
-        outputTokens: parsed.usage?.completion_tokens,
-        model,
-        ...(finishReason === undefined ? {} : { finishReason }),
-        ...(finishReason === 'length' ? { truncated: true } : {}),
-      }
+      return protocol === 'responses' ? readResponsesBody(parsed, model) : readChatBody(parsed, model)
     } catch (error) {
       if (error instanceof LlmError) throw error
       const err = error as { name?: string; message?: string }
@@ -282,6 +265,131 @@ export class OpenAiCompatibleClient implements LlmClient {
       clearTimeout(timer)
       request.signal?.removeEventListener('abort', onAbort)
     }
+  }
+}
+
+/** chat/completions 的请求体。 */
+function chatBody(model: string, messages: readonly LlmMessage[], request: LlmRequest): Record<string, unknown> {
+  return {
+    model,
+    messages,
+    temperature: request.temperature ?? 0.8,
+    max_tokens: request.maxTokens ?? 900,
+  }
+}
+
+/**
+ * Responses 协议的请求体。
+ *
+ * ## 只映射我们真的会用的字段
+ *
+ * `instructions` 对应 system，`input` 对应对话，`max_output_tokens` 对应输出上限。
+ * 不猜别的字段：多传一个对方不认的键，有些网关会整条拒绝，而错误信息通常
+ * 只会说 400。
+ */
+function responsesBody(model: string, messages: readonly LlmMessage[], request: LlmRequest): Record<string, unknown> {
+  const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n')
+  const rest = messages.filter((m) => m.role !== 'system')
+  return {
+    model,
+    ...(system === '' ? {} : { instructions: system }),
+    input: rest.map((m) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: [{ type: 'input_text', text: m.content }],
+    })),
+    temperature: request.temperature ?? 0.8,
+    max_output_tokens: request.maxTokens ?? 900,
+  }
+}
+
+function parseJsonBody(raw: string): Record<string, unknown> {
+  try {
+    return JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    throw new LlmError(`模型返回了非 JSON 内容：${raw.slice(0, 160)}`, 'bad_response')
+  }
+}
+
+/** 读 chat/completions 的返回体。 */
+function readChatBody(parsed: Record<string, unknown>, model: string): LlmResponse {
+  const choices = parsed.choices
+  // A 200 with no `choices` is a response the caller cannot use, and saying "empty
+  // content" hides that the *shape* was wrong — which is the difference between "the
+  // model had nothing to say" and "this endpoint is not a chat-completions API".
+  if (!Array.isArray(choices)) {
+    throw new LlmError(
+      '模型响应缺少 choices 字段：这个地址可能不是 chat/completions 接口；如果它实现的是 Responses 协议，请把协议改成 responses',
+      'bad_response',
+    )
+  }
+  const choice = choices[0] as { message?: { content?: string }; finish_reason?: string } | undefined
+  const text = choice?.message?.content ?? ''
+  if (!text.trim()) throw new LlmError('模型返回了空内容', 'bad_response')
+  const usage = parsed.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined
+  const finishReason = typeof choice?.finish_reason === 'string' ? choice.finish_reason : undefined
+  return {
+    text,
+    inputTokens: usage?.prompt_tokens,
+    outputTokens: usage?.completion_tokens,
+    model,
+    ...(finishReason === undefined ? {} : { finishReason }),
+    ...(finishReason === 'length' ? { truncated: true } : {}),
+  }
+}
+
+/**
+ * 读 Responses 的返回体。
+ *
+ * 两种形状都要认：
+ * - SDK 风格：顶层 `output_text` 直接是字符串；
+ * - 原始风格：`output[]` 里每一项的 `content[]` 里是 `{type:'output_text', text}`。
+ *
+ * 空 `output` 数组是「模型没产出」，不是协议错 —— 这两件事的下一步不同：
+ * 前者该改提示词或放宽上限，后者该改配置。
+ */
+function readResponsesBody(parsed: Record<string, unknown>, model: string): LlmResponse {
+  const direct = parsed.output_text
+  let text = typeof direct === 'string' ? direct : ''
+
+  if (text.trim() === '' && Array.isArray(parsed.output)) {
+    const pieces: string[] = []
+    for (const item of parsed.output) {
+      const content = (item as { content?: unknown }).content
+      if (!Array.isArray(content)) continue
+      for (const part of content) {
+        const chunk = part as { type?: string; text?: string }
+        if (typeof chunk.text === 'string' && (chunk.type === 'output_text' || chunk.type === undefined)) {
+          pieces.push(chunk.text)
+        }
+      }
+    }
+    text = pieces.join('')
+  }
+
+  // 连 output 都没有 → 这不是 Responses 返回体，说明配置指错了地方。
+  if (text === '' && !Array.isArray(parsed.output)) {
+    throw new LlmError(
+      '模型响应里既没有 output_text 也没有 output 数组：这个地址可能不是 Responses 接口；' +
+        '如果它实现的是 chat/completions，请把协议改成 chat',
+      'bad_response',
+    )
+  }
+  if (text.trim() === '') throw new LlmError('模型返回了空内容', 'bad_response')
+
+  const usage = parsed.usage as
+    | { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number }
+    | undefined
+  const status = parsed.status
+  const incomplete = parsed.incomplete_details as { reason?: string } | undefined
+  const truncated = status === 'incomplete' && (incomplete?.reason === 'max_output_tokens' || incomplete?.reason === 'length')
+
+  return {
+    text,
+    inputTokens: usage?.input_tokens ?? usage?.prompt_tokens,
+    outputTokens: usage?.output_tokens ?? usage?.completion_tokens,
+    model,
+    ...(typeof status === 'string' ? { finishReason: status === 'incomplete' ? (incomplete?.reason ?? 'incomplete') : status } : {}),
+    ...(truncated ? { truncated: true } : {}),
   }
 }
 

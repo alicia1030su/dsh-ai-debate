@@ -103,7 +103,8 @@ export async function previewPersonas(config: ResolvedConfig): Promise<readonly 
 export async function testModel(runtime: Runtime, config: ResolvedConfig): Promise<ModelProbe> {
   const baseUrl = config.llmBaseUrl
   const model = config.llmModel
-  const protocol = 'chat/completions'
+  // 报告的是**实际配置**的协议，不是写死的字符串（v0.2.34 §3.2）。
+  const protocol = config.llmProtocol === 'responses' ? 'responses' : 'chat/completions'
   if (!baseUrl || !model) {
     return {
       ok: false,
