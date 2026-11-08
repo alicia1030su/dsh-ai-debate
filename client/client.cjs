@@ -379,6 +379,14 @@ window.__ModuleLoader__.load({
       manualTargetPick: '要回复哪一条',
       manualPersonaPick: '人格',
       manualGenerate: '生成候选回复',
+      manualCompareAll: '比较四种人格（4 次模型调用）',
+      manualCompareHint: '会连续发四次模型请求，每一次都计入你的模型额度。取消后已发出的那一次仍会完成，但结果不会写进会话。',
+      manualCompareCancel: '取消比较',
+      manualCompareResult: '四种人格比较',
+      manualCompareMetrics: '耗时 {ms} · {tokens}',
+      manualCompareFailed: '这一条没生成出来：{reason}',
+      manualCompareSkipped: '因取消未发起：{list}',
+      manualPersonaUnknown: '人格未记录',
       manualEdit: '正文（可以直接改）',
       manualSave: '保存并重新评估',
       manualApprove: '人工确认',
@@ -887,6 +895,14 @@ window.__ModuleLoader__.load({
       manualTargetPick: 'Which comment to answer',
       manualPersonaPick: 'Persona',
       manualGenerate: 'Generate candidate',
+      manualCompareAll: 'Compare all four personas (4 model calls)',
+      manualCompareHint: 'This sends four model requests in a row; each one counts against your model quota. Cancelling stops the next ones; the one already sent still finishes, and its result is not written to the session.',
+      manualCompareCancel: 'Cancel the comparison',
+      manualCompareResult: 'Persona comparison',
+      manualCompareMetrics: '{ms} ms · {tokens}',
+      manualCompareFailed: 'This one did not come out: {reason}',
+      manualCompareSkipped: 'Not started because you cancelled: {list}',
+      manualPersonaUnknown: 'Persona not recorded',
       manualEdit: 'Text (editable)',
       manualSave: 'Save and re-assess',
       manualApprove: 'Confirm by hand',
@@ -4527,6 +4543,9 @@ window.__ModuleLoader__.load({
        * 同一次计算的结果，而不是两次「应该一样」的计算。
        */
       const [corrections, setCorrections] = useState([])
+      /** 四种人格比较的结果与「正在跑」标记（v0.2.37 §7）。 */
+      const [manualCompare, setManualCompare] = useState(null)
+      const [comparing, setComparing] = useState(false)
       const [correctionNote, setCorrectionNote] = useState('')
       const [search, setSearch] = useState('')
       const [expanded, setExpanded] = useState({})
@@ -5188,6 +5207,57 @@ window.__ModuleLoader__.load({
                 ),
               ),
               /**
+               * 四种人格比较（v0.2.37 §7）。
+               *
+               * 单独一行、单独按钮、按钮上写清「4 次模型调用」：它不是「生成」的一个
+               * 选项，而是一次**要花四次额度**的决定。
+               */
+              h(
+                'div',
+                { className: 'dsd-inline' },
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    className: 'dsd-btn dsd-btn-ghost',
+                    disabled: running || comparing,
+                    onClick: async () => {
+                      setComparing(true)
+                      setManualCompare(null)
+                      try {
+                        const answer = await store.runManualAction('manual-compare', {
+                          sessionId,
+                          ...(targetPostId.trim() === '' ? {} : { targetPostId: targetPostId.trim() }),
+                        })
+                        if (answer && Array.isArray(answer.rows)) {
+                          setManualCompare(answer)
+                        } else {
+                          setError(String((answer && answer.message) || '比较失败'))
+                        }
+                      } finally {
+                        setComparing(false)
+                        await store.loadWorkbench(sessionId)
+                      }
+                    },
+                  },
+                  comparing ? t('testing') : t('manualCompareAll'),
+                ),
+                comparing
+                  ? h(
+                      'button',
+                      {
+                        type: 'button',
+                        className: 'dsd-btn dsd-btn-ghost',
+                        onClick: async () => {
+                          await store.runManualAction('manual-cancel-compare', { sessionId })
+                        },
+                      },
+                      t('manualCompareCancel'),
+                    )
+                  : null,
+              ),
+              h('p', { className: 'dsd-hint', style: { marginTop: 0 } }, t('manualCompareHint')),
+              /**
                * 已确认会话上的纠错入口（v0.2.31 §四）。
                *
                * ## 为什么改完必须重新分析
@@ -5409,6 +5479,75 @@ window.__ModuleLoader__.load({
        * 只列最近三条：更早的候选是对着更早的目标写的，把它们并排放在一起会让
        * 用户以为它们是同一个问题的三个答案。每条都标明版本号与是否已确认。
        */
+      /**
+       * 四种人格比较（v0.2.37 §7）。
+       *
+       * ## 为什么默认不生成
+       *
+       * 一次点击是**四次真实模型调用**，都要计费。所以按钮上直接写「4 次模型调用」，
+       * 并且在说明里点明「取消后已发出的那一次仍会完成」——那句话如果不写，用户点了
+       * 取消却看到额度还是被扣了一次，会认为取消键是假的。
+       */
+      const compareResult = manualCompare
+      const compareRowBlock =
+        compareResult === null || compareResult === undefined
+          ? null
+          : h(
+              'div',
+              { className: 'dsd-sect' },
+              h('strong', null, t('manualCompareResult')),
+              h('p', { className: 'dsd-hint', style: { margin: '4px 0' } }, compareResult.message),
+              compareResult.skipped.length === 0
+                ? null
+                : h(
+                    'p',
+                    { className: 'dsd-hint' },
+                    format(t('manualCompareSkipped'), { list: compareResult.skipped.join('、') }),
+                  ),
+              ...compareResult.rows.map((row) =>
+                h(
+                  'div',
+                  { key: row.persona, className: 'dsd-sect' },
+                  h(
+                    'p',
+                    { className: 'dsd-hint', style: { margin: '4px 0' } },
+                    `${row.personaName}` +
+                      (row.ok
+                        ? ` · ${decisionLabel[row.securityDecision || ''] || row.securityDecision || ''}`
+                        : ` · ${t('manualCompareFailed').replace('{reason}', String(row.reason ?? ''))}`),
+                  ),
+                  row.ok
+                    ? h('p', { style: { margin: '4px 0' } }, row.text)
+                    : null,
+                  row.ok
+                    ? h(
+                        'p',
+                        { className: 'dsd-hint', style: { margin: '0 0 4px' } },
+                        format(t('manualCompareMetrics'), {
+                          ms: String(row.elapsedMs ?? '—'),
+                          tokens:
+                            row.inputTokens === undefined && row.outputTokens === undefined
+                              ? '—'
+                              : `${row.inputTokens ?? 0}/${row.outputTokens ?? 0}`,
+                        }),
+                      )
+                    : null,
+                  row.ok
+                    ? h(
+                        'button',
+                        {
+                          type: 'button',
+                          className: 'dsd-btn dsd-btn-ghost',
+                          disabled: running,
+                          onClick: () => setDraft(row.text || ''),
+                        },
+                        t('manualUseThis'),
+                      )
+                    : null,
+                ),
+              ),
+            )
+
       const compareBlock =
         candidates.length <= 1
           ? null
@@ -5451,6 +5590,7 @@ window.__ModuleLoader__.load({
         previewBlock,
         stepBlock,
         contextBlock,
+        compareRowBlock,
         compareBlock,
         candidateBlock,
       )

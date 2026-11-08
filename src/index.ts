@@ -51,6 +51,7 @@ import { parseImport, toCollectedThread } from './import/manual.js'
 import { toStoredImport, MAX_IMPORTED_CHARS, collectedFromStored, correctedDiscussion } from './import/session.js'
 import { applyCorrections, sanitizeCorrections } from './import/corrections.js'
 import { describeCollected, describeImport, targetContextOf } from './import/preview.js'
+import { comparePersonas } from './import/compare.js'
 import {
   analyzeImport,
   approveImportedCandidate,
@@ -716,6 +717,15 @@ function applyOverlay(
  * @param config raw plugin config; volatile fields arrive as references
  * @returns the disposer that unmounts everything
  */
+/**
+ * 正在进行的「四种人格比较」，按会话 id 索引。
+ *
+ * 放在模块级而不是闭包里：取消动作来自另一个请求，必须能拿到同一个 controller。
+ * 用会话 id 作键是因为**同一会话同时只该有一批** —— 两次点击各跑四份，用户会
+ * 收到八条候选并为此付八次钱。
+ */
+const compareRuns = new Map<string, AbortController>()
+
 export function apply(ctx: PluginContext, config?: unknown): () => void {
   const log = loggerOf(ctx, 'dsh-ai-debate')
   const dshVersion = readDshVersion(ctx)
@@ -1966,6 +1976,43 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           securityReasons: result.value.securityReasons,
         }
       },
+      /**
+       * 四种人格比较（v0.2.37 §7）。
+       *
+       * 一次点、四种人格、串行调用。默认不触发 —— 页面必须由用户明确点「比较四种
+       * 人格」才会到这里，因为那是四次真实计费调用。
+       */
+      compare: async (input) => {
+        const config = effectiveConfig()
+        const controller = new AbortController()
+        // 记在会话上，取消动作能拿到同一个 controller。键是会话 id：同一会话同时
+        // 只允许一批，避免两次点击各跑四份。
+        compareRuns.set(input.sessionId, controller)
+        try {
+          return await comparePersonas({
+            store: runtimeView.store,
+            sessionId: input.sessionId,
+            ...(input.targetPostId === undefined ? {} : { targetPostId: input.targetPostId }),
+            ...(input.personas === undefined ? {} : { personas: input.personas }),
+            ...(input.ownerInstruction === undefined
+              ? {}
+              : { ownerInstruction: input.ownerInstruction }),
+            config,
+            llm: runtimeView.llm,
+            signal: controller.signal,
+          })
+        } finally {
+          compareRuns.delete(input.sessionId)
+        }
+      },
+      cancelCompare: async (input) => {
+        const controller = compareRuns.get(input.sessionId)
+        if (controller === undefined) {
+          return { ok: false, reason: '这个会话当前没有正在进行的比较。' }
+        }
+        controller.abort()
+        return { ok: true }
+      },
       edit: async (input) => {
         const result = await editImportedCandidate(runtimeView.store, {
           sessionId: input.sessionId,
@@ -2474,6 +2521,10 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           targetPostId: entry.targetPostId,
           createdAt: entry.createdAt,
           violations: entry.violations,
+          ...(entry.persona === undefined ? {} : { persona: entry.persona }),
+          ...(entry.elapsedMs === undefined ? {} : { elapsedMs: entry.elapsedMs }),
+          ...(entry.inputTokens === undefined ? {} : { inputTokens: entry.inputTokens }),
+          ...(entry.outputTokens === undefined ? {} : { outputTokens: entry.outputTokens }),
           ...(entry.security === undefined
             ? {}
             : {

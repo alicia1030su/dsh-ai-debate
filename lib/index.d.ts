@@ -80,12 +80,5 @@ export declare function buildRuntime(resolve: () => ReturnType<typeof resolveCon
      */
     store?: DebateStore;
 }): Runtime;
-/**
- * Mount the plugin.
- *
- * @param ctx the Host plugin context
- * @param config raw plugin config; volatile fields arrive as references
- * @returns the disposer that unmounts everything
- */
 export declare function apply(ctx: PluginContext, config?: unknown): () => void;
 //# sourceMappingURL=index.d.ts.map

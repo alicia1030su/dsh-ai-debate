@@ -213,6 +213,37 @@ export interface BriefDecisivePoint {
     readonly why: string;
     /** 排序权重，越大越靠前。写出来是为了让「为什么它排第一」可被检查。 */
     readonly weight: number;
+    /**
+     * 这个判断有多可靠（v0.2.37 §5.1 的 confidence）。
+     *
+     * ## 为什么 priority 不能兼任 confidence
+     *
+     * v0.2.36 只有一个 `weight`。它同时被当成两件事用：排序，以及（在渲染时隐含地）
+     * 「这条是真的」。于是「前后矛盾」以 100 分排第一时，模型会写成「你前后矛盾」——
+     * 而那可能只是**条件不同**的两句话（「如果涨价我就退出」/「降价了我也不退出」），
+     * 或者**时间不同**造成的观点改变。
+     *
+     * 现在三个概念分开：
+     *
+     * | 概念 | 字段 | 含义 |
+     * | --- | --- | --- |
+     * | 有没有原文可对 | {@link BriefDecisivePoint.evidenceKind} | quoted / inferred |
+     * | 这个判断有多可靠 | `confidence` | high / medium / low |
+     * | 若成立它有多重要 | {@link BriefDecisivePoint.weight} | 0–100 |
+     *
+     * **priority 高不等于 confidence 高。** 一条「priority 100 / confidence medium」的
+     * 判断，渲染时会被写成「值得核实」，而不是「对方矛盾」。
+     */
+    readonly confidence: 'high' | 'medium' | 'low';
+    /**
+     * 依据的种类。
+     *
+     * - `quoted`：判断建立在**两段可核对的原文**上（矛盾的两句、提问与回避、被引用的第三方）。
+     * - `inferred`：规则推测，没有第二段原文可对（缺证据、未回答的提问）。
+     *
+     * 只有 `quoted` + `confidence: high` 才允许被渲染成断言。其余一律降级为「值得核实」。
+     */
+    readonly evidenceKind: 'quoted' | 'inferred';
 }
 /** A third party who spoke inside the argument's floor (v0.2.11). */
 export interface BriefBystander {

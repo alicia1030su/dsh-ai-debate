@@ -467,6 +467,43 @@ export interface SettingsRouteDeps {
             readonly blockers?: readonly string[];
             readonly persona?: string;
         }>;
+        /**
+         * 四种人格比较（v0.2.37 §7）。
+         *
+         * 逐条返回结果：成功带候选 id 与正文，失败带原因。**不许整批成功才返回** ——
+         * 四种人格里有一条失败（模型偶尔不守格式），另外三条仍然是用户想看的东西。
+         */
+        compare?(input: {
+            readonly sessionId: string;
+            readonly targetPostId?: string;
+            readonly personas?: readonly string[];
+            readonly ownerInstruction?: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly rows: readonly {
+                readonly persona: string;
+                readonly personaName: string;
+                readonly ok: boolean;
+                readonly candidateId?: string;
+                readonly text?: string;
+                readonly securityDecision?: 'allow' | 'review' | 'block';
+                readonly securityReasons?: readonly string[];
+                readonly violations?: readonly string[];
+                readonly elapsedMs?: number;
+                readonly reason?: string;
+            }[];
+            readonly calls: number;
+            readonly skipped: readonly string[];
+            readonly cancelled: boolean;
+            readonly message: string;
+        }>;
+        /** 取消正在进行的比较（v0.2.37 §8）。 */
+        cancelCompare?(input: {
+            readonly sessionId: string;
+        }): Promise<{
+            readonly ok: boolean;
+            readonly reason?: string;
+        }>;
     };
 }
 /** The status and body an approval attempt answers with. */
@@ -798,6 +835,12 @@ export interface WorkbenchView {
         readonly targetPostId: string;
         readonly createdAt: string;
         readonly violations: readonly string[];
+        /** 生成这条候选时用的人格 id（v0.2.37 §7）。旧候选没有这个字段。 */
+        readonly persona?: string;
+        /** 这次生成实际耗时（ms）。 */
+        readonly elapsedMs?: number;
+        readonly inputTokens?: number;
+        readonly outputTokens?: number;
         /**
          * The security assessment fingerprint, when one was recorded.
          *

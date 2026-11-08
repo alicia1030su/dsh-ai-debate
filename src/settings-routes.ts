@@ -500,6 +500,38 @@ export interface SettingsRouteDeps {
       readonly blockers?: readonly string[]
       readonly persona?: string
     }>
+    /**
+     * 四种人格比较（v0.2.37 §7）。
+     *
+     * 逐条返回结果：成功带候选 id 与正文，失败带原因。**不许整批成功才返回** ——
+     * 四种人格里有一条失败（模型偶尔不守格式），另外三条仍然是用户想看的东西。
+     */
+    compare?(input: {
+      readonly sessionId: string
+      readonly targetPostId?: string
+      readonly personas?: readonly string[]
+      readonly ownerInstruction?: string
+    }): Promise<{
+      readonly ok: boolean
+      readonly rows: readonly {
+        readonly persona: string
+        readonly personaName: string
+        readonly ok: boolean
+        readonly candidateId?: string
+        readonly text?: string
+        readonly securityDecision?: 'allow' | 'review' | 'block'
+        readonly securityReasons?: readonly string[]
+        readonly violations?: readonly string[]
+        readonly elapsedMs?: number
+        readonly reason?: string
+      }[]
+      readonly calls: number
+      readonly skipped: readonly string[]
+      readonly cancelled: boolean
+      readonly message: string
+    }>
+    /** 取消正在进行的比较（v0.2.37 §8）。 */
+    cancelCompare?(input: { readonly sessionId: string }): Promise<{ readonly ok: boolean; readonly reason?: string }>
   }
 }
 
@@ -839,6 +871,12 @@ export interface WorkbenchView {
     readonly targetPostId: string
     readonly createdAt: string
     readonly violations: readonly string[]
+    /** 生成这条候选时用的人格 id（v0.2.37 §7）。旧候选没有这个字段。 */
+    readonly persona?: string
+    /** 这次生成实际耗时（ms）。 */
+    readonly elapsedMs?: number
+    readonly inputTokens?: number
+    readonly outputTokens?: number
     /**
      * The security assessment fingerprint, when one was recorded.
      *
@@ -1807,7 +1845,9 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
       action === 'manual-generate' ||
       action === 'manual-edit' ||
       action === 'manual-approve' ||
-      action === 'manual-copy'
+      action === 'manual-copy' ||
+      action === 'manual-compare' ||
+      action === 'manual-cancel-compare'
     ) {
       const manual = deps.manualImport
       if (manual === undefined) {
@@ -1911,6 +1951,41 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
                 : { ownerInstruction: str(body.ownerInstruction)! }),
             }),
           )
+          return
+        }
+        /**
+         * 四种人格比较（v0.2.37 §7）。
+         *
+         * 页面必须由用户明确点「比较四种人格」才会到这里 —— 那是四次真实计费调用。
+         * 服务端不再加一道「你确定吗」：确认发生在界面上，重复确认只会让人麻木。
+         */
+        if (action === 'manual-compare') {
+          if (manual.compare === undefined) {
+            writeJson(response, 200, { ok: false, message: '当前构建不支持批量比较。' })
+            return
+          }
+          writeJson(
+            response,
+            200,
+            await manual.compare({
+              sessionId: str(body.sessionId) ?? '',
+              ...(str(body.targetPostId) === undefined ? {} : { targetPostId: str(body.targetPostId)! }),
+              ...(Array.isArray(body.personas)
+                ? { personas: (body.personas as unknown[]).filter((item): item is string => typeof item === 'string') }
+                : {}),
+              ...(str(body.ownerInstruction) === undefined
+                ? {}
+                : { ownerInstruction: str(body.ownerInstruction)! }),
+            }),
+          )
+          return
+        }
+        if (action === 'manual-cancel-compare') {
+          if (manual.cancelCompare === undefined) {
+            writeJson(response, 200, { ok: false, reason: '当前构建不支持取消比较。' })
+            return
+          }
+          writeJson(response, 200, await manual.cancelCompare({ sessionId: str(body.sessionId) ?? '' }))
           return
         }
         if (action === 'manual-edit') {
