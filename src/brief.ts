@@ -118,7 +118,33 @@ export interface DebateBrief {
   /** Where the two actually disagree, in one sentence each. */
   readonly disagreements: readonly string[]
   readonly agreedFacts: readonly BriefAgreedFact[]
+  /**
+   * The owner's substantive claims, each citing its own post.
+   *
+   * 注意方向：这是**主人**的论据。对方的论据在 {@link opponentArguments}，
+   * 两者分开是有意的 —— 合成一个列表后，模型很容易把对方的话当成主人的立场
+   * 去「坚持」，而那正好是最严重的一类错误（替主人改口）。
+   */
   readonly arguments: readonly BriefArgument[]
+  /**
+   * 对方提出的核心论据（v0.2.34 §4.2）。
+   *
+   * ## 为什么必须单独列出来
+   *
+   * 此前简报只有「对方立场」一句摘要 + 「尚未被回应的质疑」。于是模型知道对方
+   * **大概**在说什么、也知道对方问了什么，但拿不到对方**逐条**的论据 ——
+   * 结果是回复只能泛泛地说「你的说法站不住」，而无法指名反驳第二条论据。
+   *
+   * 任务书 §4.2 把「对方提出的核心论据」列为回复前必须明确的一项，这是它。
+   *
+   * ## 与 `challenges` 的区别
+   *
+   * - `challenges` 是**没被回应**的质疑，带「主人没回」这个判断；
+   * - `opponentArguments` 是对方说过的论据，不论主人回没回。
+   *
+   * 两者可以有重叠，但用途不同：前者用于「补上欠的回答」，后者用于「直接反驳」。
+   */
+  readonly opponentArguments: readonly BriefArgument[]
   readonly challenges: readonly BriefChallenge[]
   /**
    * Questions the **opponent** put to the owner that the owner never answered.
@@ -240,6 +266,20 @@ export function validateBrief(
 
   checkSide('owner', 'owner', brief.owner.evidence)
   checkSide('opponent', 'opponent', brief.opponent.evidence)
+
+  /**
+   * 每一条论据的出处也要校验（v0.2.34 §4.2）。
+   *
+   * 新字段必须立刻进校验，否则它就是一条**没有守卫的引用通道**：一旦构造逻辑
+   * 把主人的帖子当成对方的论据（或反过来），模型会拿着「对方说过这句话」去反驳
+   * 一句主人自己说的话。这类错误在生成结果上看起来完全正常 —— 只有在这里能拦住。
+   */
+  for (const argument of brief.arguments) {
+    checkSide(`arguments[${argument.claim.slice(0, 12)}]`, 'owner', argument.evidence)
+  }
+  for (const argument of brief.opponentArguments ?? []) {
+    checkSide(`opponentArguments[${argument.claim.slice(0, 12)}]`, 'opponent', argument.evidence)
+  }
 
   // ## A brief with no disagreement is allowed *if* it says why (v0.2.13)
   //
@@ -423,6 +463,23 @@ export function renderBrief(brief: DebateBrief): string {
   if (brief.arguments.length > 0) {
     lines.push('## 主人的主要论据')
     for (const argument of brief.arguments) {
+      lines.push(`- ${argument.claim}（${argument.evidence.join('、')}）`)
+    }
+    lines.push('')
+  }
+
+  /**
+   * 对方的论据紧跟主人之后、分歧之前（v0.2.34 §4.2）。
+   *
+   * 位置是有意的：模型读到这里时，手上同时有「我方论据」与「对方论据」，
+   * 于是下一步（核心分歧）能被这两组具体句子支撑，而不是靠一句摘要去猜。
+   *
+   * 标题写「对方的核心论据」，不写「对方的观点」：后者会让人以为这是对整段
+   * 发言的概括，而这些是逐条抽取的 claim。
+   */
+  if (brief.opponentArguments !== undefined && brief.opponentArguments.length > 0) {
+    lines.push('## 对方的核心论据')
+    for (const argument of brief.opponentArguments) {
       lines.push(`- ${argument.claim}（${argument.evidence.join('、')}）`)
     }
     lines.push('')

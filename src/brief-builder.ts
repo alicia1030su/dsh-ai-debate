@@ -382,10 +382,31 @@ export function buildBrief(input: BuildBriefInput): {
   const argumentsList: BriefArgument[] = []
   for (const statement of mine) {
     if (!isSubstantive(statement.content)) continue
-    const claim = extractClaims([statement], 1)[0]
-    if (claim === undefined) continue
-    argumentsList.push({ claim: summarise(claim), evidence: [statement.postId] })
+    const items = extractClaims([statement], 1)[0]
+    if (items === undefined) continue
+    argumentsList.push({ claim: summarise(items), evidence: [statement.postId] })
     if (argumentsList.length >= 5) break
+  }
+
+  /**
+   * 对方的论据，同样逐条带出处（v0.2.34 §4.2）。
+   *
+   * ## 为什么用 `extractClaims` 而不是原句
+   *
+   * 对方的发言里常有反问（「你凭什么说成本会翻倍？有数据吗？」）。`extractClaims`
+   * 会丢掉问句 —— 那在「论据」这个用途上是对的：反问不是论据本身。被问到的
+   * 内容已经在 `challenges` 与 `openQuestions` 里，不会丢。
+   *
+   * 抽不出任何 claim 时返回空数组，而不是把整段原话塞进来：一段纯反问的发言
+   * 没有论据，硬塞进去会让模型把「他在挑衅」当成「他主张了什么」。
+   */
+  const opponentArgumentsList: BriefArgument[] = []
+  for (const statement of theirs) {
+    if (!isSubstantive(statement.content)) continue
+    const items = extractClaims([statement], 1)[0]
+    if (items === undefined) continue
+    opponentArgumentsList.push({ claim: summarise(items), evidence: [statement.postId] })
+    if (opponentArgumentsList.length >= 5) break
   }
 
   // Disagreements are decided by `conflict.ts`, not by "both sides have evidence".
@@ -448,6 +469,7 @@ export function buildBrief(input: BuildBriefInput): {
     disagreements,
     agreedFacts: agreedFacts(mine, theirs),
     arguments: argumentsList,
+    opponentArguments: opponentArgumentsList,
     challenges: briefChallenges,
     openQuestions,
     uncertainties: uncertainties(input, verdict),
@@ -510,6 +532,11 @@ export function renderBriefCompact(brief: DebateBrief, maxChars: number): string
   const full = [
     `主人立场：${brief.owner.summary}（${brief.owner.evidence.join('、')}）`,
     `对方立场：${brief.opponent.summary}（${brief.opponent.evidence.join('、')}）`,
+    // 对方的论据必须进紧凑版（v0.2.34 §4.2）：小上下文窗口下，模型最容易丢掉
+    // 的正是「对方到底说了哪几条」，于是回复退化成泛泛而谈。
+    ...(brief.opponentArguments ?? []).map(
+      (item) => `对方论据：${item.claim}（${item.evidence.join('、')}）`,
+    ),
     ...brief.disagreements.map((item) => `分歧：${item}`),
     ...brief.challenges.map((item) => `对方未获回应：「${item.quote}」（${item.evidence}）`),
   ].join('\n')
@@ -522,6 +549,7 @@ export function renderBriefCompact(brief: DebateBrief, maxChars: number): string
     `回复目标：${brief.targetPostId}`,
     brief.disagreements.length > 0 ? `分歧数：${brief.disagreements.length}` : '',
     brief.challenges.length > 0 ? `未回应质疑数：${brief.challenges.length}` : '',
+    (brief.opponentArguments ?? []).length > 0 ? `对方论据数：${(brief.opponentArguments ?? []).length}` : '',
   ]
     .filter((line) => line !== '')
     .join('\n')
