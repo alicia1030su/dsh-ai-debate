@@ -46,8 +46,15 @@ export function pluginVersion(): string {
   return 'unknown'
 }
 
-/** Which persona a case is scored under. Absent means the default. */
+/**
+ * Which persona a case is scored under.
+ *
+ * 现在固定 `tieba_veteran`：语料没有逐案例指定人格的字段，硬塞一个「按案例名猜」
+ * 的映射会让分数取决于 id 拼写。参数先留着，是为了将来语料真的带上 persona 时
+ * 只改函数体、不改调用点。
+ */
 function personaOf(c: EvalCase): PersonaConfig {
+  void c
   const style: PersonaStyle = 'tieba_veteran'
   return resolvePersona({ style, maxLength: 150 })
 }
