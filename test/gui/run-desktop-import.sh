@@ -41,7 +41,12 @@ export DSH_E2E_OUT_DIR="$OUT"
 export DSH_E2E_INTERCEPT_LOG="$OUT/intercept.json"
 
 # 拦截器：证明这一轮一次都没有出网。
-export NODE_OPTIONS="--experimental-transform-types --import file:///${WT//\//\/}/test/gui/preload-intercept.ts"
+#
+# 路径必须是 Windows 的 `file:///C:/...` 形状。第一版直接用 bash 的 `$WT`
+# （形如 `/c/AI-Workspace/...`），拼出来是 `file:////c/...`，Node 报
+# `ERR_INVALID_FILE_URL_PATH` —— 一个与产品无关、却让整轮验收 6 秒结束的错误。
+WIN_WT="$(cygpath -w "$WT" 2>/dev/null | tr '\\' '/')"
+export NODE_OPTIONS="--experimental-transform-types --import file:///${WIN_WT}/test/gui/preload-intercept.ts"
 rm -f "$DSH_E2E_INTERCEPT_LOG"
 
 # 彻底清空插件 store：这一轮从「一条会话都没有」开始。
