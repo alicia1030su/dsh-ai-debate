@@ -224,9 +224,26 @@ async function evaluate<T>(expression: string): Promise<T> {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 async function screenshot(name: string): Promise<void> {
-  const result = (await send('Page.captureScreenshot', { format: 'png' })) as { data: string }
+  /**
+   * ## 截图失败不该让整轮验收失败（v0.2.35）
+   *
+   * 截图是**证据**，不是断言。这一轮在真 Desktop 上撞到 `Page.captureScreenshot`
+   * 30 秒不返回（页面很长、区块全堆在一起），于是整份报告只留下 9 条阶段加一条
+   * 「执行中断」——而前面 9 条都是绿的，产品没有任何问题。
+   *
+   * 现在超时/失败只记一条 artifact 缺失，流程继续。要保证的是「断言都跑到了」，
+   * 不是「每张图都拍到了」。
+   */
+  let result: { data?: string }
+  try {
+    result = (await send('Page.captureScreenshot', { format: 'png' })) as { data?: string }
+  } catch (error) {
+    process.stdout.write(`· 截图 ${name} 跳过：${(error as Error).message}\n`)
+    return
+  }
   if (typeof result.data !== 'string' || result.data === '') {
-    throw new Error(`截图 ${name} 失败：返回空数据`)
+    process.stdout.write(`· 截图 ${name} 跳过：返回空数据\n`)
+    return
   }
   writeFileSync(join(outDir, `${name}.png`), Buffer.from(result.data, 'base64'))
   /**
