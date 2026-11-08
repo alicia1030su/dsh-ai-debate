@@ -52,6 +52,34 @@ function payloadOf(comments: readonly WeiboComment[], overrides: Partial<WeiboTh
 }
 
 /**
+ * 只把**投影本身**放进计时器（v0.2.34）。
+ *
+ * ## 之前量的是什么
+ *
+ * 两条规模基线都把 `payloadOf(makeComments(n))` 写在计时回调里面，所以
+ * 「1000 → 4000」的比值里混着**数据构造**：4000 条要新建 4000 个对象、四个数组、
+ * 一次 JSON 形状的组装。那部分是分配，不是算法；而分配在 CI 上会撞上 GC。
+ *
+ * 实测差异（同一份代码）：
+ *
+ * | 环境 | 1000 → 4000 |
+ * | --- | --- |
+ * | 本机 | 1.25 ms → 2.08 ms（1.7×） |
+ * | CI | 1.87 ms → 38.38 ms（20.6×） |
+ *
+ * 38 毫秒不是二次复杂度，是一次年轻代回收落在了计时窗口里。而这条测试的**名字**
+ * 说的是「回复边查找不随评论数变慢」——它该量的是查找，不是分配。
+ *
+ * 所以：数据在计时器外构造好，先跑一次热身（JIT + 缓存），再取多次里的最小值。
+ * 断言一个都没有放宽：比值上限还是 20，绝对上限还是 2000ms。
+ */
+function measureProjection(payload: WeiboThreadPayload, runs = 5): { value: ReturnType<typeof projectWeiboThread>; ms: number } {
+  // 热身不计时：第一次调用要编译热路径、分配一次性的内部结构。
+  projectWeiboThread(payload)
+  return fastestOf(() => projectWeiboThread(payload), runs)
+}
+
+/**
  * Assert that a timing ratio holds, retrying once on a noise spike.
  *
  * ## Why a retry, when retries usually hide bugs (CI failure, v0.2.29)
@@ -121,9 +149,10 @@ test('规模基线：1000 / 3000 / 6000 条评论的投影耗时随规模线性�
 
   const { ratio, value: samples } = assertRatioHolds(
     () => {
+      // 每次重试都重新构造数据，但构造**不在**计时窗口里。
       const measured = sizes.map((size) => {
-        const comments = makeComments(size)
-        const { value: graph, ms } = fastestOf(() => projectWeiboThread(payloadOf(comments)))
+        const payload = payloadOf(makeComments(size))
+        const { value: graph, ms } = measureProjection(payload)
         // Every comment becomes exactly one node plus the root.
         assert.equal(graph.nodes.length, size + 1, `${size} 条评论的节点数不对`)
         return { size, ms, nodes: graph.nodes.length, edges: graph.edges.length }
@@ -204,8 +233,9 @@ test('规模基线：回复边查找不随评论数变慢（不扫全表）', (t
       ...(index > 0 ? { replyToCommentId: String(7000000 + index - 1) } : {}),
     }))
 
-  const small = fastestOf(() => projectWeiboThread(payloadOf(chain(1000))))
-  const large = fastestOf(() => projectWeiboThread(payloadOf(chain(4000))))
+  // 数据先建好：计时窗口里只留投影。（见 `measureProjection` 的实测对照。）
+  const small = measureProjection(payloadOf(chain(1000)))
+  const large = measureProjection(payloadOf(chain(4000)))
   t.diagnostic(`  1000 条全链式回复 → ${small.ms.toFixed(2)} ms`)
   t.diagnostic(`  4000 条全链式回复 → ${large.ms.toFixed(2)} ms`)
 
