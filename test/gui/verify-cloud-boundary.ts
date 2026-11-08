@@ -45,6 +45,7 @@ interface BoundaryReport {
   readonly port: number
 }
 interface EgressRecord {
+  readonly at?: string
   readonly purpose: string
   readonly host: string
   readonly decision: 'allow' | 'deny'
@@ -136,6 +137,30 @@ if (!existsSync(egressPath)) {
     }
   }
 
+  /**
+   * ## 只认本轮写下的记录（v0.2.37）
+   *
+   * 这一条是被一次「假绿」逼出来的：脚本把 profile 指到了 A 目录，而 DSH 实际
+   * 加载的是 B 目录，于是判定读到的 `egress.jsonl` 是**上一轮**留下的 ——
+   * 里面有 12 条 deny，看起来完美通过。而那一轮真正跑的其实是 `open` 模式。
+   *
+   * 判据：每条记录的时间必须不早于本轮开始时刻。早于的一律丢掉，丢了以后如果
+   * 一条不剩，就是「本轮没有任何审计」——那要判失败，不是通过。
+   */
+  const startedAt = process.env.DSH_E2E_RUN_STARTED_AT ?? ''
+  const fresh = (entry: EgressRecord & { at?: string }): boolean =>
+    startedAt === '' || entry.at === undefined ? true : entry.at >= startedAt
+  const all = records
+  const current = records.filter((entry) => fresh(entry))
+  if (startedAt !== '' && current.length === 0) {
+    fail(
+      `插件审计里没有本轮（${startedAt} 之后）的记录：读到 ${all.length} 条全是旧的。` +
+        '这一轮要么没跑起来，要么 profile 指错了目录。',
+    )
+  }
+  records.length = 0
+  records.push(...current)
+
   const platformAllows = records.filter((entry) => entry.purpose === 'platform' && entry.decision === 'allow')
   if (platformAllows.length > 0) {
     fail(
@@ -165,3 +190,14 @@ if (failures.length > 0) {
   process.exit(1)
 }
 process.stdout.write('云模型边界：通过（平台流量 0，模型流量走明确允许的渠道）\n')
+/**
+ * 覆盖范围必须写在结论旁边（§6.2）。
+ *
+ * 一个只写「通过」的报告，会让人以为「全进程零出网」已经被证明了。实际不是：
+ * 宿主进程的 Node 侧没有经过代理（代理会阻断它自己的模型目录查询），所以那一层
+ * 没有观测。把范围写在这里，报告读者才不会把结论外推。
+ */
+process.stdout.write(
+  '覆盖范围：Chromium 出网（经代理，逐条记录）；插件四条出口（模型/贴吧/CLI/授权探针，' +
+    '由 egress.jsonl 记录）；**宿主进程 Node 出网未观测**（不得据此声称全进程零出网）。\n',
+)
