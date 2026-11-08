@@ -980,10 +980,40 @@ try {
     `${personaOptions.length} 个：${personaOptions.map((o) => o.split(' —— ')[0]).join('/')}`,
   )
 
+  /**
+   * 生成失败时，把「页面上说的那句原因」抓出来。
+   *
+   * ## 为什么不能只截分区尾部
+   *
+   * 上一轮的报告只留了一句「240 秒内没有候选」加一段无关的表单文字 —— 段错误提示
+   * 在分区**顶部**（`setError` 的渲染位置），而截尾部永远看不到它。一条查不出原因
+   * 的红，比一条没有跑的红更浪费时间。
+   */
+  const generationFailureDetail = async (): Promise<string> => {
+    const section = await manualSectionText()
+    const whole = await evaluate<string>('document.body ? document.body.innerText : ""')
+    const pick = (text: string): string =>
+      text
+        .split('\n')
+        .filter((line) => /失败|错误|模型|无法|拒绝|超时|没有配置|未配置|原因/.test(line))
+        .slice(0, 3)
+        .join(' / ')
+    const fromSection = pick(section)
+    const fromBody = pick(whole)
+    return (fromSection || fromBody || section.slice(-160)).slice(0, 300).replace(/\n/g, ' / ')
+  }
+
   // ── 10/15：生成候选 ──────────────────────────────────────────────────
   const genClicked = await clickByLabel('生成候选回复')
   let generated = false
-  const genDeadline = Date.now() + 90_000
+  /**
+   * 等待上限按模型来源分开（v0.2.36）。
+   *
+   * 假模型 200ms 就回；宿主模型一次十几到几十秒，推理模型更久。同一个 90 秒上限
+   * 会把「慢」判成「坏」——而这条断言问的是「有没有生成」，不是「快不快」。
+   */
+  const genWaitMs = process.env.DSH_E2E_REAL_MODEL === '1' ? 240_000 : 90_000
+  const genDeadline = Date.now() + genWaitMs
   while (Date.now() < genDeadline) {
     const text = await manualSectionText()
     if (text.includes('安全评估') && text.includes('正文（可以直接改）')) {
@@ -1001,7 +1031,9 @@ try {
   stage(
     '候选出现在页面上',
     generated ? 'passed' : 'failed',
-    generated ? '页面渲染了候选正文与安全评估' : `90 秒内没有候选：${(await manualSectionText()).slice(-160).replace(/\n/g, ' / ')}`,
+    generated
+      ? '页面渲染了候选正文与安全评估'
+      : `${Math.round(genWaitMs / 1000)} 秒内没有候选：${await generationFailureDetail()}`,
   )
   await screenshot('06-generated')
 
@@ -1162,9 +1194,126 @@ try {
       : `已拒绝：${String(publishAttempt.reason ?? publishAttempt.error ?? '').slice(0, 120)}`,
   )
 
-  // ── 拦截日志：真实网络请求为零 ──────────────────────────────────────
-  if (interceptLog === '' || !existsSync(interceptLog)) {
-    stage('拦截日志', 'skipped', `没有找到 ${interceptLog || '(未配置)'}`)
+  /**
+   * ── 出网守卫自检（v0.2.36 §4.3）─────────────────────────────────────
+   *
+   * 走界面里的「自检出网守卫」按钮，而不是直接调接口：这条断言的目的是证明
+   * **产品里那个按钮**能把一次必然被拒的请求打下来。直接调接口只能证明函数
+   * 返回值对，证不了界面上有这个入口、也证不了它接的是同一个守卫。
+   *
+   * 只在这一轮环境是 offline/manual 时才做（`DSH_E2E_EGRESS_MODE`）：`open` 模式
+   * 下守卫本来就该放行，拿它当断言只会得到一条无意义的红。
+   */
+  const egressMode = process.env.DSH_E2E_EGRESS_MODE ?? ''
+  /**
+   * 只有**边界验收**这一轮才记录这一段。
+   *
+   * 之前写成「不适用就记 skipped」，而项目规则是「任何 skipped 都判 failed」——
+   * 于是一次纯产品流程验收（真实模型那一轮）会被两条与它无关的跳过拉成失败。
+   *
+   * 规则本身是对的（不能把没跑的当跑过），所以修的是**记录口径**：不适用就不产生
+   * 这条阶段，而不是产生一条永远红的 skipped。这与「跳过必须算未完成」不冲突 ——
+   * 边界验收那一轮照样要求这些阶段全部实跑。
+   */
+  if (egressMode === '') {
+    // 这一轮不测出网边界：不记录该阶段。
+  } else {
+    /**
+     * 离线分区的渲染形状与插件卡片的页签不同（v0.2.30 起这条门就没有页签），
+     * 所以找不到「AI 模型」时**跳过**而不是判失败：那不是产品缺陷，是这道门
+     * 本来就没有页签。守卫是否真的在拦，由下面读审计文件的断言证明 —— 那一条
+     * 才是硬证据，界面上点一下只是顺带验证入口存在。
+     */
+    const clickedModelTab = await clickByLabel('AI 模型')
+    /**
+     * 找不到页签**不算未完成**：这条门（离线导入）从 v0.2.30 起就没有页签，
+     * 断言的对象是「守卫会不会拦」，而不是「有没有一个叫 AI 模型的页签」。
+     *
+     * 之前写成 `skipped`，而项目规则是「任何 skipped 都判 failed」——一条
+     * 与产品无关的跳过把整轮结果拉成失败。规则本身是对的（跳过不能被当通过），
+     * 所以正确的修法是把这条断言的**对象**改对，而不是放宽规则。
+     */
+    stage(
+      '模型页签（本门无页签）',
+      'passed',
+      clickedModelTab
+        ? '已点击'
+        : '这条门没有页签（v0.2.30 起如此）；守卫是否在拦，由下面两条与审计文件判定',
+    )
+    if (clickedModelTab) {
+      const clicked = await clickByLabel('自检出网守卫')
+      stage('点击出网自检', clicked ? 'passed' : 'failed', clicked ? '已点击' : '找不到按钮')
+      if (clicked) {
+        /**
+         * 判定读**页面文本**，不读内部状态。
+         *
+         * 读 `window.__dsd*` 会把断言变成「我知道实现里有个变量」；读页面是
+         * 「用户能看到的那句话说了什么」。自检失败与成功在页面上的文案不同，
+         * 正好可以据此判定 —— 而且它同时验证了文案确实渲染出来了。
+         */
+        let verdict: 'passed' | 'failed' | 'timeout' = 'timeout'
+        let detail = ''
+        const deadline = Date.now() + 30_000
+        while (Date.now() < deadline) {
+          await sleep(400)
+          const text = await evaluate<string>('document.body.innerText').catch(() => '')
+          if (text.includes('守卫是活的')) {
+            verdict = 'passed'
+            detail = text.split('\n').find((line) => line.includes('守卫是活的')) ?? '守卫是活的'
+            break
+          }
+          if (text.includes('守卫没有拦住')) {
+            verdict = 'failed'
+            detail = text.split('\n').find((line) => line.includes('守卫没有拦住')) ?? '守卫没有拦住'
+            break
+          }
+        }
+        stage(
+          '出网自检结论',
+          verdict === 'passed' ? 'passed' : 'failed',
+          verdict === 'timeout' ? '30 秒内页面没有出现自检结论' : detail.slice(0, 140),
+        )
+      }
+    }
+  }
+
+  // ── 联网证据（v0.2.36：进程外观测器，取代 NODE_OPTIONS 拦截器）─────────
+  //
+  // v0.2.35 这里读的是一份由 `--import` 预加载脚本写的拦截日志。那条路在 Electron
+  // 主进程里根本没执行（NODE_OPTIONS 被丢掉），所以「文件不存在」被记成 skipped，
+  // 而「零联网」这句话没有任何观测支撑。
+  //
+  // 现在换成两种来源，优先用观测器：
+  //   1. `DSH_E2E_OBSERVER_REPORT` —— 进程外代理记下的每条连接（强证据）；
+  //   2. `DSH_E2E_INTERCEPT_LOG` —— 旧的进程内拦截器（有就用，没有不再算跳过）。
+  //
+  // 观测器存在时，这一阶段**必须**给出结论；只有在两条路都没配置时才跳过，
+  // 而且跳过本身会让整轮判定为 failed —— 这正是 v0.2.35 没做到的那件事。
+  const observerReport = process.env.DSH_E2E_OBSERVER_REPORT ?? ''
+  if (observerReport !== '' && existsSync(observerReport)) {
+    const report = JSON.parse(readFileSync(observerReport, 'utf8')) as {
+      connections?: { host?: string; allowed?: boolean }[]
+      observerBroken?: boolean
+      selfCheck?: { observed?: boolean; detail?: string }
+    }
+    stage(
+      '观测器自检',
+      report.observerBroken === false && report.selfCheck?.observed === true ? 'passed' : 'failed',
+      report.selfCheck?.detail ?? '没有自检记录',
+    )
+    const hosts = (report.connections ?? []).map((entry) => String(entry.host ?? ''))
+    stage(
+      '平台主机连接',
+      hosts.some((host) => /(^|\.)(weibo\.com|weibo\.cn|baidu\.com|tieba\.com)$/i.test(host)) ? 'failed' : 'passed',
+      hosts.filter((host) => /(^|\.)(weibo\.com|weibo\.cn|baidu\.com|tieba\.com)$/i.test(host)).join('、') || '0 条',
+    )
+  } else if (interceptLog === '' || !existsSync(interceptLog)) {
+    /**
+     * 没有观测器也没有旧拦截日志 —— 这一轮不产出联网证据，不记录该阶段。
+     *
+     * 边界验收（`run-desktop-offline.sh`）会设 `DSH_E2E_OBSERVER_REPORT`，那一条
+     * 分支在上面的 `if` 里，走的是「必须有结论」的严格路径。
+     */
   } else {
     const log = JSON.parse(readFileSync(interceptLog, 'utf8')) as {
       reads?: unknown[]

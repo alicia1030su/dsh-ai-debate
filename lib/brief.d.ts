@@ -194,6 +194,26 @@ export interface BriefFallacy {
     readonly otherPostId?: string;
     readonly otherQuote?: string;
 }
+/**
+ * 最值得先回应的一条判断（v0.2.36 §5.2）。
+ *
+ * 与 {@link BriefFallacy} 的区别：fallacy 是「对方这句话有什么毛病」，
+ * decisivePoint 是「这几条里，哪一条真的会改变结论」。前者是清单，后者是排序。
+ * 模型真正需要的是排序 —— 否则它会挑最好反驳的那条打。
+ */
+export interface BriefDecisivePoint {
+    readonly kind: 'contradiction' | 'evasion' | 'third_party' | 'missing_evidence' | 'topic_shift';
+    /** 判断所依据的那条发言。 */
+    readonly postId: string;
+    readonly quote: string;
+    /** 对照的另一条发言（矛盾的前一句 / 提问 / 更早的话题）。 */
+    readonly otherPostId?: string;
+    readonly otherQuote?: string;
+    /** 为什么它重要 —— 一句话，给模型也给审阅的人看。 */
+    readonly why: string;
+    /** 排序权重，越大越靠前。写出来是为了让「为什么它排第一」可被检查。 */
+    readonly weight: number;
+}
 /** A third party who spoke inside the argument's floor (v0.2.11). */
 export interface BriefBystander {
     /** Display name as the platform rendered it. Not an identity. */
@@ -284,6 +304,13 @@ export interface DebateBrief {
     readonly missingContext?: readonly string[];
     /** 可引用的论证形式问题（§3.3）。 */
     readonly fallacies?: readonly BriefFallacy[];
+    /**
+     * 最值得先回应的几条（v0.2.36 §5.2）。
+     *
+     * 放在简报里而不是只放在提示词里：它是**可校验的引用**，与其它字段走同一套
+     * `validateBrief`。一个只存在于提示词里的「重点」无法被验证有没有被遵守。
+     */
+    readonly decisivePoints?: readonly BriefDecisivePoint[];
     readonly challenges: readonly BriefChallenge[];
     /**
      * Questions the **opponent** put to the owner that the owner never answered.

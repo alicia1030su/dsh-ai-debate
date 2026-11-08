@@ -1,8 +1,8 @@
 {
-  "version": "0.2.34",
+  "version": "0.2.35",
   "model": "scripted-corpus-reply",
   "protocol": "n/a",
-  "generatedAt": "2026-11-08T05:16:10.739Z",
+  "generatedAt": "2026-11-08T09:39:27.454Z",
   "realModel": false,
   "cases": [
     {
@@ -21,8 +21,8 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
-          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+          "score": 1,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、1 处矛盾"
         },
         {
           "id": "stance_consistency",
@@ -83,7 +83,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 2
+      "elapsedMs": 1
     },
     {
       "caseId": "baseline/02",
@@ -101,8 +101,8 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
-          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+          "score": 1,
+          "basis": "结构里找到 1 条对方论据、1 个未答问题、0 处矛盾"
         },
         {
           "id": "stance_consistency",
@@ -163,7 +163,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "baseline/03",
@@ -261,7 +261,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -341,7 +341,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -421,7 +421,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -501,7 +501,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -581,7 +581,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -661,7 +661,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -741,7 +741,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -821,7 +821,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -901,7 +901,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -981,7 +981,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1138,7 +1138,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1218,7 +1218,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1298,7 +1298,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1378,8 +1378,8 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
-          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+          "score": 1,
+          "basis": "结构里找到 1 条对方论据、1 个未答问题、0 处矛盾"
         },
         {
           "id": "stance_consistency",
@@ -1458,7 +1458,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1538,7 +1538,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1618,7 +1618,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1698,7 +1698,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1778,7 +1778,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -1858,7 +1858,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2018,7 +2018,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2080,7 +2080,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "context/03",
@@ -2098,7 +2098,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2178,7 +2178,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2258,7 +2258,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2338,7 +2338,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2418,7 +2418,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2498,7 +2498,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2578,7 +2578,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2658,7 +2658,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2738,7 +2738,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2818,7 +2818,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2898,7 +2898,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -2978,7 +2978,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3058,7 +3058,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3138,7 +3138,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3218,7 +3218,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3298,7 +3298,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3378,7 +3378,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3458,7 +3458,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3520,7 +3520,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "citation/05",
@@ -3538,7 +3538,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3618,7 +3618,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3698,7 +3698,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3778,7 +3778,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3858,7 +3858,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -3938,7 +3938,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4018,7 +4018,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4098,7 +4098,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4178,7 +4178,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4258,7 +4258,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4652,7 +4652,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4732,7 +4732,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4812,7 +4812,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4892,7 +4892,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -4972,7 +4972,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5052,7 +5052,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5132,7 +5132,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5194,7 +5194,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "weibo/02",
@@ -5212,7 +5212,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5292,7 +5292,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5372,7 +5372,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5452,7 +5452,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5532,7 +5532,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5612,7 +5612,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5692,7 +5692,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -5926,8 +5926,8 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
-          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+          "score": 1,
+          "basis": "结构里找到 2 条对方论据、1 个未答问题、0 处矛盾"
         },
         {
           "id": "stance_consistency",
@@ -6006,7 +6006,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.6666666666666666,
+          "score": 1,
           "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -6086,7 +6086,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -6166,7 +6166,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {
@@ -6228,7 +6228,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "quality/quote-01",
@@ -6246,7 +6246,7 @@
           "id": "argument_recognition",
           "label": "论点识别准确性",
           "kind": "deterministic",
-          "score": 0.3333333333333333,
+          "score": 1,
           "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
         },
         {

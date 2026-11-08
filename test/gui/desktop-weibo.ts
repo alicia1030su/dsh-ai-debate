@@ -386,6 +386,59 @@ async function main(): Promise<void> {
     `Base URL=${modelFields.base ? '有' : '无'} 模型名=${modelFields.model ? '有' : '无'} 协议=${modelFields.protocol ? '有' : '无'}`,
   )
 
+  /**
+   * 宿主模型来源（v0.2.36 §3.2）。
+   *
+   * ## 这一段证明什么、不证明什么
+   *
+   * 证明：页面上的「模型来源」三态在、点「查看宿主可用模型」能得到一个**明确的
+   * 结论**（有模型就列出来，没有就说清缺什么）。
+   *
+   * 不证明：宿主模型今天能不能真的生成。隔离环境没有登录、没有密钥，`ctx.llm`
+   * 可能连一个模型都列不出来 —— 那正是要被如实显示的状态，而不是把它藏成
+   * 「按钮点了没反应」。
+   */
+  const sourceField = await evaluate<boolean>(`(() => Boolean(document.getElementById('dsd-llm-source')))`)
+  stage('模型来源选择器在页面上', sourceField ? 'passed' : 'failed', sourceField ? '有「模型来源」三栏' : '找不到 dsd-llm-source')
+
+  const hostProbeClicked = await clickScrolled('查看宿主可用模型')
+  stage(
+    '点击「查看宿主可用模型」',
+    hostProbeClicked ? 'passed' : 'failed',
+    hostProbeClicked ? '已点击真实按钮' : '按钮不存在或不可点',
+  )
+  if (hostProbeClicked) {
+    /**
+     * 判据要带冒号，不能用「可用模型」四个字。
+     *
+     * 失败过一次：按钮自己的文案就是「查看宿主可用模型」，于是 `includes('可用模型')`
+     * 在点下去的**同一毫秒**就成立了 —— 断言把按钮标签当成了结论，通过了但什么
+     * 也没验证。带冒号之后，只有结果那一行（`可用模型：…` / `不可用：…`）才算数。
+     */
+    const answerLine = (text: string): string =>
+      text
+        .split('\n')
+        .find((entry) => entry.includes('可用模型：') || entry.includes('不可用：')) ?? ''
+    const hostAnswered = await waitFor(async () => answerLine(await bodyText()) !== '', 30_000)
+    const line = answerLine(await bodyText())
+    stage(
+      '宿主模型探测给出明确结论',
+      hostAnswered ? 'passed' : 'failed',
+      hostAnswered ? line.slice(0, 140) : '30 秒内没有出现「可用模型：」或「不可用：」的结果行',
+    )
+    /**
+     * 不论可用与否，「不可用」必须带原因。一个只说「不可用」的结论，对用户没有
+     * 任何下一步 —— 而这条路的下一步恰恰是「去配自己的接口」。
+     */
+    if (line.includes('不可用：')) {
+      stage(
+        '不可用时给出了原因',
+        line.replace('不可用：', '').replace(/[：:\s]/g, '').length > 4 ? 'passed' : 'failed',
+        line.slice(0, 160),
+      )
+    }
+  }
+
   const probeClicked = await clickScrolled('测试模型连接')
   stage('点击「测试模型连接」', probeClicked ? 'passed' : 'failed', probeClicked ? '已点击真实按钮' : '按钮不存在或不可点')
   if (probeClicked) {

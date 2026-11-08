@@ -67,7 +67,8 @@ export declare function classifyThrown(error: unknown): {
  * GBK when the bytes are not valid UTF-8.
  */
 export declare function decodeBody(bytes: Uint8Array, contentType: string, mode: RequestOptions['encoding']): string;
-/** The shared HTTP client: one cookie jar, bounded retry, classified errors. */
+/** 设置平台 HTTP 的出网检查。传 undefined 恢复不限。 */
+export declare function __setHttpEgressGate(next: ((url: string) => void) | undefined): void;
 export declare class HttpClient {
     readonly jar: CookieJar;
     private readonly defaultTimeoutMs;

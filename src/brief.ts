@@ -216,6 +216,27 @@ export interface BriefFallacy {
   readonly otherQuote?: string
 }
 
+/**
+ * 最值得先回应的一条判断（v0.2.36 §5.2）。
+ *
+ * 与 {@link BriefFallacy} 的区别：fallacy 是「对方这句话有什么毛病」，
+ * decisivePoint 是「这几条里，哪一条真的会改变结论」。前者是清单，后者是排序。
+ * 模型真正需要的是排序 —— 否则它会挑最好反驳的那条打。
+ */
+export interface BriefDecisivePoint {
+  readonly kind: 'contradiction' | 'evasion' | 'third_party' | 'missing_evidence' | 'topic_shift'
+  /** 判断所依据的那条发言。 */
+  readonly postId: string
+  readonly quote: string
+  /** 对照的另一条发言（矛盾的前一句 / 提问 / 更早的话题）。 */
+  readonly otherPostId?: string
+  readonly otherQuote?: string
+  /** 为什么它重要 —— 一句话，给模型也给审阅的人看。 */
+  readonly why: string
+  /** 排序权重，越大越靠前。写出来是为了让「为什么它排第一」可被检查。 */
+  readonly weight: number
+}
+
 /** A third party who spoke inside the argument's floor (v0.2.11). */
 export interface BriefBystander {
   /** Display name as the platform rendered it. Not an identity. */
@@ -307,6 +328,13 @@ export interface DebateBrief {
   readonly missingContext?: readonly string[]
   /** 可引用的论证形式问题（§3.3）。 */
   readonly fallacies?: readonly BriefFallacy[]
+  /**
+   * 最值得先回应的几条（v0.2.36 §5.2）。
+   *
+   * 放在简报里而不是只放在提示词里：它是**可校验的引用**，与其它字段走同一套
+   * `validateBrief`。一个只存在于提示词里的「重点」无法被验证有没有被遵守。
+   */
+  readonly decisivePoints?: readonly BriefDecisivePoint[]
   readonly challenges: readonly BriefChallenge[]
   /**
    * Questions the **opponent** put to the owner that the owner never answered.
@@ -606,6 +634,37 @@ export function validateBrief(
     }
   }
 
+  /**
+   * 重点判断的校验（v0.2.36 §5.2）。
+   *
+   * 与 fallacies 同一套规则：引文必须在那条帖子里，方向必须归对了人。
+   * 唯一多出来的一条是「权重必须是有限数」—— 一个 NaN 会让排序失效，而排序
+   * 失效的表现是「它挑了一条最不重要的打」，从结果上看不出是排序坏了。
+   */
+  for (const [index, point] of (brief.decisivePoints ?? []).entries()) {
+    const field = `decisivePoints[${index}:${point.kind}]`
+    /**
+     * 方向的判定必须按 kind 分开（v0.2.36）。
+     *
+     * `evasion` 的 `postId` 是**主人**那条提问（「你做过测算吗」），`otherPostId`
+     * 才是对方的回避。一刀切要求 postId 属于对方，会把一条完全正确的判断判成
+     * 「把主人的话当成了对方说的」—— 而那正是校验器最该抓、也最容易误报的一类。
+     */
+    const primarySide: 'owner' | 'opponent' = point.kind === 'evasion' ? 'owner' : 'opponent'
+    checkSide(field, primarySide, [point.postId])
+    checkQuote(field, point.postId, point.quote)
+    if (point.why.trim() === '') {
+      problems.push({ field, reason: '没有说明为什么这一点重要' })
+    }
+    if (!Number.isFinite(point.weight)) {
+      problems.push({ field, reason: '权重不是有限数，排序会失效' })
+    }
+    if (point.otherPostId === undefined) continue
+    // 对照帖一律属于对方：矛盾的前一句、被回避的回应、更早的话题，都是对方说的。
+    checkSide(`${field}.other`, 'opponent', [point.otherPostId])
+    if (point.otherQuote !== undefined) checkQuote(`${field}.other`, point.otherPostId, point.otherQuote)
+  }
+
   // ## A brief with no disagreement is allowed *if* it says why (v0.2.13)
   //
   // v0.2.12 required at least one disagreement, on the reasoning that "a brief about a dispute
@@ -893,6 +952,22 @@ export function renderBrief(brief: DebateBrief): string {
    * 而不是只写在系统提示里，是因为模型对离得近的指令更敏感：一个「以偏概全」
    * 就在它眼前时，不提醒它就会把这四个字写进回复，读起来像在做逻辑课作业。
    */
+  /**
+   * 先给「打哪一点」，再给「有哪些毛病」（v0.2.36 §5.2）。
+   *
+   * 顺序是有意的：模型对靠前的内容更敏感。把十条清单放在最前面时，它会挑最好
+   * 反驳的那条；先说「这三条里第一条最影响结论」，它才会去打真正的那一点。
+   */
+  if (brief.decisivePoints !== undefined && brief.decisivePoints.length > 0) {
+    lines.push('## 最值得先回应的（按影响结论的程度排序，第一条最重要）')
+    for (const point of brief.decisivePoints) {
+      lines.push(`- 「${point.quote}」（${point.postId}）`)
+      lines.push(`  ${point.why}`)
+    }
+    lines.push('回复应当正面回应第一条；其余可以一句带过，不要平均用力。')
+    lines.push('')
+  }
+
   if (brief.fallacies !== undefined && brief.fallacies.length > 0) {
     lines.push('## 可以引用的论证问题（仅供判断，不要在回复里照念术语）')
     for (const fallacy of brief.fallacies) {

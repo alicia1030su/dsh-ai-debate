@@ -43,6 +43,15 @@ export interface Runtime {
     readonly config: () => ResolvedConfig;
     /** Model client factory, replaceable in tests. */
     readonly llm: () => LlmClient;
+    /**
+     * 宿主的模型服务（v0.2.36）。宿主没提供时省略。
+     *
+     * 只用于两件事：选模型来源、以及在设置页如实报告「宿主有哪些模型」。生成本身
+     * 仍然走 `llm()`，不从这里直接发请求 —— 否则守卫与用量统计就会有第二条绕过路径。
+     */
+    readonly hostLlm?: import('./host-llm.js').HostLlmLike;
+    /** 出网守卫（v0.2.36）。省略时不做限制。 */
+    readonly egress?: import('./net-audit.js').EgressGuard;
     readonly log: (level: 'debug' | 'info' | 'warn' | 'error', message: string) => void;
     /**
      * The platform registry, when the shell has one.

@@ -489,6 +489,7 @@ export function buildBrief(input: BuildBriefInput): {
     thirdPartyCitations: structure.thirdPartyCitations,
     missingContext: structure.missingContext,
     fallacies: structure.fallacies,
+    decisivePoints: structure.decisivePoints,
     challenges: briefChallenges,
     openQuestions,
     uncertainties: uncertainties(input, verdict),

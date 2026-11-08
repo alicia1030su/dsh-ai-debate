@@ -91,6 +91,15 @@ export interface Runtime {
   readonly config: () => ResolvedConfig
   /** Model client factory, replaceable in tests. */
   readonly llm: () => LlmClient
+  /**
+   * 宿主的模型服务（v0.2.36）。宿主没提供时省略。
+   *
+   * 只用于两件事：选模型来源、以及在设置页如实报告「宿主有哪些模型」。生成本身
+   * 仍然走 `llm()`，不从这里直接发请求 —— 否则守卫与用量统计就会有第二条绕过路径。
+   */
+  readonly hostLlm?: import('./host-llm.js').HostLlmLike
+  /** 出网守卫（v0.2.36）。省略时不做限制。 */
+  readonly egress?: import('./net-audit.js').EgressGuard
   readonly log: (level: 'debug' | 'info' | 'warn' | 'error', message: string) => void
   /**
    * The platform registry, when the shell has one.
@@ -1398,13 +1407,33 @@ export async function runGeneration(
    *   self-consistent candidate for a question nobody is asking anymore, and nothing
    *   downstream would refuse it.
    */
+  /**
+   * 输入指纹（v0.2.36 §8）：目标 + 人格 + 主人的额外指示。
+   *
+   * 只比目标时，两种真实操作会被误判：
+   *
+   * - 同一目标换人格再来一次 → 被判成「重复点击」拒绝，用户以为点坏了；
+   * - 同一目标改了指示 → 同上。
+   *
+   * 反过来，指纹变了就意味着旧请求回答的是另一个问题，迟到时也不该落地。
+   */
+  const inputKey = [
+    publishTargetPostId,
+    persona.style,
+    String(persona.intensity),
+    String(persona.maxLength),
+    String(persona.directness),
+    input.ownerInstruction ?? '',
+  ].join('|')
+
   const guard = generationGuardOf(runtime)
-  const claimAttempt = guard.begin(session.id, publishTargetPostId)
+  const claimAttempt = guard.begin(session.id, publishTargetPostId, Date.now(), inputKey)
   if (!claimAttempt.ok) {
     throw new Error(
       `这个会话已经在生成中（目标 ${claimAttempt.active.targetPostId}，` +
         `已运行 ${Date.now() - claimAttempt.active.startedAt} ms）。` +
-        '等这一次结束再点，重复请求会多花一次模型调用。',
+        '等这一次结束再点，重复请求会多花一次模型调用。' +
+        '如果只想换个人格，等这一次结束（或先取消）再生成。',
     )
   }
   const claim = claimAttempt.claim

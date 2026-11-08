@@ -38,6 +38,7 @@
 import { isSubstantive, looksLikeQuestion, type Dispute, type Statement } from './analyzer.js'
 import type {
   BriefContradiction,
+  BriefDecisivePoint,
   BriefFallacy,
   BriefFallacyCode,
   BriefQuestion,
@@ -74,7 +75,29 @@ export interface ArgumentStructure {
   readonly missingContext: readonly string[]
   /** Cited observations about flawed argument forms (§3.3). */
   readonly fallacies: readonly BriefFallacy[]
+  /**
+   * 最值得先回应的一到三条（v0.2.36 §5.2）。
+   *
+   * ## 为什么需要它
+   *
+   * v0.2.35 的简报把「对方说了什么」列全了，但没有回答「先打哪一点」。模型面对
+   * 十条材料时，倾向于挑**最好反驳**的那条，而不是**最影响结论**的那条 ——
+   * 于是回复读起来像在挑软柿子。
+   *
+   * 这里按「改变了结论没有」排序，而不是按「好不好反驳」：
+   *
+   * 1. 前后矛盾（high）：两句话不能同真，直接决定对方立场是否成立；
+   * 2. 主人问过、对方回避（带 evasion 引用）：回避本身就是结论性的；
+   * 3. 第三方引用被当成自己的论据：立场归属错了，反驳会打错人；
+   * 4. 有数量结论但同一帖里没有来源：这是事实层面的缺口；
+   * 5. 转移话题：重要，但通常是因为前一点答不上来，排在后面。
+   *
+   * 每一条都带 postId + 原文，{@link validateBrief} 会照常校验。
+   */
+  readonly decisivePoints: readonly BriefDecisivePoint[]
 }
+
+
 
 /**
  * Sentences of a post, trimmed, **with their terminator kept**.
@@ -684,6 +707,13 @@ export function analyzeArguments(input: ArgumentInput): ArgumentStructure {
     if (fallacies.length >= 10) break
   }
 
+  const decisivePoints = rankDecisivePoints({
+    contradictions,
+    unansweredByOpponent,
+    thirdPartyCitations,
+    fallacies,
+  })
+
   return {
     unansweredByOpponent,
     answeredByOwner,
@@ -692,7 +722,92 @@ export function analyzeArguments(input: ArgumentInput): ArgumentStructure {
     thirdPartyCitations,
     missingContext: findMissingContext(input),
     fallacies: fallacies.slice(0, 10),
+    decisivePoints,
   }
+}
+
+/**
+ * 按「改变了结论没有」排序，取前三。
+ *
+ * 权重是显式的常量，不是 `sort` 里的一段隐式比较：审阅的人要能指着一行说
+ * 「为什么这条比那条重要」。权重相同则按出现顺序 —— 早说的通常是被回避的那条。
+ */
+function rankDecisivePoints(input: {
+  readonly contradictions: readonly BriefContradiction[]
+  readonly unansweredByOpponent: readonly BriefQuestion[]
+  readonly thirdPartyCitations: readonly BriefThirdPartyCitation[]
+  readonly fallacies: readonly BriefFallacy[]
+}): BriefDecisivePoint[] {
+  const points: BriefDecisivePoint[] = []
+
+  for (const item of input.contradictions) {
+    points.push({
+      kind: 'contradiction',
+      postId: item.secondPostId,
+      quote: item.secondQuote,
+      otherPostId: item.firstPostId,
+      otherQuote: item.firstQuote,
+      why: '这两句话不能同时成立；对方必须先说清哪一句算数，后面的推论才有基础。',
+      weight: 100,
+    })
+  }
+
+  for (const item of input.unansweredByOpponent) {
+    // 只有「被明确回避」的才算决定性；单纯没回答可能只是还没看到。
+    const avoided = item.evasionPostId !== undefined
+    points.push({
+      kind: 'evasion',
+      postId: item.postId,
+      quote: item.quote,
+      ...(item.evasionPostId === undefined ? {} : { otherPostId: item.evasionPostId }),
+      ...(item.evasionQuote === undefined ? {} : { otherQuote: item.evasionQuote }),
+      why: avoided
+        ? '主人问过这一点，对方用另一句话绕开了；把问题原样放回去比新增论点更有力。'
+        : '主人问过这一点，对方还没有回答；可以要求先回答再继续。',
+      weight: avoided ? 90 : 60,
+    })
+  }
+
+  for (const item of input.thirdPartyCitations) {
+    points.push({
+      kind: 'third_party',
+      postId: item.postId,
+      quote: item.quote,
+      why: item.note,
+      weight: 70,
+    })
+  }
+
+  for (const item of input.fallacies) {
+    if (item.code !== 'missing_evidence') continue
+    points.push({
+      kind: 'missing_evidence',
+      postId: item.postId,
+      quote: item.quote,
+      why: item.why,
+      weight: 50,
+    })
+  }
+
+  const shifts = input.fallacies.filter((item) => item.code === 'topic_shift')
+  for (const item of shifts) {
+    points.push({
+      kind: 'topic_shift',
+      postId: item.postId,
+      quote: item.quote,
+      ...(item.otherPostId === undefined ? {} : { otherPostId: item.otherPostId }),
+      ...(item.otherQuote === undefined ? {} : { otherQuote: item.otherQuote }),
+      why: item.why,
+      weight: 40,
+    })
+  }
+
+  // 稳定排序：同权重保持原有先后（早出现的通常是被回避的那条）。
+  return points
+    .map((point, index) => ({ point, index }))
+    .sort((a, b) => b.point.weight - a.point.weight || a.index - b.index)
+    .slice(0, 3)
+    .map((entry) => entry.point)
 }
 
 /** Every fallacy code, for the UI legend and the tests. */

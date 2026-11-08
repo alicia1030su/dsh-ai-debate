@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs'
 
 import { PERSONAS, PERSONA_STYLES, buildPersonaPrompt, resolvePersona } from './persona.js'
 import { LlmError } from './llm.js'
+import { chooseModelSource } from './model-source.js'
 import { extractJsonObject } from './generator.js'
 import { chooseStoreDir, dshHomeDir } from './store-dir.js'
 import type { ResolvedConfig } from './config.js'
@@ -210,24 +211,40 @@ function checkContract(text: string): {
  * is the outcome this exists to prevent.
  */
 export async function testModel(runtime: Runtime, config: ResolvedConfig): Promise<ModelProbe> {
-  const baseUrl = config.llmBaseUrl
-  const model = config.llmModel
-  // 报告的是**实际配置**的协议，不是写死的字符串（v0.2.34 §3.2）。
-  const protocol = config.llmProtocol === 'responses' ? 'responses' : 'chat/completions'
-  if (!baseUrl || !model) {
+  // 先问「会走哪条路」，而不是先问「配置里有没有 Base URL」：v0.2.36 起，没有
+  // 自己配置也可能完全可用 —— 宿主就带着模型。按旧顺序判断会在这种环境里报
+  // 「还没有配置模型接口」，而实际上点一下生成就能出结果。
+  let choice: ReturnType<typeof chooseModelSource>
+  try {
+    choice = chooseModelSource(config, { host: runtime.hostLlm, egress: runtime.egress })
+  } catch (error) {
+    const code = error instanceof LlmError ? error.code : 'unavailable'
     return {
       ok: false,
-      baseUrl,
-      model,
-      message: '还没有配置模型接口：请填写 Base URL 与模型名称。',
-      protocol,
-      errorCode: 'unavailable',
+      baseUrl: config.llmBaseUrl,
+      model: config.llmModel,
+      message: error instanceof Error ? error.message : String(error),
+      protocol: config.llmProtocol === 'responses' ? 'responses' : 'chat/completions',
+      errorCode: code,
+      source: 'none',
+      ...(runtime.hostLlm === undefined ? {} : { hostAvailable: true }),
       suggestions: [
-        baseUrl === '' ? '填写 Base URL，例如 https://api.openai.com/v1 或本机的 http://127.0.0.1:11434/v1' : '',
-        model === '' ? '填写模型名称，例如 gpt-4o-mini、qwen2.5:7b' : '',
-      ].filter((line) => line !== ''),
+        '在插件设置里填 Base URL / API Key / 模型名称，指向任意 OpenAI 兼容接口',
+        '或者先让 DSH 自己配好模型，再把「模型来源」设为「自动」',
+      ],
     }
   }
+
+  const hostInUse = choice.source === 'host'
+  // 宿主这一路没有「Base URL」可言：请求由宿主的适配器发出。这里报空串，让页面
+  // 显示「宿主模型服务」而不是一个假的地址。
+  const baseUrl = hostInUse ? '' : config.llmBaseUrl
+  const model = hostInUse ? '' : config.llmModel
+  const protocol = hostInUse
+    ? 'host'
+    : config.llmProtocol === 'responses'
+      ? 'responses'
+      : 'chat/completions'
   const started = Date.now()
   let inputTokens = 0
   let outputTokens = 0
@@ -283,13 +300,16 @@ export async function testModel(runtime: Runtime, config: ResolvedConfig): Promi
       }
     }
 
+    const sourceLabel = hostInUse ? '宿主模型服务' : '自己配置的接口'
     return {
       ok: true,
       baseUrl,
-      model,
+      model: model === '' ? (reply.model ?? '') : model,
+      ...(reply.model === undefined ? {} : { provider: reply.model }),
       latencyMs,
-      message: `连接正常，耗时 ${latencyMs} ms。`,
+      message: `连接正常（${sourceLabel}），耗时 ${latencyMs} ms。`,
       protocol,
+      source: choice.source,
       ...(sample === undefined ? {} : { sample }),
       ...(reply.inputTokens === undefined ? {} : { inputTokens: reply.inputTokens }),
       ...(reply.outputTokens === undefined ? {} : { outputTokens: reply.outputTokens }),
@@ -310,6 +330,7 @@ export async function testModel(runtime: Runtime, config: ResolvedConfig): Promi
       latencyMs,
       message: error instanceof Error ? error.message : String(error),
       protocol,
+      source: choice.source,
       errorCode: code,
       ...(status === undefined ? {} : { status }),
       totalMs: Date.now() - started,

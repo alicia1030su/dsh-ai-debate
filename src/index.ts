@@ -23,7 +23,6 @@ import { verificationViewOf } from './verification-view.js'
 import { adapterVersionOfAdapter, effectiveCapability, type CapabilityEvidenceRecord } from './capability-evidence.js'
 import { approvalStillApplies, deriveWorkbenchState } from './workbench.js'
 import {
-  buildLlm,
   policyFromConfig,
   cancelInFlight,
   editCandidate,
@@ -35,9 +34,16 @@ import {
   type Runtime,
 } from './runtime.js'
 import { buildTools } from './tools.js'
+import { chooseModelSource } from './model-source.js'
+import { hostLlmOf, probeHostLlm } from './host-llm.js'
+import { EgressGuard, EgressLog, egressPolicyOf } from './net-audit.js'
+import { join } from 'node:path'
 import { resolveStoreDirStrict } from './store-dir.js'
 import { MAX_STORED_COMMENTS, type StoredCandidate, type StoredSession } from './store.js'
 import { PlatformRegistry } from './platforms/registry.js'
+import { __setHttpEgressGate } from './platforms/http.js'
+import { __setAuthHostEgressGate } from './platforms/weibo/network-state.js'
+import { __setCliEgressVeto } from './platforms/weibo/cli.js'
 import { tiebaProvider } from './platforms/tieba/provider.js'
 import { weiboProvider } from './platforms/weibo/provider.js'
 import { sourceOf } from './import/source.js'
@@ -464,6 +470,10 @@ export function buildRuntime(
      * its own namespace.
      */
     resolveCredential?: (platform: string, ref: string) => Promise<string | undefined>
+    /** 宿主的模型服务；宿主没提供时省略（v0.2.36）。 */
+    hostLlm?: import('./host-llm.js').HostLlmLike
+    /** 出网守卫；省略时不做限制（测试与旧调用方，v0.2.36）。 */
+    egress?: import('./net-audit.js').EgressGuard
     /**
      * Share an existing store instead of opening the file again.
      *
@@ -540,7 +550,13 @@ export function buildRuntime(
     store,
     policy: policyFromConfig(config),
     config: resolve,
-    llm: () => buildLlm(resolve()),
+    llm: () =>
+      chooseModelSource(resolve(), {
+        host: options.hostLlm,
+        egress: options.egress,
+      }).client,
+    ...(options.hostLlm === undefined ? {} : { hostLlm: options.hostLlm }),
+    ...(options.egress === undefined ? {} : { egress: options.egress }),
     log: (level, message) => {
       log[level](message)
     },
@@ -718,6 +734,37 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
    * It also gave concurrent refreshes no ordering, so a read that started before
    * a save could land after it and install the pre-save value.
    */
+  /**
+   * 宿主的模型服务（v0.2.36 §3.1）。
+   *
+   * 读一次就够：服务注册在宿主 ctx 上，插件生命周期内不会换。拿不到是正常状态
+   * （旧宿主、或宿主禁用了 llm），此时模型来源退回「自己配置的接口」。
+   */
+  const hostLlm = hostLlmOf(ctx)
+
+  /**
+   * 出网守卫（v0.2.36 §4）。
+   *
+   * 审计落在插件自己的 store 目录旁 —— 不写进会话数据，也不写进宿主日志：
+   * 验收脚本要能独立读它，且它不能污染产品状态。
+   */
+  const egressLog = new EgressLog(join(resolveStoreDirStrict({ configured: resolveConfig(config).storeDir, get: ctx.get }).dir, 'egress.jsonl'))
+  /**
+   * 守卫按**当前配置**现造，而不是挂载时造一个。
+   *
+   * `egressMode` 是可实时编辑的：用户在设置页把「手动导入」切成「离线」，下一次
+   * 出网判断就该按新模式来。挂载时造的那一个会一直用旧模式，直到重挂插件 ——
+   * 一个「改了没生效」的安全设置比没有这个设置更危险。
+   */
+  const egressOf = (): EgressGuard =>
+    new EgressGuard(
+      egressPolicyOf({
+        mode: effectiveConfig().egressMode,
+        llmBaseUrl: effectiveConfig().llmBaseUrl,
+      }),
+      egressLog,
+    )
+
   const seam = findCredentialSeam(ctx as { get?: (name: string, strict?: boolean) => unknown })
 
   const credentialMirror = new CredentialMirror({
@@ -756,6 +803,31 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
   const platforms = new PlatformRegistry()
   platforms.register(tiebaProvider)
   platforms.register(weiboProvider)
+
+  /**
+   * 把出网策略接到两个平台出口上（v0.2.36 §4）。
+   *
+   * 位置在注册中心之后、任何读取之前：策略必须在第一次平台调用之前就位，否则
+   * 「第一枪」会按默认放行打出去。两个钩子读的都是 `effectiveConfig()`，所以
+   * 设置页改模式立即生效，不需要重挂。
+   */
+  __setHttpEgressGate((url) => {
+    egressOf().check(url, 'platform')
+  })
+  // 第三条出口：微博授权主机探针（v0.2.36）。真机验收里它绕过了守卫 8 次。
+  __setAuthHostEgressGate((url) => {
+    egressOf().check(url, 'platform')
+  })
+  __setCliEgressVeto((argv) => {
+    try {
+      // 标签只取前两个参数（子命令与动作），不含任何内容参数：审计日志不该把
+      // 用户输入的正文抄进去。
+      egressOf().assertSpawn('platform', argv.slice(0, 2).join('.'))
+      return undefined
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  })
 
   /**
    * What the settings page shows in its platform section.
@@ -966,6 +1038,8 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
   let runtime = buildRuntime(effectiveConfig, log, platforms, undefined, {
     resolveCredential: resolvePlatformCredential,
     store: storeFor(effectiveConfig()),
+    hostLlm,
+    egress: egressOf(),
   })
   let currentKey = adapterKey(effectiveConfig())
   let disposed = false
@@ -986,6 +1060,8 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
       runtime = buildRuntime(effectiveConfig, log, platforms, undefined, {
         resolveCredential: resolvePlatformCredential,
         store: storeFor(next),
+        hostLlm,
+        egress: egressOf(),
       })
       currentKey = key
     }
@@ -1008,6 +1084,8 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
     runtime = buildRuntime(effectiveConfig, log, platforms, undefined, {
       resolveCredential: resolvePlatformCredential,
       store: storeFor(effectiveConfig()),
+      hostLlm,
+      egress: egressOf(),
     })
     currentKey = key
   }
@@ -1091,7 +1169,12 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
       assertEnabled('执行操作')
       return effectiveConfig()
     },
-    llm: () => buildLlm(effectiveConfig()),
+    llm: () =>
+      chooseModelSource(effectiveConfig(), {
+        host: hostLlm,
+        egress: egressOf(),
+      }).client,
+    ...(hostLlm === undefined ? {} : { hostLlm }),
     credentialState: () => {
       const state = credentialMirror.state
       return {
@@ -1595,6 +1678,26 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           model: effectiveConfig().llmModel,
           message: error instanceof Error ? error.message : String(error),
         }
+      }
+    },
+    probeHostLlm: async () => {
+      try {
+        return await probeHostLlm(hostLlm)
+      } catch (error) {
+        return {
+          available: false,
+          servicePresent: hostLlm !== undefined,
+          providers: [],
+          models: [],
+          reason: `探测宿主模型失败：${error instanceof Error ? error.message : String(error)}`,
+        }
+      }
+    },
+    probeEgress: async () => {
+      try {
+        return await egressOf().selfTest()
+      } catch (error) {
+        return { blocked: false, mode: 'open', host: '', reason: `自检本身失败：${(error as Error).message}` }
       }
     },
     checkLogin: async () => {
@@ -2538,6 +2641,10 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
   return () => {
     if (disposed) return
     disposed = true
+    // 卸载时摘掉出网钩子：留着会把「插件已经不在了」变成一个仍在生效的拒绝源。
+    __setHttpEgressGate(undefined)
+    __setCliEgressVeto(undefined)
+    __setAuthHostEgressGate(undefined)
     for (const dispose of disposers.splice(0).reverse()) {
       try {
         dispose()
