@@ -149,7 +149,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     /** Cap on the model's own answer; 0 leaves the size to the persona length. */
     llmMaxOutputTokens: z<number, number, "volatile-defined">;
     /** Budget preset for the model's context. */
-    contextPreset: z<"small" | "medium" | "large", "small" | "medium" | "large", "volatile-defined">;
+    contextPreset: z<"medium" | "small" | "large", "medium" | "small" | "large", "volatile-defined">;
     /** Explicit token budget; overrides the preset when > 0. */
     contextTokens: z<number, number, "volatile-defined">;
     /**
@@ -334,7 +334,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     /** Cap on the model's own answer; 0 leaves the size to the persona length. */
     llmMaxOutputTokens: z<number, number, "volatile-defined">;
     /** Budget preset for the model's context. */
-    contextPreset: z<"small" | "medium" | "large", "small" | "medium" | "large", "volatile-defined">;
+    contextPreset: z<"medium" | "small" | "large", "medium" | "small" | "large", "volatile-defined">;
     /** Explicit token budget; overrides the preset when > 0. */
     contextTokens: z<number, number, "volatile-defined">;
     /**

@@ -80,6 +80,120 @@ export interface BriefUncertainty {
 }
 /** What kind of reply this brief suggests. */
 export type BriefDirection = 'rebut' | 'analyse' | 'humour';
+/**
+ * A question, with the post that asked it (v0.2.35 §3.1 items 4 and 5).
+ *
+ * ## Why a question is a separate type from a challenge
+ *
+ * `challenges` means "the opponent asked, the owner did not answer" — it carries a
+ * judgement about the reply the owner owes. A question in the ledger carries no judgement:
+ * it records who asked, whether anyone answered, and which post did it. That makes the
+ * mirror direction expressible, and the mirror is the one that was missing: questions the
+ * **owner** asked that the **opponent** never answered are the strongest material a reply
+ * has, and questions the opponent asked that the owner *did* answer must not be answered
+ * again.
+ */
+export interface BriefQuestion {
+    /** The question as it was written, quoted from the post. */
+    readonly quote: string;
+    /** The post that asked it. */
+    readonly postId: string;
+    /** The first later substantive post from the other side, when there was one. */
+    readonly answerPostId?: string;
+    /** What that answer said, quoted. */
+    readonly answerQuote?: string;
+    /**
+     * The post that replied **without addressing the question**, when that is what happened.
+     *
+     * ## Why this is separate from `answerPostId`
+     *
+     * 「他答了」 and 「他回了一句，但没回答这个问题」 are different facts, and the first version
+     * of this ledger collapsed them: any later substantive post counted as an answer, so
+     * 「反正大家都这么说」 closed a question about where a number came from. That is precisely
+     * the evasion the reply should be able to point at, and the coarse rule made it invisible.
+     *
+     * A reply with no subject token in common with the question is recorded here instead, so
+     * the brief can say 「对方回了一句，但没回答」 — a claim with two citations behind it.
+     */
+    readonly evasionPostId?: string;
+    readonly evasionQuote?: string;
+}
+/**
+ * A place the opponent left the subject (v0.2.35 §3.1 item 6).
+ *
+ * Both ends are cited: the statement that was on topic and the one that was not. A shift
+ * with only the second half would be an accusation without a baseline.
+ */
+export interface BriefTopicShift {
+    readonly postId: string;
+    readonly quote: string;
+    readonly previousPostId: string;
+    readonly previousQuote: string;
+    /** The words that announced the change, when the text contained any. */
+    readonly marker?: string;
+}
+/**
+ * Two of the opponent's own statements that cannot both hold (v0.2.35 §3.1 item 7).
+ *
+ * `subject` is the phrase the two share after negation is stripped — the claim they agree
+ * on — so a reviewer can see *what* is contradicted rather than being told that something
+ * is.
+ */
+export interface BriefContradiction {
+    readonly firstPostId: string;
+    readonly firstQuote: string;
+    readonly secondPostId: string;
+    readonly secondQuote: string;
+    readonly subject: string;
+}
+/**
+ * Somebody outside the argument, quoted inside it (v0.2.35 §3.1 item 8).
+ *
+ * ## The distinction this type exists to preserve
+ *
+ * 「专家说成本会翻倍」 is not the opponent claiming costs will double; it is the opponent
+ * citing a third party. A reply that answers it as the opponent's own position argues with
+ * the wrong person. The citation therefore lives in its own section of the brief, and
+ * `validateBrief` refuses one attributed to a post that is not the opponent's.
+ */
+export interface BriefThirdPartyCitation {
+    readonly postId: string;
+    readonly quote: string;
+    /** Who the post said it came from, when it said. */
+    readonly attribution?: string;
+    /** What the reviewer should not conclude from it. */
+    readonly note: string;
+}
+/** The eight argument-form problems §3.3 names. */
+export type BriefFallacyCode = 'equivocation' | 'self_contradiction' | 'hasty_generalization' | 'false_cause' | 'topic_shift' | 'quote_mining' | 'evasion' | 'missing_evidence';
+/**
+ * One cited observation about how an argument was made (v0.2.35 §3.3).
+ *
+ * ## Why every field is mandatory
+ *
+ * A fallacy claim is the easiest thing in this codebase to get wrong and the hardest to
+ * defend. Requiring `quote`, `why` and a confidence means each one can be checked against
+ * the post it names; `otherQuote` carries the second half of a contradiction or the
+ * original sentence behind a truncated quotation, because neither is visible from one span.
+ *
+ * ## What the consumer must not do with it
+ *
+ * These are leads for a human and for the prompt, not verdicts. The generator is told not
+ * to name the fallacy unless it is the natural way to answer, and the report counts them
+ * separately from the checks that gate.
+ */
+export interface BriefFallacy {
+    readonly code: BriefFallacyCode;
+    /** The Chinese label, carried so no consumer has to re-derive it. */
+    readonly label: string;
+    readonly postId: string;
+    readonly quote: string;
+    readonly why: string;
+    readonly confidence: 'high' | 'medium' | 'low';
+    /** The other post needed to see the problem, when one is needed. */
+    readonly otherPostId?: string;
+    readonly otherQuote?: string;
+}
 /** A third party who spoke inside the argument's floor (v0.2.11). */
 export interface BriefBystander {
     /** Display name as the platform rendered it. Not an identity. */
@@ -142,6 +256,34 @@ export interface DebateBrief {
      * 「我们没看」和「对方没说过」变成同一句话。
      */
     readonly opponentArguments?: readonly BriefArgument[];
+    /**
+     * 主人问过、对方没有回答的问题（v0.2.35 §3.1 第 4 项）。
+     *
+     * 与 `openQuestions` 方向相反：那是对方问、主人没答；这是主人问、对方没答。
+     * 两者都重要，但用途相反 —— 前者是欠的回答，后者是可以追问的把柄。混用会
+     * 生成一条「你倒是回答我」的回复，而对方问的问题其实主人一直没答。
+     *
+     * 可选语义与 `opponentArguments` 一致：缺省＝这条路径没有收集；`[]`＝收集了，
+     * 主人没问过问题或对方都答了。
+     */
+    readonly unansweredByOpponent?: readonly BriefQuestion[];
+    /**
+     * 对方问过、主人**已经回答**的问题（§3.1 第 5 项）。
+     *
+     * 存在的唯一目的是防止重复：模型看不到这层关系时，会把主人两轮之前答过的问题
+     * 再答一遍，读起来像是忘了自己说过什么。
+     */
+    readonly answeredByOwner?: readonly BriefQuestion[];
+    /** 对方离开话题的地方（§3.1 第 6 项）。 */
+    readonly topicShifts?: readonly BriefTopicShift[];
+    /** 对方前后矛盾的地方（§3.1 第 7 项）。 */
+    readonly contradictions?: readonly BriefContradiction[];
+    /** 对方引用的第三方观点（§3.1 第 8 项）。 */
+    readonly thirdPartyCitations?: readonly BriefThirdPartyCitation[];
+    /** 这次读取缺失的上下文（§3.1 第 9 项）。 */
+    readonly missingContext?: readonly string[];
+    /** 可引用的论证形式问题（§3.3）。 */
+    readonly fallacies?: readonly BriefFallacy[];
     readonly challenges: readonly BriefChallenge[];
     /**
      * Questions the **opponent** put to the owner that the owner never answered.
@@ -195,6 +337,18 @@ export interface BriefSources {
     readonly opponentPostIds: ReadonlySet<string>;
     /** Every post id present in the collected conversation. */
     readonly allPostIds: ReadonlySet<string>;
+    /**
+     * The text of each post, for quote verification (v0.2.35).
+     *
+     * ## Why the id set was not enough
+     *
+     * An id that exists proves *something* was read; it does not prove the quote attributed
+     * to it is really there. Every finding in v0.2.35 carries the exact span it came from, so
+     * the check has to compare against the text. Optional so callers that only have ids (and
+     * tests that check attribution alone) keep working — when it is absent, quotes are
+     * checked for shape but not for content, and the absence is visible at the call site.
+     */
+    readonly contentOf?: ReadonlyMap<string, string>;
 }
 /** A problem found while validating a brief. */
 export interface BriefProblem {

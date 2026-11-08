@@ -15,6 +15,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { weiboProvider, WeiboNotAuthorisedError } from '../lib/platforms/weibo/provider.js'
+import { __setCliInvocation } from '../lib/platforms/weibo/cli.js'
 import { PlatformRegistry } from '../lib/platforms/registry.js'
 import type { CapabilityName } from '../lib/platforms/contracts.js'
 
@@ -115,58 +116,93 @@ test('每个读方法都失败并给出可识别的错误码，而不是返回�
   // So the assertion is on the property: every read rejects, and every rejection carries a
   // code from the known set. `publishReply` keeps its own class, because writing is not a
   // missing-read situation.
-  const adapter = weiboProvider.createAdapter({ settings: {} })
-  const reads = [
-    () => adapter.getThread({ platform: 'weibo', threadId: '1' } as never),
-    () => adapter.getReplies({ platform: 'weibo', threadId: '1' } as never, 1),
-    () => adapter.getNestedReplies({ platform: 'weibo', threadId: '1' } as never, { platform: 'weibo', postId: 'c1' } as never, 1),
-    () => adapter.getUserProfile('u1'),
-    () => adapter.getMentions(),
-    () => adapter.getReplyContext({ platform: 'weibo', threadId: '1' } as never, 'c1'),
-  ]
-  const KNOWN = [
-    'cli_missing',
-    'not_authenticated',
-    'service_inactive',
-    'quota_exhausted',
-    'command_unavailable',
-    'malformed_response',
-    'failed',
-  ]
-  for (const call of reads) {
-    await assert.rejects(call, (error: unknown) => {
-      const code = (error as { code?: string }).code
-      assert.equal(
-        KNOWN.includes(code ?? ''),
-        true,
-        `读失败必须带可识别错误码，实际 code=${code} message=${(error as Error).message}`,
-      )
-      return true
-    })
-  }
+  //
+  // ## v0.2.35：把「本机有没有 CLI」变成显式输入
+  //
+  // 这一条原来读本机真实 CLI。v0.2.34 之后主人装上了 CLI，于是 `getThread('1')` 会
+  // 真的发起一次读取，平台返回的东西与 1 号微博对不上，得到 `target_mismatch` ——
+  // 一个**正确**的产品行为（返回的不是目标微博，必须拒绝），却不在旧白名单里。
+  //
+  // 两种改法：把 `target_mismatch` 加进白名单，或者让环境确定。两个都做了，理由不同：
+  // 前者是错误码清单本来就不完整；后者是这条测试问的是「失败要可识别」，不该随
+  // 机器上装没装 CLI 而改变答案。
+  const missing = 'C:/nonexistent-dsh-ai-debate/weibo-cli.exe'
+  __setCliInvocation({ file: missing, prefixArgs: [] })
+  try {
+    const adapter = weiboProvider.createAdapter({ settings: {} })
+    const reads = [
+      () => adapter.getThread({ platform: 'weibo', threadId: '1' } as never),
+      () => adapter.getReplies({ platform: 'weibo', threadId: '1' } as never, 1),
+      () => adapter.getNestedReplies({ platform: 'weibo', threadId: '1' } as never, { platform: 'weibo', postId: 'c1' } as never, 1),
+      () => adapter.getUserProfile('u1'),
+      () => adapter.getMentions(),
+      () => adapter.getReplyContext({ platform: 'weibo', threadId: '1' } as never, 'c1'),
+    ]
+    const KNOWN = [
+      'cli_missing',
+      'not_authenticated',
+      'service_inactive',
+      'quota_exhausted',
+      'command_unavailable',
+      'malformed_response',
+      // 平台返回的微博不是请求的那一条（v0.2.14 §二）。它是可识别的拒绝，
+      // 不是解析失败，所以属于这一组。
+      'target_mismatch',
+      'failed',
+    ]
+    for (const call of reads) {
+      await assert.rejects(call, (error: unknown) => {
+        const code = (error as { code?: string }).code
+        assert.equal(
+          KNOWN.includes(code ?? ''),
+          true,
+          `读失败必须带可识别错误码，实际 code=${code} message=${(error as Error).message}`,
+        )
+        return true
+      })
+    }
 
-  // Writing is a different refusal, and it must not drift into "temporarily unavailable":
-  // this build has no Weibo write path at all.
-  await assert.rejects(
-    () => adapter.publishReply({ platform: 'weibo', threadId: '1' } as never, 'nested', 'x'),
-    (error: unknown) => {
-      assert.ok(error instanceof WeiboNotAuthorisedError, '发表必须是授权错误，不是别的')
-      assert.equal((error as WeiboNotAuthorisedError).code, 'weibo_not_authorised')
-      return true
-    },
-  )
+    // Writing is a different refusal, and it must not drift into "temporarily unavailable":
+    // this build has no Weibo write path at all.
+    await assert.rejects(
+      () => adapter.publishReply({ platform: 'weibo', threadId: '1' } as never, 'nested', 'x'),
+      (error: unknown) => {
+        assert.ok(error instanceof WeiboNotAuthorisedError, '发表必须是授权错误，不是别的')
+        assert.equal((error as WeiboNotAuthorisedError).code, 'weibo_not_authorised')
+        return true
+      },
+    )
+  } finally {
+    __setCliInvocation(undefined)
+  }
 })
 
 test('登录检查返回状态，不抛异常（v0.2.12：它现在是探测，不是拒绝）', async () => {
   // `checkAuthentication` used to throw. It is a read-only probe of the local CLI, and a
   // caller asking "am I logged in?" needs the answer `false` with a reason, not an
   // exception — that is what the settings page renders.
-  const adapter = weiboProvider.createAdapter({ settings: {} })
-  const state = await adapter.checkAuthentication()
-  assert.equal(typeof state.authenticated, 'boolean')
-  assert.equal(state.authenticated, false, '本机没有 CLI，未认证')
-  assert.equal(typeof state.reason, 'string', '必须说明为什么')
-  assert.match(state.reason ?? '', /CLI|cli|安装|授权/, `原因应可读：${state.reason}`)
+  //
+  // ## 这一条不再假设「本机没有 CLI」（v0.2.35）
+  //
+  // 它原来硬编码 `authenticated === false` 并把注释写成「本机没有 CLI」。v0.2.34 期间
+  // 主人装上了 CLI 并做过授权，这个前提就不再成立：探测会真的去问 CLI，只要登录态
+  // 被判定可用，`authenticated` 就是 true —— 产品是对的，测试在赌环境。
+  //
+  // 与另外两条微博测试一样，把环境变成**明确的输入**：CLI 指向不存在的可执行文件，
+  // 于是「未认证」这个断言在任何机器上都成立。断言本身没有放宽：仍然是
+  // 「不抛异常 + 布尔 + 有可读原因 + 原因指向安装或授权」。
+  const missing = 'C:/nonexistent-dsh-ai-debate/weibo-cli.exe'
+  __setCliInvocation({ file: missing, prefixArgs: [] })
+  try {
+    const adapter = weiboProvider.createAdapter({ settings: {} })
+    const state = await adapter.checkAuthentication()
+    assert.equal(typeof state.authenticated, 'boolean')
+    assert.equal(state.authenticated, false, 'CLI 不可用时必须报告未认证')
+    assert.equal(typeof state.reason, 'string', '必须说明为什么')
+    assert.match(state.reason ?? '', /CLI|cli|安装|授权/, `原因应可读：${state.reason}`)
+  } finally {
+    __setCliInvocation(undefined)
+  }
 })
 
 test('适配器自己的能力牌是「全都不能」，与矩阵一致', () => {

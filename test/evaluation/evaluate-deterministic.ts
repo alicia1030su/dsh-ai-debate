@@ -78,7 +78,13 @@ function contractOf(c: EvalCase, targetPostId: string): string {
 }
 
 /** Turn the corpus shape into the collector's shape. */
-function collected(c: EvalCase): CollectedThread {
+/**
+ * 按案例构造 CollectedThread。
+ *
+ * 导出是给 v0.2.35 的脚本化评测用的：那一版要拿同一个案例集跑两个构建、
+ * 再对比十项指标。如果两个构建各自造一份夹具，「差异」里就混进了夹具差异。
+ */
+export function caseThread(c: EvalCase): CollectedThread {
   const platform = c.platform ?? 'tieba'
   /**
    * The thread, in the shape its platform actually has.
@@ -249,7 +255,7 @@ async function runCase(c: EvalCase): Promise<{ results: CheckResult[]; refused: 
     return { results, refused: true }
   }
 
-  const data = collected(c)
+  const data = caseThread(c)
 
   // ## Target and opponent
   //
