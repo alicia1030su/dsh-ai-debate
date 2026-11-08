@@ -144,18 +144,34 @@ test('归档里有、HEAD 里没有的文件单独成一类', () => {
   assert.equal(result.verdicts[0]?.kind, 'not-in-repository')
 })
 
-test('仓库里有、归档里没有的文件列进 missing', () => {
-  const zip = makeZip([['a.txt', Buffer.from('a\n')]])
+test('仓库里有、归档里没有的文件：只把「本该发布的位置」算失败', () => {
+  const zip = makeZip([['src/a.ts', Buffer.from('a\n')]])
   const result = verifyArchive(
     zip,
     new Map([
-      ['a.txt', Buffer.from('a\n')],
+      ['src/a.ts', Buffer.from('a\n')],
+      // 该发布的位置缺了 → 失败
+      ['src/b.ts', Buffer.from('b\n')],
+      // 白名单外的（根目录报告、评测记录）→ 只列出，不判红
       ['pnpm-lock.yaml', Buffer.from('lock\n')],
+      ['.eval/run.json', Buffer.from('{}\n')],
     ]),
-    2,
+    4,
   )
   assert.equal(result.identical, 1)
-  assert.deepEqual(result.missing, ['pnpm-lock.yaml'])
+  assert.deepEqual(result.missing, ['src/b.ts'], '源码目录缺文件才算失败')
+  assert.deepEqual(result.notPublished, ['pnpm-lock.yaml', '.eval/run.json'])
+})
+
+test('whatever 缺失分类：`pnpm-lock.yaml` 在白名单外，但它是安装必需的', () => {
+  // 这一条记录一个真实的张力：pnpm-lock.yaml 不在 PUBLISHED_ROOTS 里，
+  // 于是「归档里没有它」不会被这个工具判红 —— 而它其实是源码包能安装的前提。
+  // 管它的是 ci-guard 的另一条断言（`ALLOWED_FILES` 必须收录 pnpm-lock.yaml）。
+  // 两个工具各管一段，这里显式记下来，避免将来有人以为这个工具覆盖了那一块。
+  const zip = makeZip([['src/a.ts', Buffer.from('a\n')]])
+  const result = verifyArchive(zip, new Map([['pnpm-lock.yaml', Buffer.from('lock\n')]]), 1)
+  assert.deepEqual(result.missing, [], '这个工具不判定锁文件缺失')
+  assert.deepEqual(result.notPublished, ['pnpm-lock.yaml'])
 })
 
 test('行尾比较只认 CRLF/CR，不把别的字节差异放过', () => {

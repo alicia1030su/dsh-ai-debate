@@ -99,6 +99,7 @@ const report = {
   totals: verification.totals,
   problems: verification.verdicts,
   missing: verification.missing,
+  notPublished: verification.notPublished,
   // 构建环境必须记录：字节级复现依赖同一套 Node/zlib。
   environment: {
     node: process.version,
@@ -114,6 +115,12 @@ process.stdout.write(`  ${verification.entries} 个条目，${verification.ident
 
 if (verification.verdicts.length === 0 && verification.missing.length === 0) {
   process.stdout.write('  ✔ 归档内容与已提交内容完全一致\n')
+  if (verification.notPublished.length > 0) {
+    process.stdout.write(
+      `  · ${verification.notPublished.length} 个跟踪文件按打包白名单不进归档（如 .eval/、根目录报告、fixtures 里的假包）—— 列出但不判红\n`,
+    )
+    for (const path of verification.notPublished.slice(0, 8)) process.stdout.write(`    · ${path}\n`)
+  }
 } else {
   process.stdout.write(
     `  ✖ ${verification.verdicts.length} 个条目不一致，${verification.missing.length} 个跟踪文件不在归档里\n`,

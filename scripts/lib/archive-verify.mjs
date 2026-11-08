@@ -177,13 +177,33 @@ export function verifyArchive(zipBytes, blobs, trackedCount) {
   }
 
   const archived = new Set(entries.map((entry) => entry.name))
-  const missing = [...blobs.keys()].filter((path) => !archived.has(path))
+  /**
+   * 仓库里有、归档里没有的文件，分成两类。
+   *
+   * ## 为什么不能一律算失败
+   *
+   * 归档不是「仓库的完整拷贝」：打包器有白名单，`.eval/`（评测记录）、根目录的
+   * 历史报告、`test/fixtures/<pkg>/node_modules`（刻意入库的假包）都在白名单之外，
+   * 而且**是故意的**。把「不在归档里」一律判红，这条检查就会永远红 ——
+   * 一条永远红的检查等于没有检查。
+   *
+   * 判据：**本该整目录发布的位置**（源码、测试、脚本、文档、客户端）缺文件才算失败；
+   * 其余只列出来，并说明「可能是设计如此」。
+   *
+   * 这个划分不 import 打包器的白名单（那会让两处规则互相掩护），它是核验方自己的
+   * 判断，写在这里供人质疑。
+   */
+  const PUBLISHED_ROOTS = ['src/', 'test/', 'scripts/', 'docs/', 'client/', 'templates/', '.github/']
+  const allMissing = [...blobs.keys()].filter((path) => !archived.has(path))
+  const missing = allMissing.filter((path) => PUBLISHED_ROOTS.some((root) => path.startsWith(root)))
+  const notPublished = allMissing.filter((path) => !missing.includes(path))
 
   return {
     entries: entries.length,
     identical,
     verdicts,
     missing,
+    notPublished,
     manifest,
     totals: { content, lineEndingsOnly, notInRepository },
   }
