@@ -169,25 +169,39 @@ test('an edit during generation does not steal the new candidate version', async
  * id is what an approval, an edit and a publish address, so a duplicate there means an
  * action can land on a candidate the owner never looked at.
  */
-test('two generations in flight at once get distinct ids and versions', async () => {
+/**
+ * 并发生成在 v0.2.35 里变成了**被拒绝**，而不是「两个都写入」。
+ *
+ * ## 为什么这一条要改写而不是删掉
+ *
+ * 它原来断言：两次并发生成各自拿到不同的 id 与版本号，两条都写进文档。那是对
+ * v0.2.27 那次修复的验证 —— 版本号在 `mutate` 里分配，所以不会撞号。那个性质仍然
+ * 成立，而且仍然重要（编辑与生成并发时还会走到它）。
+ *
+ * 但 v0.2.35 §6 把「同目标重复点击」定义成不该发生的事：两次并发生成会多花一次模型
+ * 调用，并让主人刚做过的一次批准在第二次写入时被作废。现在的正确行为是：第一次
+ * 受理，第二次立刻被拒，并且**只写一条候选**。
+ *
+ * 所以这一条改成断言新契约，而「版本号不撞」由同文件的编辑并发那条继续守着 ——
+ * 断言没有删，只是换了要守的对象。
+ */
+test('两次并发生成：后到的被拒绝，文档里只留一条候选', async () => {
   const data = threePartyThread({ authorSource: 'wap_inline' })
   const adapter = new FakeAdapter(data)
   const dir = mkdtempSync(join(tmpdir(), 'debate-version-'))
 
-  // A barrier: both calls arrive, then both are released together.
-  let arrived = 0
-  let open: (() => void) | undefined
-  const both = new Promise<void>((resolve) => {
-    open = resolve
+  // 一个闸门：让第一次调用停在模型里，第二次才有机会撞上来。
+  let release: (() => void) | undefined
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
   })
+  let calls = 0
   const store = new DebateStore({ dir })
   const client = new (class extends ScriptedLlmClient {
     override async complete(input: Parameters<ScriptedLlmClient['complete']>[0]) {
-      const result = await super.complete(input)
-      arrived += 1
-      if (arrived >= 2) open?.()
-      await both
-      return result
+      calls += 1
+      if (calls === 1) await gate
+      return super.complete(input)
     }
   })([{ text: modelReply() }, { text: modelReply() }])
 
@@ -215,22 +229,22 @@ test('two generations in flight at once get distinct ids and versions', async ()
 
   try {
     const analysis = await runAnalysis(runtime, { url: data.thread.url, postId: 'n7' })
-    const [a, b] = await Promise.all([
-      runGeneration(runtime, { sessionId: analysis.sessionId }),
-      runGeneration(runtime, { sessionId: analysis.sessionId }),
-    ])
-
-    assert.notEqual(a.candidateId, b.candidateId, '两次并发生成不能拿到同一个候选 id')
+    const first = runGeneration(runtime, { sessionId: analysis.sessionId })
+    // 等第一次真的进到模型里，再发第二次：否则「拒绝」可能只是因为两个调用还没重叠。
+    while (calls === 0) await new Promise((resolve) => setTimeout(resolve, 0))
+    const second = await runGeneration(runtime, { sessionId: analysis.sessionId }).then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, message: (error as Error).message }),
+    )
+    assert.equal(second.ok, false, '同目标的第二次生成必须被拒绝，不能重复花钱')
+    assert.match(second.ok ? '' : second.message, /已经在生成中|重复/i)
+    release?.()
+    const done = await first
 
     const session = (await getSession(runtime, analysis.sessionId)).session
-    const ids = session.candidates.map((row) => row.replyId)
-    const versions = session.candidates.map((row) => row.candidateVersion)
-    assert.equal(new Set(ids).size, ids.length, `候选 id 重复了：${ids.join(', ')}`)
-    assert.equal(new Set(versions).size, versions.length, `候选版本号重复了：${versions.join(', ')}`)
-    assert.ok(
-      ids.includes(a.candidateId) && ids.includes(b.candidateId),
-      '两个调用返回的 id 都必须真的写进了文档',
-    )
+    assert.equal(session.candidates.length, 1, `只应留下一条候选，实际 ${session.candidates.length}`)
+    assert.equal(session.candidates[0]!.replyId, done.candidateId)
+    assert.equal(calls, 1, `模型只该被调用一次，实际 ${calls}`)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

@@ -275,6 +275,18 @@ export interface GenerateOutput {
         outputTokens: number;
         elapsedMs: number;
     };
+    /**
+     * Which model and protocol actually produced this candidate (v0.2.35 §2.2).
+     *
+     * Recorded because "the model is configured as X" and "this draft came from X over
+     * protocol Y" are different facts, and only the second one belongs next to the text.
+     * A report that says "generated with gpt-4o-mini" while the request went to `/responses`
+     * because that is what the endpoint spoke is wrong in a way nobody can check later.
+     */
+    readonly model?: string;
+    readonly protocol?: 'chat' | 'responses';
+    /** Model calls spent, including the repair attempt when one was made. */
+    readonly attempts?: number;
 }
 /**
  * Generate a candidate reply for an analyzed session.

@@ -24,6 +24,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { EvidenceCollector, MANUAL_E2E_SCRIPT_VERSION } from './evidence.ts'
+import { openPluginPage, openSettings, type ShellCtx } from './desktop-shell.ts'
 
 interface StageResult {
   readonly name: string
@@ -173,10 +174,37 @@ await new Promise<void>((resolve, reject) => {
   ws.addEventListener('error', () => reject(new Error('CDP 连接失败')))
 })
 
+/**
+ * 一次 CDP 调用的超时（v0.2.35）。
+ *
+ * ## 为什么必须有时限
+ *
+ * 这个脚本此前在「进入插件分区」之后**无限等待**过一次：`Page.captureScreenshot`
+ * 发出去就没有回音，而 `send` 没有超时，于是整轮验收既不出结果也不退出 ——
+ * 从外面看是「卡住」，从报告里看是「什么都没有」。
+ *
+ * 一个诊断脚本挂死，比它报错更糟：报错至少有一步的线索，挂死只有沉默。
+ * 所以每一次调用都带上限，超时抛一个带方法名的错误。
+ */
+const CDP_TIMEOUT_MS = 30_000
+
 function send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
   const id = ++seq
   return new Promise((resolve, reject) => {
-    pending.set(id, { res: resolve, rej: reject })
+    const timer = setTimeout(() => {
+      pending.delete(id)
+      reject(new Error(`CDP ${method} 超时（${CDP_TIMEOUT_MS} ms 未返回）`))
+    }, CDP_TIMEOUT_MS)
+    pending.set(id, {
+      res: (value) => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      rej: (error) => {
+        clearTimeout(timer)
+        reject(error)
+      },
+    })
     ws.send(JSON.stringify({ id, method, params }))
   })
 }
@@ -196,9 +224,26 @@ async function evaluate<T>(expression: string): Promise<T> {
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 async function screenshot(name: string): Promise<void> {
-  const result = (await send('Page.captureScreenshot', { format: 'png' })) as { data: string }
+  /**
+   * ## 截图失败不该让整轮验收失败（v0.2.35）
+   *
+   * 截图是**证据**，不是断言。这一轮在真 Desktop 上撞到 `Page.captureScreenshot`
+   * 30 秒不返回（页面很长、区块全堆在一起），于是整份报告只留下 9 条阶段加一条
+   * 「执行中断」——而前面 9 条都是绿的，产品没有任何问题。
+   *
+   * 现在超时/失败只记一条 artifact 缺失，流程继续。要保证的是「断言都跑到了」，
+   * 不是「每张图都拍到了」。
+   */
+  let result: { data?: string }
+  try {
+    result = (await send('Page.captureScreenshot', { format: 'png' })) as { data?: string }
+  } catch (error) {
+    process.stdout.write(`· 截图 ${name} 跳过：${(error as Error).message}\n`)
+    return
+  }
   if (typeof result.data !== 'string' || result.data === '') {
-    throw new Error(`截图 ${name} 失败：返回空数据`)
+    process.stdout.write(`· 截图 ${name} 跳过：返回空数据\n`)
+    return
   }
   writeFileSync(join(outDir, `${name}.png`), Buffer.from(result.data, 'base64'))
   /**
@@ -522,13 +567,68 @@ interface OpenResult {
  * 写两条而不是只写新的：这套脚本要在两种宿主上都跑得通，
  * 而「只支持最新宿主」等于把回归能力扔掉。
  */
+/**
+ * 把本脚本的原语包成 `ShellCtx`，让 `desktop-shell.ts` 的两步（开设置、进分区）
+ * 在这条路上也能用。
+ *
+ * ## 为什么不再各写一份（v0.2.35）
+ *
+ * 这一段原来自己实现「账号菜单 → 设置 → AI代吵架」。真 Desktop 一跑就红三条，
+ * 因为桌面端的入口是左下角「… 更多」，不是 `aria-label="账号菜单"`；设置面板首屏
+ * 也没有它断言的 `通用设置|内置插件|Agent 预设`。
+ *
+ * 而 `desktop-shell.ts` 里那一份，这一轮在桌面微博上跑通了 45/45 —— 同一台机器、
+ * 同一个宿主、同一个版本。两份实现各写各的，正是 v0.2.31 那次「三处脚本各自为政」
+ * 的重演：断言没错，入口写法漂了。
+ *
+ * 所以这里改成：**有 `desktop-shell` 就先用它**，失败再落到旧路线。
+ */
+function shellCtx(): ShellCtx {
+  return {
+    evaluate,
+    clickAt,
+    clickByText: clickByLabel,
+    sleep,
+    viewport: async () => {
+      const size = await evaluate<{ w: number; h: number }>('({ w: window.innerWidth, h: window.innerHeight })')
+      return { vw: size.w, vh: size.h }
+    },
+  }
+}
+
 async function openPluginConfig(): Promise<OpenResult> {
   // ── 路线 1：新版（账号菜单 → 设置 → 插件页签）──────────────────────────
+  /**
+   * ## 账号菜单的定位要与 `desktop-shell.openSettings` 一致（v0.2.35）
+   *
+   * 这里原来只认 `aria-label="账号菜单"`。真 Desktop 左下角那一个是「… 更多」，
+   * 没有那个 aria-label，于是整条路线 1 直接跳过，落到旧卡片路线，
+   * 而那套选择器在 0.2.2-rc.1 上已经断了 —— 报告里三条红，产品是好的。
+   *
+   * `desktop-shell.ts` 里那份是这一轮桌面微博跑通 45/45 的实现：先按 aria-label
+   * 找，找不到就取**最靠下**的那个可见按钮（账号菜单固定在左下角）。
+   */
+  /**
+   * 路线 1 前置：先用与桌面微博脚本同一份实现试一次。
+   */
+  {
+    const settings = await openSettings(shellCtx())
+    stage('桌面入口：打开设置', settings.ok ? 'passed' : 'failed', settings.how)
+    if (settings.ok) {
+      const plugin = await openPluginPage(shellCtx(), { markers: /离线讨论导入|主人贴吧数字 ID|当前步骤/ })
+      stage('桌面入口：进入插件分区', plugin.mounted ? 'passed' : 'failed', plugin.detail)
+      if (plugin.mounted) {
+        return { plugins: true, row: true, detail: true, config: true, route: 'section' }
+      }
+    }
+  }
+
   const accountMenu = await evaluate<string>(`(() => {
     const bs = [...document.querySelectorAll('button')]
       .map(b => { const r = b.getBoundingClientRect(); return { label: b.getAttribute('aria-label') || '', x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height } })
       .filter(b => b.w > 0 && b.h > 0)
-    const pick = bs.find(b => b.label === '账号菜单')
+    const byLabel = bs.find(b => b.label === '账号菜单')
+    const pick = byLabel ?? bs.sort((a, b) => b.y - a.y)[0]
     return pick === undefined ? 'not-found' : JSON.stringify({ x: Math.round(pick.x), y: Math.round(pick.y) })
   })()`)
   if (accountMenu !== 'not-found') {
@@ -550,13 +650,46 @@ async function openPluginConfig(): Promise<OpenResult> {
       await sleep(2500)
 
       const paneText = await evaluate<string>('document.body.innerText')
-      if (/通用设置|内置插件|Agent 预设/.test(paneText)) {
+      /**
+       * ## 判据从「设置页长什么样」改成「有没有那一行」（v0.2.35）
+       *
+       * 这里原来要求设置面板里出现 `通用设置|内置插件|Agent 预设` 之一才继续。
+       * 那是浏览器宿主（dsh web）的文案；真 Desktop 的设置面板首屏并不包含这些词，
+       * 于是整条路线在桌面端直接跳过，回退到旧版「插件 → 卡片 → 配置」，
+       * 而那套选择器在 0.2.2-rc.1 上已经断了 —— 报告里三条红，产品却好好的。
+       *
+       * 真正该问的是「有没有可点的 AI代吵架 那一行」。设置页长什么样不是契约，
+       * 导航项在不在才是。
+       */
+      void paneText
+      {
+        /**
+         * ## 选择器要与 `desktop-shell.openPluginPage` 一致（v0.2.35）
+         *
+         * 这里原来只查 `button,[role=tab],[role=button]`。真 Desktop 的设置侧栏
+         * 那一行不是这三种之一（它是带 `tabindex` 的行），于是「进插件分区」在
+         * 桌面端**永远找不到**，脚本回退到旧版卡片路线，而那套选择器在 0.2.2-rc.1
+         * 上已经断了 —— 三条红，产品却好好的。
+         *
+         * `desktop-shell.ts` 里那份实现是这一轮跑通 45/45 的那一份，选择器要与它
+         * 一致；两份各写各的正是 v0.2.31 那次「三处脚本各自为政」的重演。
+         */
         const tabPos = await evaluate<string>(`(() => {
-          const el = [...document.querySelectorAll('button,[role=tab],[role=button]')]
-            .find(e => /AI代吵架|dsh-ai-debate/.test((e.textContent || '').trim()))
-          if (!el) return 'not-found'
-          const r = el.getBoundingClientRect()
-          return r.width < 2 ? 'not-found' : JSON.stringify({ x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) })
+          const nodes = [...document.querySelectorAll('button,[role=tab],[role=button],a,[tabindex]')]
+            .filter(e => {
+              const t = (e.innerText || '').trim()
+              return t === 'AI代吵架' || /AI代吵架|dsh-ai-debate/.test(t)
+            })
+          let best
+          for (const e of nodes) {
+            const r = e.getBoundingClientRect()
+            if (r.width < 2 || r.height < 2) continue
+            const area = r.width * r.height
+            if (best === undefined || area < best.area) {
+              best = { area, x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+            }
+          }
+          return best === undefined ? 'not-found' : JSON.stringify({ x: best.x, y: best.y })
         })()`)
         if (tabPos !== 'not-found') {
           const p2 = JSON.parse(tabPos) as { x: number; y: number }

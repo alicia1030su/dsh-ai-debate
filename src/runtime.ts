@@ -43,7 +43,7 @@ import {
 import { compressContext, fixedCostTotal, resolveBudget, splitBudget } from './compressor.js'
 import { buildBrief } from './brief-builder.js'
 import { renderBrief, validateBrief } from './brief.js'
-import { generateReply } from './generator.js'
+import { generateReply, type GenerationResult } from './generator.js'
 import { LlmError, OpenAiCompatibleClient, type LlmClient } from './llm.js'
 import { resolvePersona, type PersonaConfig } from './persona.js'
 import { publishCandidate, type PublishReport } from './publisher.js'
@@ -69,6 +69,7 @@ import { ownerFromBinding, type CandidateSecurityAssessment, type SecurityStrict
 import { makeEvent, type SecurityEvent, type SecurityEventKind } from './security/security-events.js'
 import { MANUAL_PLATFORM } from './import/manual.js'
 import { collectedFromStored, localTargetResolver } from './import/session.js'
+import { generationGuardOf } from './generation-guard.js'
 
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
@@ -988,6 +989,18 @@ export interface GenerateOutput {
   readonly totalBudget: number
   readonly omissions: readonly string[]
   readonly usage: { inputTokens: number; outputTokens: number; elapsedMs: number }
+  /**
+   * Which model and protocol actually produced this candidate (v0.2.35 §2.2).
+   *
+   * Recorded because "the model is configured as X" and "this draft came from X over
+   * protocol Y" are different facts, and only the second one belongs next to the text.
+   * A report that says "generated with gpt-4o-mini" while the request went to `/responses`
+   * because that is what the endpoint spoke is wrong in a way nobody can check later.
+   */
+  readonly model?: string
+  readonly protocol?: 'chat' | 'responses'
+  /** Model calls spent, including the repair attempt when one was made. */
+  readonly attempts?: number
 }
 
 /**
@@ -1370,28 +1383,96 @@ export async function runGeneration(
   progress(
     `正在生成回复（上下文 ${context.tokens} + 固定开销 ${fixedCostTotal()} / 总预算 ${total.tokens} tokens）…`,
   )
+
+  /**
+   * ## One generation at a time, per session (v0.2.35 §6)
+   *
+   * Two things are being prevented here, and they need different answers:
+   *
+   * - **Same target, second click.** The first request will answer you; starting another
+   *   spends the budget twice and retires an approval the owner may already have made.
+   *   Refused, with the running target named so the page can say why.
+   * - **Different target.** That is a decision, not a double click. It supersedes: the new
+   *   call runs, and the older one is marked stale so its answer is discarded instead of
+   *   stored. Without this, a slow call for the previous target appends a perfectly
+   *   self-consistent candidate for a question nobody is asking anymore, and nothing
+   *   downstream would refuse it.
+   */
+  const guard = generationGuardOf(runtime)
+  const claimAttempt = guard.begin(session.id, publishTargetPostId)
+  if (!claimAttempt.ok) {
+    throw new Error(
+      `这个会话已经在生成中（目标 ${claimAttempt.active.targetPostId}，` +
+        `已运行 ${Date.now() - claimAttempt.active.startedAt} ms）。` +
+        '等这一次结束再点，重复请求会多花一次模型调用。',
+    )
+  }
+  const claim = claimAttempt.claim
+
   const client = runtime.llm()
   // `publishTargetPostId` is passed so the model's own `response_target_id` is checked
   // against where the reply will actually land. Without it the check compared against
   // the opponent's newest post, which since v0.2.25 is frequently a different post than
   // the one the owner picked — and a real, correct reply would come back carrying a
   // `wrong_target` violation it did not commit.
-  const result = await generateReply(client, {
-    dispute,
-    context,
-    persona,
-    expectedTargetPostId: publishTargetPostId,
-    alreadyPublished: session.publishedPostIds,
-    signal: input.signal,
-    ownerInstruction: input.ownerInstruction,
-    // The validated brief. Reaching this line means `validateBrief` returned no problems,
-    // so the model is given structure that cites real posts rather than prose it must infer.
-    brief: briefText,
-    // Sampling controls come from config so a small model can be fed a
-    // lower temperature without editing code.
-    temperature: config.llmTemperature,
-    maxTokens: config.llmMaxOutputTokens > 0 ? config.llmMaxOutputTokens : undefined,
-  })
+  let result: GenerationResult
+  try {
+    result = await generateReply(client, {
+      dispute,
+      context,
+      persona,
+      expectedTargetPostId: publishTargetPostId,
+      alreadyPublished: session.publishedPostIds,
+      signal: input.signal,
+      ownerInstruction: input.ownerInstruction,
+      // The validated brief. Reaching this line means `validateBrief` returned no problems,
+      // so the model is given structure that cites real posts rather than prose it must infer.
+      brief: briefText,
+      /**
+       * The counts behind that brief (v0.2.35 §3.2).
+       *
+       * Passed separately from the rendered text so the "you have no evidence" check reads
+       * a number rather than parsing prose — and so a renderer change cannot silently
+       * disable a safety rule.
+       */
+      briefFacts: {
+        opponentArgumentCount: briefBuild.brief.opponentArguments?.length ?? 0,
+        unansweredByOpponent: briefBuild.brief.unansweredByOpponent?.length ?? 0,
+        answeredByOwner: (briefBuild.brief.answeredByOwner ?? []).map((item) => item.quote),
+        thirdPartyCitationCount: briefBuild.brief.thirdPartyCitations?.length ?? 0,
+        missingContextCount: briefBuild.brief.missingContext?.length ?? 0,
+      },
+      // The comment the owner picked, so a reply that drifts to somebody else's latest
+      // remark is at least visible to the reviewer (§3.2).
+      ...(contentOfPost(collected, publishTargetPostId) === undefined
+        ? {}
+        : { targetContent: contentOfPost(collected, publishTargetPostId) as string }),
+      // Sampling controls come from config so a small model can be fed a
+      // lower temperature without editing code.
+      temperature: config.llmTemperature,
+      maxTokens: config.llmMaxOutputTokens > 0 ? config.llmMaxOutputTokens : undefined,
+    })
+  } catch (error) {
+    // A failed call must release its claim, or one transient 429 would lock the session
+    // until the process restarts.
+    guard.finish(session.id, claim)
+    throw error
+  }
+
+  /**
+   * The answer arrived, but is it still the answer to the current question?
+   *
+   * Checked here as well as inside the write. This check is the cheap one — it stops an
+   * abandoned answer from spending the security gate's work — and the one inside the write
+   * is the authoritative one, because it runs against the document being written.
+   */
+  if (guard.isStale(session.id, claim)) {
+    guard.finish(session.id, claim)
+    throw new Error(
+      '这次生成已被更新的目标取代，结果已丢弃（旧结果不能覆盖当前状态，也不会沿用之前的批准）。' +
+        '请按当前目标重新生成。',
+    )
+  }
 
   // ## The id and the version are allocated inside the write, not before it (v0.2.27)
   //
@@ -1544,6 +1625,20 @@ export async function runGeneration(
   await runtime.store.mutate((data) => {
     const nextSessions = data.sessions.map((entry) => {
       if (entry.id !== session.id) return entry
+      /**
+       * ## The authoritative staleness check (v0.2.35 §6)
+       *
+       * This runs inside the write, against the document being written, which is the only
+       * place the answer can be trusted. Between the check above and this one the owner may
+       * have switched the target, so a stale result reaching here must not append —
+       * returning `entry` unchanged would still overwrite the store with a document that
+       * claims nothing changed, which is harmless, so the write instead records *why*.
+       *
+       * The `mutate` contract installs the intended document in memory before writing, so
+       * throwing here would leave a half-applied document behind; marking the session's
+       * status line is the honest way to say "a discarded answer arrived".
+       */
+      if (guard.isStale(session.id, claim)) return entry
       const candidate: StoredCandidate = {
         ...candidateBase,
         replyId: newCandidateId(entry.id, nextCandidateIndex(entry)),
@@ -1656,9 +1751,20 @@ export async function runGeneration(
   // A candidate is always written on this path — the only early exits above throw — so
   // `stored` is populated. Reading it back is what makes the returned id and version
   // describe the document rather than this function's intention.
+  //
+  // v0.2.35: the one case where it can be empty is a stale write, which is a *refusal*
+  // rather than an internal error — the two need different messages, so they are separate
+  // branches.
   if (stored === undefined) {
+    guard.finish(session.id, claim)
+    if (guard.isStale(session.id, claim)) {
+      throw new Error(
+        '这次生成在写入前被更新的目标取代，候选未保存（旧结果不会覆盖当前状态）。',
+      )
+    }
     throw new Error('内部错误：候选回复未写入会话，无法确认候选 id 与版本号。')
   }
+  guard.finish(session.id, claim)
 
   return {
     sessionId: session.id,
@@ -1676,6 +1782,9 @@ export async function runGeneration(
     totalBudget: context.totalBudget,
     omissions: context.omissions,
     usage: result.usage,
+    model: config.llmModel,
+    protocol: config.llmProtocol,
+    attempts: result.attempts,
   }
 }
 
@@ -2215,6 +2324,27 @@ export function describeFailure(error: unknown): { message: string; pause: boole
  * — it is the thing the whole comment list hangs under. Without this branch the
  * workbench showed the body as a selectable row and then refused the selection.
  */
+/**
+ * The text of one collected post, or `undefined` when it was not read.
+ *
+ * Used by the drift check (§3.2): the reply must engage with the comment the owner picked.
+ * Returning `undefined` rather than an empty string keeps "we have no text" from looking
+ * like "the comment was empty", which would disable the check silently.
+ */
+function contentOfPost(collected: CollectedThread, postId: string): string | undefined {
+  if (postId === '') return undefined
+  if (collected.thread.bodyNode === 'standalone' && postId === collected.thread.id) {
+    return collected.thread.content
+  }
+  for (const entry of collected.floors) {
+    if (entry.floor.postId === postId) return entry.floor.content
+    for (const reply of entry.nested) {
+      if (reply.postId === postId) return reply.content
+    }
+  }
+  return undefined
+}
+
 function selectedComment(
   collected: CollectedThread,
   postId: string | undefined,

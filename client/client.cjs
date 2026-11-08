@@ -273,6 +273,9 @@ window.__ModuleLoader__.load({
       llmProtocolChat: 'chat/completions',
       llmProtocolResponses: 'responses',
       llmProbeProtocol: '协议',
+      llmProbeContractOk: '契约探测：通过',
+      llmProbeContractFailed: '契约探测：未通过',
+      llmProbeTotal: '总耗时',
       llmApiKeyTitle: '模型 API Key',
       llmApiKeyHint: '同样只存凭据库，不回显。',
       llmTemperature: '温度',
@@ -758,6 +761,9 @@ window.__ModuleLoader__.load({
       llmProtocolChat: 'chat/completions',
       llmProtocolResponses: 'responses',
       llmProbeProtocol: 'Protocol',
+      llmProbeContractOk: 'Contract probe: passed',
+      llmProbeContractFailed: 'Contract probe: failed',
+      llmProbeTotal: 'Total',
       llmApiKeyTitle: 'Model API key',
       llmApiKeyHint: 'Also stored only in the credential store, never echoed.',
       llmTemperature: 'Temperature',
@@ -3035,10 +3041,33 @@ window.__ModuleLoader__.load({
                   probe.result.inputTokens === undefined && probe.result.outputTokens === undefined
                     ? ''
                     : `${t('modelProbeTokens')}：${probe.result.inputTokens ?? 0} / ${probe.result.outputTokens ?? 0}`,
+                  probe.result.totalMs === undefined ? '' : `${t('llmProbeTotal')}：${probe.result.totalMs} ms`,
                 ]
                   .filter((line) => line !== '')
                   .join('　'),
               ),
+              /**
+               * 契约探测的结果（v0.2.35 §2.1）。
+               *
+               * 单独一行，不并进上面的「连接正常」：连通与「能按契约输出」是两个结论，
+               * 一个模型可以连通得很好而完全不会输出 JSON。合成一句话会让后者被前者
+               * 盖住，而那正是最难在生成阶段排查的故障。
+               */
+              probe.result.contract
+                ? h(
+                    'p',
+                    {
+                      className: probe.result.contract.ok ? 'dsd-hint' : 'dsd-hint dsd-hint-error',
+                      style: { margin: '4px 0 0' },
+                    },
+                    (probe.result.contract.ok ? t('llmProbeContractOk') : t('llmProbeContractFailed')) +
+                      `：${probe.result.contract.message}` +
+                      (probe.result.contract.latencyMs === undefined
+                        ? ''
+                        : `（${probe.result.contract.latencyMs} ms）`) +
+                      (probe.result.contract.sample ? `　返回：${probe.result.contract.sample}` : ''),
+                  )
+                : null,
               probe.result.suggestions && probe.result.suggestions.length > 0
                 ? h(
                     'ul',

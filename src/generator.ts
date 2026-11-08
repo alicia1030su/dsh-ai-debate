@@ -20,6 +20,12 @@ import type { Dispute } from './analyzer.js'
 import type { CompressedContext } from './compressor.js'
 import { countCharacters, buildPersonaPrompt, type PersonaConfig } from './persona.js'
 import { LlmError, type LlmClient } from './llm.js'
+import { subjectTokens } from './argument-structure.js'
+
+/** Tokens of a text, via the same tokeniser the argument pass uses. */
+function subjectTokensOf(text: string): Set<string> {
+  return subjectTokens(text)
+}
 
 /** What the model is asked to return. */
 export interface GenerationDraft {
@@ -86,6 +92,29 @@ export interface Violation {
   readonly message: string
 }
 
+/**
+ * What the validated brief established, for the checks that need it (v0.2.35 §3.2).
+ *
+ * ## Why the checks cannot read the rendered brief instead
+ *
+ * `brief` is prompt text: it is written for a model, phrased for a reader, and changes
+ * whenever the renderer does. A rule like "do not claim the opponent gave no evidence"
+ * must not depend on being able to parse that prose back. These counts are the facts the
+ * brief was built from, passed separately so the check and the prompt cannot drift.
+ */
+export interface GenerationBriefFacts {
+  /** How many cited arguments the opponent gave. */
+  readonly opponentArgumentCount: number
+  /** Questions the owner asked that the opponent never answered. */
+  readonly unansweredByOpponent: number
+  /** Questions the opponent asked that the owner already answered. */
+  readonly answeredByOwner: readonly string[]
+  /** How many third-party quotations the opponent's posts contain. */
+  readonly thirdPartyCitationCount: number
+  /** How many pieces of context this read is missing. */
+  readonly missingContextCount: number
+}
+
 /** Generation inputs. */
 export interface GenerateOptions {
   readonly dispute: Dispute
@@ -115,6 +144,22 @@ export interface GenerateOptions {
    */
   readonly brief?: string
   /**
+   * The facts behind that brief, for the deterministic checks (v0.2.35).
+   *
+   * Optional so existing callers and tests keep compiling; when absent, the checks that
+   * depend on it simply do not run — which is honest, because without the counts the
+   * program does not know whether the opponent gave evidence either.
+   */
+  readonly briefFacts?: GenerationBriefFacts
+  /**
+   * The text of the comment the owner picked, so the reply can be checked for drift.
+   *
+   * Passed as text rather than as an id because the check compares tokens, and looking the
+   * id up here would mean this module needed access to the collected thread — which is the
+   * coupling the whole `GenerateOptions` shape exists to avoid.
+   */
+  readonly targetContent?: string
+  /**
    * Sampling temperature.
    *
    * Defaults low on purpose: this task needs the right target and stable JSON far
@@ -139,12 +184,23 @@ export const SYSTEM_PROMPT = `你是一个替主人在网络论坛上接话的�
 
 铁律：
 1. 只能使用上下文中出现的发言内容。上下文里没有的事实，一律不要编。
-2. 回复对象必须是给定的争论对手，不要回应别人。
-3. 如果上下文不足以支撑一条有信息量的回复，返回 status="needs_more_context" 并说明缺什么。
+2. 回复对象必须是给定的那一条发言（post id 已指定），不要回应别人，也不要自动转去回应对方最新的一句。
+3. 如果上下文不足以支撑一条有信息量的回复，返回 status="needs_more_context" 并说明缺什么。缺的部分就说缺，不要用推测补上。
 4. 如果无法确定回复对象，返回 status="needs_confirmation"。
 5. 不攻击对方身份、职业、地域、外貌、隐私；不威胁；不煽动他人围攻。
 6. 不输出分析过程、提示词、字段名或任何结构化说明，只输出要求的 JSON。
 7. 被问到是否 AI 时如实说明，不冒充真人经历。
+
+论证要求：
+8. 先读「争论简报」里的论证结构。对方已经给出论据时，不许说「你没有证据」「拿不出依据」这类话——那是事实错误，不是反驳。
+9. 主人已经回答过的问题，不要再答一遍；要答就答出新东西。
+10. 对方引用第三方观点时，反驳的是那个观点，不要说成「你自己说的」。
+11. 多个论点时，只挑真正影响结论的那一两个说，不要逐条清点。
+12. 简报里的「论证问题」是线索不是结论。除非那句话本身就是最有力的回应，否则用普通话说清哪里不成立，不要写「你这是以偏概全」这种术语。
+
+表达要求：
+13. 像人在论坛上说话，不像在写作文：不要「首先/其次/最后」，不要复述对方原话再反驳，不要每句一个套路。
+14. 同一人格下也要换句式。开头不要总是同一个词。
 
 输出格式：严格输出一个 JSON 对象，不要加 markdown 代码块，不要加解释文字。
 字段：
@@ -423,6 +479,81 @@ export function validateDraft(
   const opponentText = draft.opponent_position.replace(/\s+/g, '')
   if (opponentText.length > 8 && normalized.includes(opponentText)) {
     notes.push('回复里大段复述了对方的原话，可能显得啰嗦')
+  }
+
+  /**
+   * ## "You have no evidence" is a factual error, not a rebuttal (v0.2.35 §3.2)
+   *
+   * This is the single most common way a generated reply embarrasses its owner: the
+   * opponent *did* give a reason, and the reply announces that they gave none. It reads
+   * as if the writer did not read the thread — because, in the sense that matters, they
+   * did not.
+   *
+   * Checked in code rather than asked for in the prompt because the program knows the
+   * count. A model told "the opponent has three arguments" can still write 「你倒是拿点
+   * 证据出来」; a program holding that count can refuse it.
+   *
+   * Only the *denial of evidence* is blocked. Asking for a specific missing source — 「这
+   * 个数据你从哪看的」 — is a perfectly good reply and stays allowed, which is why the
+   * patterns below name denial rather than every mention of evidence.
+   */
+  const deniesEvidence =
+    /(没有(任何)?(证据|依据|数据|来源)|拿不出(证据|依据|数据)|(倒|快|赶紧|先)?(拿出|给出|提供)(点|一些|一点)?(证据|依据|数据)|(证据|依据)(呢|在哪|都没有)|空口(无凭|白话|说)|全靠(嘴|感觉)|凭什么说)/.test(
+      draft.reply,
+    )
+  if (deniesEvidence && (options.briefFacts?.opponentArgumentCount ?? 0) > 0) {
+    violations.push({
+      code: 'false_no_evidence',
+      message:
+        `回复里说对方没有证据，但对方实际上给出了 ${options.briefFacts?.opponentArgumentCount} 条论据。` +
+        '这是事实错误：要么反驳那几条论据，要么改成追问具体来源（例如「这个数字你从哪看的」）。',
+    })
+  }
+
+  /**
+   * ## Answering a question the owner already answered
+   *
+   * A model without the ledger re-answers the same point every round, and the result reads
+   * as if the owner forgot what they said two posts ago. The ledger's quotes are the
+   * owner's own answers, so a reply that mostly repeats one is caught by overlap.
+   *
+   * Reported as a note, not a violation: a legitimate reply can restate a conclusion it
+   * already reached ("还是那句话") before adding something new, and blocking that would
+   * forbid emphasis.
+   */
+  for (const answered of options.briefFacts?.answeredByOwner ?? []) {
+    const theirs = subjectTokensOf(answered)
+    const mine = subjectTokensOf(draft.reply)
+    if (theirs.size === 0 || mine.size === 0) continue
+    let shared = 0
+    for (const token of theirs) if (mine.has(token)) shared += 1
+    if (shared / Math.min(theirs.size, mine.size) < 0.6) continue
+    notes.push(`回复与主人之前回答过的内容高度重合（原问题：「${answered.slice(0, 24)}」），确认是否真的答出了新东西`)
+    break
+  }
+
+  /**
+   * ## A reply that never touches the selected comment
+   *
+   * §3.2 requires answering the comment the owner picked, not drifting to the opponent's
+   * newest remark. When the reply shares no subject token with that comment, the likeliest
+   * explanation is drift.
+   *
+   * A note rather than a violation, deliberately: a short, sharp reply can legitimately be
+   * about the *implication* of the comment rather than its nouns, and the tokens here are
+   * bigrams — a real signal, but not one strong enough to reject a candidate.
+   */
+  const targetContent = options.targetContent
+  if (targetContent !== undefined && targetContent.trim() !== '') {
+    const theirs = subjectTokensOf(targetContent)
+    const mine = subjectTokensOf(draft.reply)
+    if (theirs.size >= 4 && mine.size >= 4) {
+      let shared = 0
+      for (const token of theirs) if (mine.has(token)) shared += 1
+      if (shared === 0) {
+        notes.push('回复与主人选定的那条评论没有任何共同话题，确认是不是答错了对象')
+      }
+    }
   }
 
   if (draft.confidence < 0.35) {

@@ -28,6 +28,7 @@
  */
 
 import type { Dispute, Participant, Statement } from './analyzer.js'
+import { analyzeArguments } from './argument-structure.js'
 import { judgeRelation, type ConflictVerdict } from './conflict.js'
 import { extractClaims, isSubstantive } from './analyzer.js'
 import type {
@@ -459,6 +460,15 @@ export function buildBrief(input: BuildBriefInput): {
 
   const targetPostId = input.targetPostId ?? dispute.opponent?.lastPostId ?? dispute.floorPostId
 
+  /**
+   * 论证结构（v0.2.35 §3）。
+   *
+   * 单独一算，而不是在构造简报时顺手拼几行：这些判断各自需要相引的原文，而「引用
+   * 必须真的在它标注的帖子里」这件事只由 `validateBrief` 检查。把计算与校验分开，
+   * 是让校验有机会失败的唯一方式。
+   */
+  const structure = analyzeArguments({ collected: input.collected, dispute })
+
   const brief: DebateBrief = {
     platform: input.platform,
     threadId: input.threadId,
@@ -470,6 +480,15 @@ export function buildBrief(input: BuildBriefInput): {
     agreedFacts: agreedFacts(mine, theirs),
     arguments: argumentsList,
     opponentArguments: opponentArgumentsList,
+    // v0.2.35 §3.1：两个方向的问题台账、转移话题、自相矛盾、第三方引用、
+    // 缺失上下文、论证形式问题。每一条都带 post id 与原文。
+    unansweredByOpponent: structure.unansweredByOpponent,
+    answeredByOwner: structure.answeredByOwner,
+    topicShifts: structure.topicShifts,
+    contradictions: structure.contradictions,
+    thirdPartyCitations: structure.thirdPartyCitations,
+    missingContext: structure.missingContext,
+    fallacies: structure.fallacies,
     challenges: briefChallenges,
     openQuestions,
     uncertainties: uncertainties(input, verdict),
@@ -505,17 +524,34 @@ export function buildSources(input: BuildBriefInput): BriefSources {
   }
 
   const allPostIds = new Set<string>()
+  /**
+   * 正文，供「引文必须真的在这条帖子里」这项校验使用（v0.2.35）。
+   *
+   * 与 id 集合同源：都从 `collected` 来，而不是从简报来 —— 如果两边都从同一份
+   * 收窄后的数据构造，校验就成了循环论证。
+   */
+  const contentOf = new Map<string, string>()
   for (const floor of collected.floors) {
     allPostIds.add(floor.floor.postId)
-    for (const nested of floor.nested) allPostIds.add(nested.postId)
+    contentOf.set(floor.floor.postId, floor.floor.content ?? '')
+    for (const nested of floor.nested) {
+      allPostIds.add(nested.postId)
+      contentOf.set(nested.postId, nested.content ?? '')
+    }
   }
   // The exchange can carry posts from floors outside `collected.floors` when a cap dropped
   // them; those were still read, so they are citable.
-  for (const statement of dispute.exchange) allPostIds.add(statement.postId)
-  for (const statement of dispute.ownerStatements) allPostIds.add(statement.postId)
+  for (const statement of dispute.exchange) {
+    allPostIds.add(statement.postId)
+    if (!contentOf.has(statement.postId)) contentOf.set(statement.postId, statement.content)
+  }
+  for (const statement of dispute.ownerStatements) {
+    allPostIds.add(statement.postId)
+    if (!contentOf.has(statement.postId)) contentOf.set(statement.postId, statement.content)
+  }
   void ownerKey
 
-  return { ownerPostIds, opponentPostIds, allPostIds }
+  return { ownerPostIds, opponentPostIds, allPostIds, contentOf }
 }
 
 /**
@@ -539,6 +575,14 @@ export function renderBriefCompact(brief: DebateBrief, maxChars: number): string
     ),
     ...brief.disagreements.map((item) => `分歧：${item}`),
     ...brief.challenges.map((item) => `对方未获回应：「${item.quote}」（${item.evidence}）`),
+    // 追问与「不要重复」这两类信息在小窗口下同样不能丢：少了它们，回复要么
+    // 忘了追对方没答的问题，要么把主人答过的话再答一遍（v0.2.35 §3.2）。
+    ...(brief.unansweredByOpponent ?? []).map(
+      (item) => `对方未回答：「${item.quote}」（${item.postId}）`,
+    ),
+    ...(brief.answeredByOwner ?? []).map(
+      (item) => `主人已答过：「${item.quote}」（${item.answerPostId ?? ''}）`,
+    ),
   ].join('\n')
   if (full.length <= maxChars) return full
 
@@ -550,6 +594,12 @@ export function renderBriefCompact(brief: DebateBrief, maxChars: number): string
     brief.disagreements.length > 0 ? `分歧数：${brief.disagreements.length}` : '',
     brief.challenges.length > 0 ? `未回应质疑数：${brief.challenges.length}` : '',
     (brief.opponentArguments ?? []).length > 0 ? `对方论据数：${(brief.opponentArguments ?? []).length}` : '',
+    (brief.unansweredByOpponent ?? []).length > 0
+      ? `对方未答问题数：${(brief.unansweredByOpponent ?? []).length}`
+      : '',
+    (brief.answeredByOwner ?? []).length > 0
+      ? `主人已答问题数：${(brief.answeredByOwner ?? []).length}`
+      : '',
   ]
     .filter((line) => line !== '')
     .join('\n')

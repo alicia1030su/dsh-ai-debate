@@ -1004,6 +1004,35 @@ export interface ModelProbe {
   /** Token usage reported by this probe, when the endpoint returns it. */
   readonly inputTokens?: number
   readonly outputTokens?: number
+  /**
+   * Whether the model also produced a parseable JSON candidate (v0.2.35 §2.1).
+   *
+   * ## Why "can I connect" was not enough
+   *
+   * A model that answers `OK` to `ping` can still be unusable: the whole workflow depends
+   * on it returning a small JSON object with a fixed set of keys. An endpoint that speaks
+   * the protocol but cannot follow the contract looks perfectly healthy on the old probe,
+   * and the failure then appears later as "the model returned something unparseable" —
+   * the hardest kind of failure to attribute.
+   *
+   * The second probe costs a few hundred tokens and answers that question before the owner
+   * spends a single generation call. It is reported separately from `ok` so a protocol
+   * that works but a model that cannot follow the contract shows both facts.
+   */
+  readonly contract?: {
+    readonly ok: boolean
+    readonly message: string
+    /** Fields the contract required but the answer did not carry. */
+    readonly missingFields?: readonly string[]
+    /** Latency of this second call, in ms. */
+    readonly latencyMs?: number
+    readonly inputTokens?: number
+    readonly outputTokens?: number
+    /** A short excerpt of what the model actually returned, for the owner to read. */
+    readonly sample?: string
+  }
+  /** Total wall-clock time of the whole probe, including both calls. */
+  readonly totalMs?: number
 }
 
 /** Result of probing the Tieba login state. */

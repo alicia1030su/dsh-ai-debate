@@ -101,8 +101,28 @@ async function main() {
   }
 
   const head = git('rev-parse', target).trim()
-  const remote = await api(token, 'GET', `/repos/${owner}/${repo}/git/ref/heads/${branch}`)
-  const remoteSha = remote.object.sha
+  /**
+   * 分支不存在时，从基线分支起一条新的。
+   *
+   * ## 为什么必须显式处理 404（v0.2.35）
+   *
+   * 这个脚本原来假定远端分支已经存在，于是**第一次推一个开发分支**时直接抛错 ——
+   * 而「新开一条分支」正是每次发布的第一步。现在：拿不到 ref 就以 `PUSH_BASE`
+   * （默认 main）为父，推完之后用 POST 创建，而不是 PATCH。
+   */
+  let remoteSha
+  let branchExists = true
+  try {
+    const remote = await api(token, 'GET', `/repos/${owner}/${repo}/git/ref/heads/${branch}`)
+    remoteSha = remote.object.sha
+  } catch (error) {
+    if (!String(error.message).includes('404')) throw error
+    const baseBranch = process.env.PUSH_BASE ?? 'main'
+    const baseline = await api(token, 'GET', `/repos/${owner}/${repo}/git/ref/heads/${baseBranch}`)
+    remoteSha = baseline.object.sha
+    branchExists = false
+    console.log(`远端分支 ${branch} 不存在：将以 ${baseBranch}（${remoteSha.slice(0, 8)}）为父创建`)
+  }
   console.log(`远端 ${branch} = ${remoteSha.slice(0, 8)}`)
   console.log(`本地 ${target} = ${head.slice(0, 8)}`)
 
@@ -229,10 +249,17 @@ async function main() {
   //
   // `force` 不传就是 false：远端如果在这期间前进了，API 会拒绝，
   // 我们停下来重来一次，而不是把它覆盖掉。
-  await api(token, 'PATCH', `/repos/${owner}/${repo}/git/refs/heads/${branch}`, {
-    sha: parent,
-    force: false,
-  })
+  if (branchExists) {
+    await api(token, 'PATCH', `/repos/${owner}/${repo}/git/refs/heads/${branch}`, {
+      sha: parent,
+      force: false,
+    })
+  } else {
+    await api(token, 'POST', `/repos/${owner}/${repo}/git/refs`, {
+      ref: `refs/heads/${branch}`,
+      sha: parent,
+    })
+  }
 
   /**
    * ## 收尾校验比 tree，不比 sha

@@ -134,21 +134,37 @@ test('契约：getReplies 的分页必须自报完整性，不得默认 complete
 test('契约：未认证时必须 fail-closed，绝不返回空数组冒充「没有评论」', async () => {
   // The failure mode this prevents: returning `[]` makes "we could not read" look like
   // "there is nothing there", and the analyzer then concludes the opponent said nothing.
-  const a = adapter()
-  const result = await a.getReplies(REF, 1).then(
-    (page) => ({ ok: true as const, page }),
-    (reason: unknown) => ({ ok: false as const, error: reason as Error & { code?: string } }),
-  )
-  if (result.ok) {
-    // If it somehow read, the page must be a real page — not an empty stand-in.
-    assert.equal(Array.isArray(result.page.floors), true)
-    return
+  //
+  // ## 这一条不再赌这台机器装没装 CLI（v0.2.35）
+  //
+  // 它原来直接用本机真实 CLI。v0.2.34 期间主人装上了 `weibo-cli` 并做过授权探测，
+  // 于是「本机没有 CLI」这个前提不再成立：读取可能真的走到平台，回来一个
+  // `target_mismatch`（拿 1 号微博去读，返回里没有可识别的 id）——错误码不在旧白名单里，
+  // 测试就红了，而产品行为完全正确。
+  //
+  // 与同文件「断点」那条一样，把环境变成**明确的输入**：CLI 指向不存在的可执行文件。
+  // 断言没有放宽：仍然要求「拒绝 + 可识别错误码」，只是不再依赖本机状态。
+  const missing = 'C:/nonexistent-dsh-ai-debate/weibo-cli.exe'
+  __setCliInvocation({ file: missing, prefixArgs: [] })
+  try {
+    const a = adapter()
+    const result = await a.getReplies(REF, 1).then(
+      (page) => ({ ok: true as const, page }),
+      (reason: unknown) => ({ ok: false as const, error: reason as Error & { code?: string } }),
+    )
+    if (result.ok) {
+      // If it somehow read, the page must be a real page — not an empty stand-in.
+      assert.equal(Array.isArray(result.page.floors), true)
+      return
+    }
+    assert.equal(
+      ['cli_missing', 'not_authenticated', 'service_inactive', 'weibo_not_authorised'].includes(
+        result.error.code ?? '',
+      ),
+      true,
+      `错误码必须可识别，实际 ${result.error.code}`,
+    )
+  } finally {
+    __setCliInvocation(undefined)
   }
-  assert.equal(
-    ['cli_missing', 'not_authenticated', 'service_inactive', 'weibo_not_authorised'].includes(
-      result.error.code ?? '',
-    ),
-    true,
-    `错误码必须可识别，实际 ${result.error.code}`,
-  )
 })

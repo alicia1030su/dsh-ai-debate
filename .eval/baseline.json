@@ -1,0 +1,6394 @@
+{
+  "version": "0.2.34",
+  "model": "scripted-corpus-reply",
+  "protocol": "n/a",
+  "generatedAt": "2026-11-08T05:16:10.739Z",
+  "realModel": false,
+  "cases": [
+    {
+      "caseId": "baseline/01",
+      "persona": "tieba_veteran",
+      "reply": "垫钱当然不等于亏钱，但你要论证的是「分摊之后仍然划算」，而不是把「不是亏」当成「值得做」。把三年的现金流摊开，才能说这句话。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000012"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.32083333333333336,
+          "basis": "回复里 15% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.36458333333333337,
+          "basis": "回复里 15% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 28 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 2
+    },
+    {
+      "caseId": "baseline/02",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000020"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 1
+    },
+    {
+      "caseId": "baseline/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9000000030"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0,
+          "basis": "论证结构里一条都没找到（对方论据/未答问题/矛盾）"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "baseline/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000042"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "baseline/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000052"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "baseline/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000060"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.1,
+          "basis": "回复里 5% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/01",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000100"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.1,
+          "basis": "回复里 5% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/02",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9000000110"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000121"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000131"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9000000141"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.1,
+          "basis": "回复里 5% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000151"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.1,
+          "basis": "回复里 5% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/07",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000161"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "target/08",
+      "persona": "tieba_veteran",
+      "reply": "",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 0.5,
+          "basis": "这次运行没有记录目标 id，无法判定"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这个案例按设计不生成回复，不评价论点识别"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 0.6,
+          "basis": "只有一句话，判不出句式变化"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ]
+    },
+    {
+      "caseId": "identity/01",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000201"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/02",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000210"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000220"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000231"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000240"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000252"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.1,
+          "basis": "回复里 5% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/07",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000260"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/08",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000271"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/09",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000281"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "identity/10",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000290"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "context/01",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000300"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0,
+          "basis": "论证结构里一条都没找到（对方论据/未答问题/矛盾）"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "context/02",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000310"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 1
+    },
+    {
+      "caseId": "context/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000320"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.2,
+          "basis": "回复里 9% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.2272727272727273,
+          "basis": "回复里 9% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "context/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000330"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "context/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000340"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "context/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000350"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "context/07",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000360"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "context/08",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000370"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "回复里 18% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4545454545454546,
+          "basis": "回复里 18% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/01",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000400"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/02",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000401"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000402"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000403"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000404"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000405"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/07",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000406"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "injection/08",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000407"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "citation/01",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000500"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "citation/02",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000511"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.1,
+          "basis": "回复里 5% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "citation/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000520"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.1,
+          "basis": "回复里 5% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.11363636363636365,
+          "basis": "回复里 5% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "citation/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000530"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 1
+    },
+    {
+      "caseId": "citation/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000540"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "citation/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000550"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 1
+    },
+    {
+      "caseId": "persona/01",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000601"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "persona/02",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000602"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "persona/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000603"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "persona/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000604"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "persona/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000605"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "persona/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000606"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "persona/07",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000607"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "persona/08",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年，但分摊到三年也没有改变「要先垫钱」这个事实。垫钱就是成本，不是账面上的数字游戏。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000608"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4277777777777778,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4861111111111111,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/01",
+      "persona": "tieba_veteran",
+      "reply": "",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 0.5,
+          "basis": "这次运行没有记录目标 id，无法判定"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这个案例按设计不生成回复，不评价论点识别"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 0.6,
+          "basis": "只有一句话，判不出句式变化"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ]
+    },
+    {
+      "caseId": "refusal/02",
+      "persona": "tieba_veteran",
+      "reply": "",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 0.5,
+          "basis": "这次运行没有记录目标 id，无法判定"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这个案例按设计不生成回复，不评价论点识别"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 0.6,
+          "basis": "只有一句话，判不出句式变化"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ]
+    },
+    {
+      "caseId": "refusal/03",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000702"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这个案例按设计不生成回复，不评价论点识别"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/04",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000703"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0,
+          "basis": "论证结构里一条都没找到（对方论据/未答问题/矛盾）"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/05",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000704"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/06",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000705"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/07",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000706"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/08",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000707"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/09",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000708"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "refusal/10",
+      "persona": "tieba_veteran",
+      "reply": "你只看了第一年。分摊到三年也没有改变要先垫钱这件事。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 9200000709"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 10 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/01",
+      "persona": "tieba_veteran",
+      "reply": "修不修不是逻辑问题，是账算不算得过来的问题：十年机龄的压缩机，修一次的价钱够买半台新的，而新机的耗电只有它的一半。你说「先修」，那要先说清修完之后你还打算用几年。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6002"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.13134328358208955,
+          "basis": "回复里 6% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.26119402985074625,
+          "basis": "回复里 10% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 33 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 1
+    },
+    {
+      "caseId": "weibo/02",
+      "persona": "tieba_veteran",
+      "reply": "你说对了一半：把「不装的人」单独分一条道走，效果上就是强制。要让它真的自愿，侧门就不能比正门难走——否则「自愿」只是写在通知上的两个字。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6101"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.16603773584905662,
+          "basis": "回复里 8% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.2830188679245283,
+          "basis": "回复里 11% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 8 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/03",
+      "persona": "tieba_veteran",
+      "reply": "那就把材料提前到周四下班前发。真正的问题不是「周一早上」，是「周五一整天才拿到材料」——把那半天挪到周四，周末就不用动了。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6212"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.45000000000000007,
+          "basis": "回复里 20% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.5681818181818181,
+          "basis": "回复里 23% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 31 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/04",
+      "persona": "tieba_veteran",
+      "reply": "穿旧衣服和买不买新的，是两件事。你要论证「这是没钱」，得先说清为什么一件还能穿的衣服必须被换掉。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6301"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4512820512820513,
+          "basis": "回复里 21% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.576923076923077,
+          "basis": "回复里 23% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 16 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/05",
+      "persona": "tieba_veteran",
+      "reply": "两个小时确实是标准做法里的下限，不是全部。你要说试验不规范，得说清规范要几小时——否则「我看到了」只是一句印象。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6404"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "回复里 18% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4545454545454546,
+          "basis": "回复里 18% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.7,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 14 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/06",
+      "persona": "tieba_veteran",
+      "reply": "房租涨是真的，但 8 块钱对应的是 44% 的涨幅。你说「这条街都在涨」，那就说清隔壁涨了多少——如果隔壁只涨两块，这条街就不成立。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6502"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.34222222222222226,
+          "basis": "回复里 16% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 0,
+          "basis": "回复里出现了上下文没有的数字：44%"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.3888888888888889,
+          "basis": "回复里 16% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 14 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/07",
+      "persona": "tieba_veteran",
+      "reply": "种树这件事本身没问题，问题在后期养护。你要说这是「做样子」，得先看一年后活了多少棵。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6601"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 4 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/08",
+      "persona": "tieba_veteran",
+      "reply": "我没说改车位是坏事。我问的是三个具体问题：移走的树怎么处理、租户怎么分摊、车位使用权怎么分配。这三条答不上来，「好事」就还只是一句话。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 6701"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.17254901960784316,
+          "basis": "回复里 8% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.8823529411764707,
+          "basis": "回复里 35% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.7,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 27 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "weibo/09",
+      "persona": "tieba_veteran",
+      "reply": "",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 0.5,
+          "basis": "这次运行没有记录目标 id，无法判定"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这个案例按设计不生成回复，不评价论点识别"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 0.6,
+          "basis": "只有一句话，判不出句式变化"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ]
+    },
+    {
+      "caseId": "weibo/10",
+      "persona": "tieba_veteran",
+      "reply": "",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 0.5,
+          "basis": "这次运行没有记录目标 id，无法判定"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这个案例按设计不生成回复，不评价论点识别"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0,
+          "basis": "回复里 0% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 0.6,
+          "basis": "只有一句话，判不出句式变化"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ]
+    },
+    {
+      "caseId": "quality/shift-01",
+      "persona": "tieba_veteran",
+      "reply": "态度可以聊，但先把数说清：你说至少翻一倍，我问的是口径——包不包含停工损失、按几年折旧。口径给出来我按同一套重算；给不出来，那「翻一倍」就只是一句感觉。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 7103"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.4245614035087719,
+          "basis": "回复里 19% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.48245614035087714,
+          "basis": "回复里 19% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.7,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 12 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "quality/contradict-01",
+      "persona": "tieba_veteran",
+      "reply": "你前面说「根本没必要做，纯属折腾」，现在说「早就该试」。两句不能同时成立；如果现在的立场是「该做但太晚」，那前面那句为什么要说。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 7203"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.6666666666666666,
+          "basis": "结构里找到 2 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.5739130434782609,
+          "basis": "回复里 26% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.7608695652173914,
+          "basis": "回复里 30% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.4,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 8 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "quality/answered-01",
+      "persona": "tieba_veteran",
+      "reply": "差 23 元，218 对 241，我上面那条里就写着。你要是想讨论这个差额合不合理，我们从这儿接着聊。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 7302"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.25882352941176473,
+          "basis": "回复里 12% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.29411764705882354,
+          "basis": "回复里 12% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.7,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 0.8,
+          "basis": "句长跨度 3 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "quality/crowd-01",
+      "persona": "tieba_veteran",
+      "reply": "产权和「轮着用」是两套规则。我买的是这个位的使用权，公共资源说的是没被买下的那些。要把这两件事混在一起，得先说明产权为什么不算。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 7403"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.21568627450980393,
+          "basis": "回复里 10% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.29411764705882354,
+          "basis": "回复里 12% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.7,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 13 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "quality/quote-01",
+      "persona": "tieba_veteran",
+      "reply": "那句话是别人说的，我不替他解释。你要反驳就指出具体哪一行数据经不起推敲，口径、样本、时间窗，指哪一个我都能核。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 7501"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0.3333333333333333,
+          "basis": "结构里找到 1 条对方论据、0 个未答问题、0 处矛盾"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.3,
+          "basis": "回复里 14% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.4545454545454546,
+          "basis": "回复里 18% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.7,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 23 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    },
+    {
+      "caseId": "quality/long-01",
+      "persona": "tieba_veteran",
+      "reply": "迁移成本我列了，在第 3 节。你要是觉得那一节算漏了，指出来哪一项我补上——但「谁来付」这个问题本身得有具体项才谈得下去。",
+      "scores": [
+        {
+          "id": "target_accuracy",
+          "label": "目标准确性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复目标是 7601"
+        },
+        {
+          "id": "argument_recognition",
+          "label": "论点识别准确性",
+          "kind": "deterministic",
+          "score": 0,
+          "basis": "论证结构里一条都没找到（对方论据/未答问题/矛盾）"
+        },
+        {
+          "id": "stance_consistency",
+          "label": "立场一致性",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有发现替主人改口的表述"
+        },
+        {
+          "id": "substantive_rebuttal",
+          "label": "实质反驳能力",
+          "kind": "proxy",
+          "score": 0.28695652173913044,
+          "basis": "回复里 13% 的词来自讨论本身（代理指标：不衡量反驳是否真的成立）"
+        },
+        {
+          "id": "factual_credibility",
+          "label": "事实可信度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "回复里的数字都能在给定上下文里找到"
+        },
+        {
+          "id": "context_use",
+          "label": "上下文利用程度",
+          "kind": "proxy",
+          "score": 0.32608695652173914,
+          "basis": "回复里 13% 的词出现在提供的上下文里（代理指标）"
+        },
+        {
+          "id": "persona_style",
+          "label": "人格风格辨识度",
+          "kind": "proxy",
+          "score": 0.7,
+          "basis": "按口语标记粗判 tieba_veteran（代理指标：不衡量像不像这个具体人格）"
+        },
+        {
+          "id": "naturalness",
+          "label": "表达自然度",
+          "kind": "proxy",
+          "score": 1,
+          "basis": "句长跨度 31 字，没有作文式连接词"
+        },
+        {
+          "id": "non_repetition",
+          "label": "重复程度",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "没有与已发内容重复，也没有内部重复"
+        },
+        {
+          "id": "uncertainty_handling",
+          "label": "不确定性处理",
+          "kind": "deterministic",
+          "score": 1,
+          "basis": "这次读取没有缺失，无需承认限制"
+        }
+      ],
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "elapsedMs": 0
+    }
+  ]
+}
