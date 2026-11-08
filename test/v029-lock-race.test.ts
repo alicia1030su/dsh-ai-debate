@@ -247,6 +247,17 @@ test('回收者必须自己赢下路径：三方竞争下只有一方能写（v0
     child.stdout.on('data', (chunk: Buffer) => {
       out += chunk.toString()
     })
+    /**
+     * ## `close` 必须在 spawn 之后立刻挂上（v0.2.35）
+     *
+     * 原来是在 `store.mutate` 之后才 `child.on('close', …)`。子进程如果在那之前
+     * 就退出了（`PEER-SAW-OTHER` 分支几十毫秒就能走到），事件早已发过，
+     * 监听器就永远等不到——测试挂死，而 CI 上表现为 `cancelledByParent`：
+     * 一条**看起来像产品问题、实际是测试写法**的红。
+     *
+     * 修法是把 promise 在建进程时就建好，后面只是 await 它。断言一条没动。
+     */
+    const closed = new Promise<void>((resolve) => child.on('close', () => resolve()))
 
     let threw: unknown
     try {
@@ -254,7 +265,7 @@ test('回收者必须自己赢下路径：三方竞争下只有一方能写（v0
     } catch (error) {
       threw = error
     }
-    await new Promise((resolve) => child.on('close', resolve))
+    await closed
 
     const after = readFileSync(statePath(dir), 'utf8')
     t.diagnostic(`  peer: ${out || '(none)'}`)
