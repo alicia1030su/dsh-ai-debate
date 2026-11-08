@@ -354,6 +354,68 @@ async function main(): Promise<void> {
   stage('进入插件分区', plugin.mounted ? 'passed' : 'failed', plugin.detail)
   await screenshot('03-plugin')
 
+  /**
+   * ## 模型配置与连接测试（v0.2.35 §8 第 1、2 项）
+   *
+   * 这一段是这一版新增的：以前桌面验收从「输入微博链接」开始，而真实用户的第一步
+   * 其实是「把模型配上」。两件事必须分开验证：
+   *
+   * 1. **配置在页面上看得见、改得动** —— Base URL、模型名、协议三栏都在，且显示的
+   *    是当前实际值（不是占位符）。
+   * 2. **测试连接回答两个问题** —— 能不能连上（连通性），以及这个模型会不会按
+   *    插件的 JSON 契约输出。第二件事是 v0.2.35 才有的，也是「设置页全绿但一生成
+   *    就废」那种故障唯一能在事前发现的地方。
+   *
+   * 这里的模型是隔离环境里的假模型（`tmp/llm-mock-028.mjs`，端口 58999），它按
+   * 契约回 JSON。所以这一段证明的是**页面与链路的判断正确**，不是「某个真实模型
+   * 今天表现如何」。报告里必须这么写。
+   */
+  const modelFields = await evaluate<{ base: boolean; model: boolean; protocol: boolean }>(`(() => {
+    const inputs = [...document.querySelectorAll('input')]
+    const has = (id) => Boolean(document.getElementById(id))
+    const label = (text) => [...document.querySelectorAll('p,span,label')].some(n => (n.textContent || '').trim().startsWith(text))
+    return {
+      base: has('dsd-llm-base') || label('模型 API 地址'),
+      model: has('dsd-llm-model') || label('模型名称'),
+      protocol: has('dsd-llm-protocol') || label('接口协议'),
+    }
+  })()`)
+  stage(
+    '模型配置三栏都在页面上',
+    modelFields.base && modelFields.model && modelFields.protocol ? 'passed' : 'failed',
+    `Base URL=${modelFields.base ? '有' : '无'} 模型名=${modelFields.model ? '有' : '无'} 协议=${modelFields.protocol ? '有' : '无'}`,
+  )
+
+  const probeClicked = await clickScrolled('测试模型连接')
+  stage('点击「测试模型连接」', probeClicked ? 'passed' : 'failed', probeClicked ? '已点击真实按钮' : '按钮不存在或不可点')
+  if (probeClicked) {
+    const probed = await waitFor(async () => {
+      const text = await bodyText()
+      return text.includes('连接正常') || text.includes('契约探测')
+    }, 60_000)
+    const after = await bodyText()
+    stage(
+      '连接测试给出了结果',
+      probed ? 'passed' : 'failed',
+      probed ? '页面出现连接结果' : `60 秒内没有结果：${after.slice(0, 140).replace(/\n/g, ' / ')}`,
+    )
+    /**
+     * 协议必须与配置一致。填的是 chat，页面就该说 `chat/completions` —— 这一条
+     * 挡的是「模型名里带 responses 就当成 responses 协议」那种猜测式实现。
+     */
+    stage(
+      '结果里写明实际使用的协议',
+      /协议：\s*chat\/completions/.test(after) ? 'passed' : 'failed',
+      (after.split('\n').find((line) => line.includes('协议')) ?? '页面上没有协议那一行').slice(0, 90),
+    )
+    stage(
+      '契约探测单独报告',
+      after.includes('契约探测') ? 'passed' : 'failed',
+      (after.split('\n').find((line) => line.includes('契约探测')) ?? '页面上没有契约探测那一行').slice(0, 110),
+    )
+    await screenshot('03b-model-probe')
+  }
+
   // ── 平台页：微博必须在列表里，并且说清自己的状态 ───────────────────────
   /**
    * ## 桌面端没有「平台」页签，只有堆叠的分区
