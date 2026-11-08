@@ -348,6 +348,42 @@ async function dismissOverlays(): Promise<void> {
   }
 }
 
+/**
+ * 点**离线导入分区里**的那个按钮。
+ *
+ * ## 为什么不能按文字全页找（v0.2.34）
+ *
+ * v0.2.33 给「发表工作台」也加了「复制回复」，于是页面上同时存在两个同名按钮。
+ * `clickByLabel` 取的是文档顺序里第一个 —— 那是工作台的（它渲染在离线导入之前）。
+ * 点下去，工作台那边确实提示了「已复制到剪贴板」，而本测试读的是**离线导入分区**
+ * 的正文，于是看到「什么都没发生」。
+ *
+ * 这条错误 v0.2.33 就存在了，只是那一版没再跑这份脚本：它跑的是 `desktop-weibo.ts`。
+ * 同一个字面量在两个分区里出现，判据必须带上作用域 —— 否则测试会随时间自己变错。
+ */
+async function clickInManualSection(label: string): Promise<boolean> {
+  const rect = await evaluate<{ x: number; y: number } | null>(`(() => {
+    const sections = [...document.querySelectorAll('.dsd-sect')]
+    const scope = sections.find((s) => s.innerText.includes('离线讨论导入'))
+    if (!scope) return null
+    const node = [...scope.querySelectorAll('button, [role=tab], a')]
+      .find((n) => (n.textContent || '').trim() === ${JSON.stringify(label)})
+    if (!node) return null
+    node.scrollIntoView({ block: 'center', inline: 'center' })
+    const r = node.getBoundingClientRect()
+    if (r.width === 0 || r.height === 0) return null
+    const cx = r.x + r.width / 2
+    const cy = r.y + r.height / 2
+    if (cx < 0 || cy < 0 || cx > window.innerWidth || cy > window.innerHeight) return null
+    return { x: Math.round(cx), y: Math.round(cy) }
+  })()`)
+  if (rect === null) return false
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await send('Input.dispatchMouseEvent', { type, x: rect.x, y: rect.y, button: 'left', clickCount: 1 })
+  }
+  return true
+}
+
 /** 离线导入分区的正文，用于断言页面上真的显示了什么。 */
 function manualSectionText(): Promise<string> {
   return evaluate<string>(`(() => {
@@ -905,7 +941,10 @@ try {
 
   // ── 15/15：复制 ──────────────────────────────────────────────────────
   const copyAfter = await evaluate<{ label: string; disabled: boolean } | null>(`(() => {
-    const b = [...document.querySelectorAll('button')].find((n) => /^(复制回复|还不能复制)$/.test((n.textContent || '').trim()))
+    const sections = [...document.querySelectorAll('.dsd-sect')]
+    const scope = sections.find((s) => s.innerText.includes('离线讨论导入'))
+    if (!scope) return null
+    const b = [...scope.querySelectorAll('button')].find((n) => /^(复制回复|还不能复制)$/.test((n.textContent || '').trim()))
     return b ? { label: b.textContent.trim(), disabled: b.disabled } : null
   })()`)
   stage(
@@ -916,7 +955,7 @@ try {
     copyAfter === null ? '找不到复制按钮' : `${copyAfter.label}，disabled=${copyAfter.disabled}`,
   )
 
-  const copyClicked = await clickByLabel('复制回复')
+  const copyClicked = await clickInManualSection('复制回复')
   let copyFeedback = ''
   const copyDeadline = Date.now() + 12_000
   while (Date.now() < copyDeadline) {
