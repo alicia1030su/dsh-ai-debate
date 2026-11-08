@@ -37,6 +37,8 @@ export DSH_E2E_OUT_DIR="$OUT"
 # 这一轮**没有**假模型：GUI 脚本据此把「候选正文」的判据从「等于固定回复」
 # 改成「满足契约且非空」。
 export DSH_E2E_REAL_MODEL=1
+# 这一轮额外跑「四种人格比较」：四次真实模型调用，是 v0.2.37 的核心验收。
+export DSH_E2E_COMPARE="${DSH_E2E_COMPARE:-1}"
 
 # ---- 隔离 profile（从已验证的离线环境复制，只改模型来源） ------------------
 if [ ! -f "$PROFILE/package.json" ]; then
