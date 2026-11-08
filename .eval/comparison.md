@@ -5,7 +5,7 @@
 
 | 维度 | 类型 | 基线 | 新版本 | 变化 |
 | --- | --- | --- | --- | --- |
-| argument_recognition | 确定性 | 0.41 | 0.42 | +1.7% |
+| argument_recognition | 确定性 | 0.95 | 0.95 | 无变化 |
 | context_use | 代理 | 0.15 | 0.15 | 无变化 |
 | factual_credibility | 确定性 | 0.99 | 0.99 | 无变化 |
 | naturalness | 代理 | 0.97 | 0.97 | 无变化 |
@@ -23,11 +23,7 @@
 - weibo/06 / factual_credibility：回复里出现了上下文没有的数字：44%
 - quality/long-01 / argument_recognition：论证结构里一条都没找到（对方论据/未答问题/矛盾）
 
-## 逐条变化
-- baseline/01：改善：argument_recognition
-- baseline/02：改善：argument_recognition
-- identity/04：改善：argument_recognition
-- quality/shift-01：改善：argument_recognition
+逐条对比：没有任何一条案例的评分发生变化。
 
 Token：0 输入 / 0 输出 → 0 输入 / 0 输出
-耗时：7 ms → 6 ms
+耗时：3 ms → 9 ms

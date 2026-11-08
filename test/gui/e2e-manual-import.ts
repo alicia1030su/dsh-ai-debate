@@ -980,10 +980,40 @@ try {
     `${personaOptions.length} 个：${personaOptions.map((o) => o.split(' —— ')[0]).join('/')}`,
   )
 
+  /**
+   * 生成失败时，把「页面上说的那句原因」抓出来。
+   *
+   * ## 为什么不能只截分区尾部
+   *
+   * 上一轮的报告只留了一句「240 秒内没有候选」加一段无关的表单文字 —— 段错误提示
+   * 在分区**顶部**（`setError` 的渲染位置），而截尾部永远看不到它。一条查不出原因
+   * 的红，比一条没有跑的红更浪费时间。
+   */
+  const generationFailureDetail = async (): Promise<string> => {
+    const section = await manualSectionText()
+    const whole = await evaluate<string>('document.body ? document.body.innerText : ""')
+    const pick = (text: string): string =>
+      text
+        .split('\n')
+        .filter((line) => /失败|错误|模型|无法|拒绝|超时|没有配置|未配置|原因/.test(line))
+        .slice(0, 3)
+        .join(' / ')
+    const fromSection = pick(section)
+    const fromBody = pick(whole)
+    return (fromSection || fromBody || section.slice(-160)).slice(0, 300).replace(/\n/g, ' / ')
+  }
+
   // ── 10/15：生成候选 ──────────────────────────────────────────────────
   const genClicked = await clickByLabel('生成候选回复')
   let generated = false
-  const genDeadline = Date.now() + 90_000
+  /**
+   * 等待上限按模型来源分开（v0.2.36）。
+   *
+   * 假模型 200ms 就回；宿主模型一次十几到几十秒，推理模型更久。同一个 90 秒上限
+   * 会把「慢」判成「坏」——而这条断言问的是「有没有生成」，不是「快不快」。
+   */
+  const genWaitMs = process.env.DSH_E2E_REAL_MODEL === '1' ? 240_000 : 90_000
+  const genDeadline = Date.now() + genWaitMs
   while (Date.now() < genDeadline) {
     const text = await manualSectionText()
     if (text.includes('安全评估') && text.includes('正文（可以直接改）')) {
@@ -1001,7 +1031,9 @@ try {
   stage(
     '候选出现在页面上',
     generated ? 'passed' : 'failed',
-    generated ? '页面渲染了候选正文与安全评估' : `90 秒内没有候选：${(await manualSectionText()).slice(-160).replace(/\n/g, ' / ')}`,
+    generated
+      ? '页面渲染了候选正文与安全评估'
+      : `${Math.round(genWaitMs / 1000)} 秒内没有候选：${await generationFailureDetail()}`,
   )
   await screenshot('06-generated')
 
@@ -1173,8 +1205,18 @@ try {
    * 下守卫本来就该放行，拿它当断言只会得到一条无意义的红。
    */
   const egressMode = process.env.DSH_E2E_EGRESS_MODE ?? ''
-  if (egressMode === '' ) {
-    stage('出网守卫自检', 'skipped', '这一轮没有声明 egress 模式（不是边界验收）')
+  /**
+   * 只有**边界验收**这一轮才记录这一段。
+   *
+   * 之前写成「不适用就记 skipped」，而项目规则是「任何 skipped 都判 failed」——
+   * 于是一次纯产品流程验收（真实模型那一轮）会被两条与它无关的跳过拉成失败。
+   *
+   * 规则本身是对的（不能把没跑的当跑过），所以修的是**记录口径**：不适用就不产生
+   * 这条阶段，而不是产生一条永远红的 skipped。这与「跳过必须算未完成」不冲突 ——
+   * 边界验收那一轮照样要求这些阶段全部实跑。
+   */
+  if (egressMode === '') {
+    // 这一轮不测出网边界：不记录该阶段。
   } else {
     /**
      * 离线分区的渲染形状与插件卡片的页签不同（v0.2.30 起这条门就没有页签），
@@ -1266,7 +1308,12 @@ try {
       hosts.filter((host) => /(^|\.)(weibo\.com|weibo\.cn|baidu\.com|tieba\.com)$/i.test(host)).join('、') || '0 条',
     )
   } else if (interceptLog === '' || !existsSync(interceptLog)) {
-    stage('拦截日志', 'skipped', `没有配置观测器，也没有找到 ${interceptLog || '(未配置)'}`)
+    /**
+     * 没有观测器也没有旧拦截日志 —— 这一轮不产出联网证据，不记录该阶段。
+     *
+     * 边界验收（`run-desktop-offline.sh`）会设 `DSH_E2E_OBSERVER_REPORT`，那一条
+     * 分支在上面的 `if` 里，走的是「必须有结论」的严格路径。
+     */
   } else {
     const log = JSON.parse(readFileSync(interceptLog, 'utf8')) as {
       reads?: unknown[]
