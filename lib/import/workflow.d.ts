@@ -27,6 +27,7 @@
 import type { CollectedThread } from '../collector.js';
 import type { Dispute } from '../analyzer.js';
 import { type PersonaConfig, type PersonaStyle } from '../persona.js';
+import { type ArgumentStrategyId } from '../strategy.js';
 import type { ResolvedConfig } from '../config.js';
 import type { LlmClient } from '../llm.js';
 import type { DebateStore, StoredManualImport, StoredSession } from '../store.js';
@@ -165,6 +166,8 @@ export interface ManualReviseOutput {
  */
 export declare function reviseImport(store: DebateStore, input: ManualReviseInput): Promise<StepResult<ManualReviseOutput>>;
 export interface ManualGenerateInput {
+    /** 手工指定的论证打法（v0.2.38）。不填则自动选择。 */
+    readonly strategy?: ArgumentStrategyId;
     readonly sessionId: string;
     /** 要回复哪一条。不填时用会话记下的那一条。 */
     readonly targetPostId?: string;
@@ -176,6 +179,19 @@ export interface ManualGenerateInput {
     readonly progress?: (message: string) => void;
 }
 export interface ManualGenerateOutput {
+    /** 程序选出的论证打法，连同依据（v0.2.38）。 */
+    readonly argumentStrategy?: {
+        readonly id: string;
+        readonly name: string;
+        readonly source: 'auto' | 'manual';
+        readonly reason: string;
+        readonly confidence: 'high' | 'medium' | 'low';
+        readonly evidence: readonly {
+            readonly field: string;
+            readonly postIds: readonly string[];
+            readonly why: string;
+        }[];
+    };
     readonly sessionId: string;
     readonly candidateId: string;
     readonly text: string;

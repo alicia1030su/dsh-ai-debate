@@ -22,6 +22,7 @@ import { buildVerificationService } from './verification-service.js'
 import { verificationViewOf } from './verification-view.js'
 import { adapterVersionOfAdapter, effectiveCapability, type CapabilityEvidenceRecord } from './capability-evidence.js'
 import { approvalStillApplies, deriveWorkbenchState } from './workbench.js'
+import { ARGUMENT_STRATEGIES, type ArgumentStrategyId } from './strategy.js'
 import {
   policyFromConfig,
   cancelInFlight,
@@ -1962,6 +1963,7 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           ...(input.ownerInstruction === undefined
             ? {}
             : { ownerInstruction: input.ownerInstruction }),
+          ...(input.strategy === undefined ? {} : { strategy: input.strategy as ArgumentStrategyId }),
           config,
           llm: runtimeView.llm,
         })
@@ -1972,8 +1974,18 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
           ok: true,
           candidateId: result.value.candidateId,
           text: result.value.text,
+          ...(result.value.argumentStrategy === undefined
+            ? {}
+            : { argumentStrategy: result.value.argumentStrategy }),
           securityDecision: result.value.securityDecision,
           securityReasons: result.value.securityReasons,
+          // v0.2.38：模型主动要求补充信息时，也要把原因带回去。
+          // 之前这里只回传正文，于是「模型选择不答」在页面上和「生成失败」长得一样 ——
+          // 采集器也只能记下一条空正文，说不清是模型拒绝还是链路坏了。
+          needsInput: result.value.needsInput === true,
+          ...(result.value.needsInputReason === undefined
+            ? {}
+            : { needsInputReason: result.value.needsInputReason }),
         }
       },
       /**
@@ -2486,6 +2498,18 @@ export function apply(ctx: PluginContext, config?: unknown): () => void {
                   current: id === step,
                 })),
                 personas: personaOptions(),
+                /**
+                 * 可选打法清单（v0.2.38）。
+                 *
+                 * 页面上「打法」下拉的数据源。`auto` 不是这一层给的 —— 它是「不传」，
+                 * 由服务端自动选择；把 `auto` 做成一个伪策略 id 会让「未知策略」的
+                 * 报错分不清是打错字还是自动。
+                 */
+                strategies: ARGUMENT_STRATEGIES.map((strategy) => ({
+                  id: strategy.id,
+                  name: strategy.name,
+                  summary: strategy.summary,
+                })),
                 participants: session.participants ?? [],
                 ...(session.imported.importedAt === undefined
                   ? {}

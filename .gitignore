@@ -53,3 +53,14 @@ tmp/
 !test/fixtures/fake-weibo-pkg/
 !test/fixtures/fake-weibo-pkg/node_modules/
 !test/fixtures/fake-weibo-pkg/node_modules/**
+
+# 评测运行记录（v0.2.38）。
+#
+# `.eval/` 是 `scripts/eval-compare.mjs` 与 `test/evaluation/cli.ts` 的输出目录：
+# 同一份语料跑两次的结果、两个版本对比的中间产物。它是**证据**不是**源码** ——
+# 内容取决于运行时刻，入库会让每次评测都制造一次假改动，也会把「上一轮的数字」
+# 混进这一轮的复现步骤里。需要留档的数字写进验收报告，不写在这里。
+.eval/
+
+# 源码包生成时的临时输出目录（v0.2.38）。
+.tmp-sz/

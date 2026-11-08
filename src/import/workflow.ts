@@ -33,6 +33,8 @@ import { renderBrief, validateBrief } from '../brief.js'
 import { compressContext, resolveBudget, splitBudget } from '../compressor.js'
 import { generateReply } from '../generator.js'
 import { PERSONAS, resolvePersona, type PersonaConfig, type PersonaStyle } from '../persona.js'
+import { selectStrategy, type ArgumentStrategyId } from '../strategy.js'
+import { recordCompression } from '../compression-record.js'
 import { guardOutput, toStorageRecord, type ConversationPost } from '../security/output-guard.js'
 import { contentHash, resolveTarget, type TargetExpectation } from '../target.js'
 import { detectInjection, transition } from '../safety.js'
@@ -581,6 +583,8 @@ async function reviseWith(
 // ---------------------------------------------------------------------------
 
 export interface ManualGenerateInput {
+  /** 手工指定的论证打法（v0.2.38）。不填则自动选择。 */
+  readonly strategy?: ArgumentStrategyId
   readonly sessionId: string
   /** 要回复哪一条。不填时用会话记下的那一条。 */
   readonly targetPostId?: string
@@ -592,7 +596,28 @@ export interface ManualGenerateInput {
   readonly progress?: (message: string) => void
 }
 
+/** 与 `runtime.ts` 同一规则：只在压缩丢了材料时开口。 */
+function compressionNotes(record: ReturnType<typeof recordCompression>): string[] {
+  if (record.lost.length === 0) return []
+  const labels = record.items
+    .filter((item) => record.lost.includes(item.key))
+    .map((item) => `${item.label}${item.basis === 'proxy' ? '（代理判定）' : ''}`)
+  return [
+    `这次压缩丢掉了 ${record.lost.length} 项材料：${labels.join('、')}。` +
+      `占用 ${record.tokens}/${record.budget} tokens。`,
+  ]
+}
+
 export interface ManualGenerateOutput {
+  /** 程序选出的论证打法，连同依据（v0.2.38）。 */
+  readonly argumentStrategy?: {
+    readonly id: string
+    readonly name: string
+    readonly source: 'auto' | 'manual'
+    readonly reason: string
+    readonly confidence: 'high' | 'medium' | 'low'
+    readonly evidence: readonly { readonly field: string; readonly postIds: readonly string[]; readonly why: string }[]
+  }
   readonly sessionId: string
   readonly candidateId: string
   readonly text: string
@@ -710,6 +735,22 @@ export async function generateForImport(
     )
   }
 
+  /**
+   * 人工导入这条链路也要选策略（v0.2.38）。
+   *
+   * 它是手动导入用户的**唯一**生成路径 —— 漏掉这一处，策略层只对真实平台生效，
+   * 而这一版的质量对照实验恰好就是跑在这条路径上的。
+   */
+  const strategySelection = selectStrategy(briefBuild.brief, input.strategy)
+  const strategy = strategySelection.choice
+  const briefText = renderBrief(briefBuild.brief)
+  const compression = recordCompression(
+    briefBuild.brief,
+    collected.floors.flatMap((floor) => [floor.floor, ...floor.nested]).find((post) => post.postId === targetPostId)?.content,
+    context,
+    briefText,
+  )
+
   progress('正在生成回复…')
   const result = await generateReply(input.llm(), {
     dispute,
@@ -719,7 +760,8 @@ export async function generateForImport(
     alreadyPublished: session.publishedPostIds,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.ownerInstruction === undefined ? {} : { ownerInstruction: input.ownerInstruction }),
-    brief: renderBrief(briefBuild.brief),
+    brief: briefText,
+    ...(strategy === undefined ? {} : { strategy }),
     temperature: input.config.llmTemperature,
     ...(input.config.llmMaxOutputTokens > 0 ? { maxTokens: input.config.llmMaxOutputTokens } : {}),
   })
@@ -730,6 +772,28 @@ export async function generateForImport(
       '再点一次生成（模型偶尔不遵守格式）',
       '如果连续两次如此，换一个更强的模型',
     ])
+  }
+
+  /**
+   * 模型自己说「材料不够，我不答」时，不能落一条空候选（v0.2.38）。
+   *
+   * ## 这是真实跑出来的坑
+   *
+   * v0.2.38 的质量采集里，长楼层那条案例（最早那条质疑被 6 条刷屏埋住）连续两轮
+   * 都产出了一条 `text: ""` 的候选：模型按第 3 条铁律返回了 `needs_more_context`，
+   * 而这条链路只判断「draft 存不存在」—— 存在就落库。于是页面上出现一条可以点
+   * 「复制」的空候选，采集器也只能记下一条空正文，分不清是模型拒绝还是链路坏了。
+   *
+   * 正确做法是把它当成一次**有内容的拒绝**：不落候选，把模型说的缺口带回给人。
+   * 这与「解析失败」和「安全拦截」都不同，所以文案也不同。
+   */
+  if (result.needsInput || result.draft.reply.trim() === '') {
+    return failed(
+      'generate',
+      `模型认为材料不够，没有给出回复：${result.needsInputReason ?? '回复正文为空'}。` +
+        '请补上它指出的那一部分，或换一个更完整的导入。',
+      ['补读缺失的内容后重新生成', '在「评论列表」里换一条更有依据的目标'],
+    )
   }
 
   const replyText = result.draft.reply
@@ -762,13 +826,29 @@ export async function generateForImport(
         replyId: newCandidateId(entry.id, nextIndex(entry)),
         text: replyText,
         strategy: result.draft?.strategy ?? 'direct_rebuttal',
+        ...(strategy === undefined
+          ? {}
+          : {
+              argumentStrategy: {
+                id: strategy.id,
+                name: strategy.name,
+                source: strategy.source,
+                reason: strategy.reason,
+                confidence: strategy.confidence,
+                evidence: strategy.evidence.map((item) => ({
+                  field: item.field,
+                  postIds: [...item.postIds],
+                  why: item.why,
+                })),
+              },
+            }),
         targetPostId,
         targetSnapshot: resolved.snapshot,
         candidateVersion: nextVersion(entry),
         textHash: hashOf(replyText),
         confidence: result.draft?.confidence ?? 0,
         violations,
-        notes: result.notes,
+        notes: [...result.notes, ...compressionNotes(compression)],
         security: toStorageRecord(guarded.assessment, guarded.fingerprint),
         createdAt: new Date().toISOString(),
         /**
@@ -813,6 +893,9 @@ export async function generateForImport(
     candidateId: stored.replyId,
     text: stored.text,
     version: stored.candidateVersion,
+    ...(stored.argumentStrategy === undefined
+      ? {}
+      : { argumentStrategy: stored.argumentStrategy }),
     violations,
     notes: result.notes,
     securityDecision: guarded.assessment.decision,

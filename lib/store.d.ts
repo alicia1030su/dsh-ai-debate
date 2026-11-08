@@ -41,6 +41,25 @@ export type TaskState = 'DETECTED' | 'AUTHORIZED' | 'COLLECTING' | 'ANALYZING' |
 /** States from which no further automatic progress happens. */
 export declare const TERMINAL_STATES: readonly TaskState[];
 /**
+ * 一次论证策略决策的持久化形状（v0.2.38）。
+ *
+ * 与 `StrategyChoice` 同构，但不 import 它 —— `store.ts` 是被最多模块引用的底层，
+ * 让它依赖 `strategy.ts` 会把「数据形状」和「选择逻辑」绑在一起，将来改选择逻辑
+ * 就要动历史数据的类型。
+ */
+export interface StoredArgumentStrategy {
+    readonly id: string;
+    readonly name: string;
+    readonly source: 'auto' | 'manual';
+    readonly reason: string;
+    readonly confidence: 'high' | 'medium' | 'low';
+    readonly evidence: readonly {
+        readonly field: string;
+        readonly postIds: readonly string[];
+        readonly why: string;
+    }[];
+}
+/**
  * A stored reply candidate.
  *
  * Each candidate carries its own target snapshot and version. Putting the
@@ -51,7 +70,23 @@ export declare const TERMINAL_STATES: readonly TaskState[];
 export interface StoredCandidate {
     readonly replyId: string;
     readonly text: string;
+    /** 模型自报的回复策略（direct_rebuttal 等），用于界面提示。 */
     readonly strategy: string;
+    /**
+     * 本轮实际使用的论证打法，以及它的依据（v0.2.38）。
+     *
+     * ## 为什么不复用上面那个 `strategy`
+     *
+     * `strategy` 是模型在 JSON 里自报的标签，**不可核对** —— 模型说自己在
+     * `point_out_contradiction`，没人能验证。这一条是程序在生成前选出来的，带依据
+     * 的 post id 与可信度，可以在页面上指着它问「凭什么这么打」。
+     *
+     * 两个字段并存是有意的：一个是模型的自我描述，一个是系统的决策记录。合并成一个，
+     * 就等于让模型的自我描述冒充决策记录。
+     *
+     * 旧数据没有这个字段，读出来是 `undefined`，界面按「未记录」显示。
+     */
+    readonly argumentStrategy?: StoredArgumentStrategy;
     readonly targetPostId: string;
     /**
      * The verified target this text was written against.

@@ -1204,7 +1204,26 @@ function pickOpponent(
   keyOf: (entry: TimelineEntry) => string,
 ): OpponentPick {
   const triggerIndex = floorTimeline.findIndex((entry) => entry.postId === trigger.postId)
-  const before = triggerIndex >= 0 ? floorTimeline.slice(0, triggerIndex) : floorTimeline
+  /**
+   * 观察窗口：触发之前优先，空窗口回落到触发之后（v0.2.38）。
+   *
+   * 旧实现只看 `slice(0, triggerIndex)`，这对「主人发完最后一帖后召唤」是对的：他要回的是
+   * 之前的争论。但当主人选中的**是这一层的开头帖**（页面上确实可以这么选），触发之前
+   * 一条发言都没有，窗口为空 —— 于是分析器报「这个楼层里在主人发言之前没有其他参与者」，
+   * 整条生成路径死在这里，而争论明明就在下面。
+   *
+   * 回落的判据是「窗口里一个人都没有」，不是「候选分低」：只有当前面确实没有任何对话时，
+   * 才把后面当作争论发生的地方。这样召唤路径的行为一点没变。
+   */
+  const head = triggerIndex >= 0 ? floorTimeline.slice(0, triggerIndex) : floorTimeline
+  const tail = triggerIndex >= 0 ? floorTimeline.slice(triggerIndex + 1) : []
+  const windowIsEmpty = head.every((entry) => keyOf(entry) === ownerKey)
+  const before = windowIsEmpty && tail.length > 0 ? tail : head
+  if (windowIsEmpty && tail.length > 0) {
+    notes.push(
+      '选中的是这一层的开头帖，之前没有别的发言：改为从它下面的回复里判断主人在跟谁争论。',
+    )
+  }
 
   const stats = new Map<
     string,
@@ -1359,10 +1378,34 @@ function findOpenQuestions(
   return out
 }
 
-/** True when the text reads as a question in Chinese or English. */
+/**
+ * True when the text reads as a question in Chinese or English.
+ *
+ * ## 为什么不能只看关键词（v0.2.38）
+ *
+ * 旧实现把「依据」「证据」当成疑问标记，于是「依据我前面贴过了。」被读成一句提问。
+ * 这两个词是**名词**，在陈述句里同样常见：对手在说「我已经贴过依据了」，而分析器
+ * 把它记成「对手在追问依据」—— 同一句话，一边丢掉一条论据，一边多出一条没问过的
+ * 问题。评测语料 `context/01` 的零结构就是这么来的。
+ *
+ * 现在的规则是三档，只有前两档能单独定性：
+ *
+ * 1. 问号 —— 明确。
+ * 2. 疑问代词/疑问副词（为什么/凭什么/怎么/是否/多少……）—— 明确。
+ * 3. 名词性词（依据/证据/数据/理由）—— **只在疑问框架里**才算：要么前面有
+ *    「有/没有/什么/哪」引出，要么后面接「呢/吗/是什么/在哪」。孤立的「依据」
+ *    不再改变句子的语气。
+ */
 export function looksLikeQuestion(content: string): boolean {
   if (/[?？]/.test(content)) return true
-  return /(为什么|凭什么|怎么|如何|是不是|有没有|能不能|难道|依据|证据|哪里|哪个|谁)/.test(content)
+  if (/(为什么|凭什么|怎么|如何|是不是|有没有|能不能|难道|哪里|哪个|哪位|谁|多少|是否|何时|什么)/.test(content)) {
+    return true
+  }
+  // 名词性词：疑问框架才算。`(有|没有|什么|哪|拿不出|给不出)` 在前，或疑问后缀在后。
+  return (
+    /(有|没有|什么|哪|拿不出|给不出|说不出)[^。！？!?]{0,6}(依据|证据|数据|理由|出处)/.test(content) ||
+    /(依据|证据|数据|理由|出处)(呢|吗|是什么|在哪|何在|有没有)/.test(content)
+  )
 }
 
 /**
@@ -1406,16 +1449,28 @@ function toStatement(
  *
  * A claim is a sentence the owner stated as fact or opinion. Interrogatives are
  * excluded, because the owner asking a question is not the owner asserting.
+ *
+ * ## 为什么先按逗号切（v0.2.38）
+ *
+ * 「你那个方案忽略了迁移成本，这一块谁来付？」是一句**又有主张又有追问**的话。
+ * 旧实现整句送给 `looksLikeQuestion`，判成问句就整句丢掉 —— 于是对手唯一一条
+ * 实质论断消失了，简报里连一条对方论据都没有，回复只能空转（`quality/long-01`）。
+ *
+ * 现在先按分句切，再逐句判断：陈述分句留下，疑问分句丢掉。这样「忽略了迁移成本」
+ * 成为可引用的论据，「谁来付」仍然不被当成论据。丢的是语气，不是内容。
  */
 export function extractClaims(statements: readonly Statement[], limit = 8): readonly string[] {
   const claims: string[] = []
   for (const statement of statements) {
     for (const raw of statement.content.split(/[。！？!?\n]+/)) {
-      const sentence = raw.trim()
-      if (sentence.length < 4) continue
-      if (looksLikeQuestion(sentence)) continue
-      claims.push(sentence)
-      if (claims.length >= limit) return claims
+      // 一句之内也可能一半陈述一半追问，所以再按逗号/分号切一次。
+      for (const clause of raw.split(/[，,；;]+/)) {
+        const sentence = clause.trim()
+        if (sentence.length < 4) continue
+        if (looksLikeQuestion(sentence)) continue
+        claims.push(sentence)
+        if (claims.length >= limit) return claims
+      }
     }
   }
   return claims

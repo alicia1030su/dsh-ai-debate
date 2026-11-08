@@ -150,7 +150,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      * 为什么把模式做成显式配置而不是「检测到离线就自动切」：自动切换会在网络抖动
      * 时让一次正常的微博读取突然被拒，而使用者看不出原因。模式是承诺，不是猜测。
      */
-    egressMode: z<"open" | "manual" | "offline", "open" | "manual" | "offline", "volatile-defined">;
+    egressMode: z<"manual" | "open" | "offline", "manual" | "open" | "offline", "volatile-defined">;
     llmProtocol: z<"chat" | "responses", "chat" | "responses", "volatile-defined">;
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;
@@ -360,7 +360,7 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      * 为什么把模式做成显式配置而不是「检测到离线就自动切」：自动切换会在网络抖动
      * 时让一次正常的微博读取突然被拒，而使用者看不出原因。模式是承诺，不是猜测。
      */
-    egressMode: z<"open" | "manual" | "offline", "open" | "manual" | "offline", "volatile-defined">;
+    egressMode: z<"manual" | "open" | "offline", "manual" | "open" | "offline", "volatile-defined">;
     llmProtocol: z<"chat" | "responses", "chat" | "responses", "volatile-defined">;
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;

@@ -1,32 +1,33 @@
 # 行尾策略：一律 LF，不随克隆它的人的平台变。
 #
-# 为什么这件事必须写进仓库，而不是写进某个人的 `core.autocrlf` 设置：
+# ## 为什么这条规则在 v0.2.38 又被追加了一次
 #
-# Git for Windows 的安装默认是 `core.autocrlf=true`，检出时把 LF 换成 CRLF。
-# 于是同一个提交，在 Windows 上克隆出来是 CRLF，在 Linux 上是 LF。`scripts/tar.mjs`
-# 打包时读的是**工作区**里的文件，所以两边打出来的 tgz 字节不同 —— 「源码 ZIP 能在
-# 全新环境复现正式 TGZ」这句话就不成立了，而且只会在别人机器上不成立。
+# v0.2.20 已经写过同一段说明，但规则写的是 `* text=auto eol=lf`。那句话在**检出**
+# 生效，在**提交**时却依赖 `core.autocrlf`：Windows 上装 Git 默认 `true`，于是
+# 「作者机器上的工作树」是 CRLF。`scripts/source-zip.mjs` 读的是工作树，所以同一个
+# 提交在作者机器上打出来是 7815604 字节，在 Linux runner 上是 7813235 ——
+# v0.2.37 的源码包差异就是这么来的，查到的时候只能说「原因未查清」。
 #
-# v0.2.20 的准备阶段就是被这件事绊了一下：在一次全新克隆里跑全量测试，
-# `test/v0216-artifact-determinism.test.ts` 的「归档里的文本文件不携带多余的 CR」失败，
-# 因为它看到工作区是 CRLF。这不是测试太严，是仓库没有把行尾约定说出来。
+# 现在两条规则分开写，各自管一件事：
 #
-# `eol=lf` 会让检出后的工作区一律是 LF，压过 `core.autocrlf=true` 的影响。
+# 1. `* text=auto eol=lf` —— 检出统一成 LF。
+# 2. `* text=auto` 的 `-text` 反向约束在这里用不上；真正把提交侧钉死的是下面这条
+#    通配：所有文本文件都按 LF 规范化**存储**，与 `core.autocrlf` 无关。
+#
+# 归档的字节只由提交内容决定，这件事在 `scripts/lib/archive-verify.mjs` 里有断言：
+# 归档里每个文件都必须等于 `git cat-file` 出来的字节。
 * text=auto eol=lf
 
-# 二进制文件：不要让 Git 做任何行尾或编码转换，也不要在 diff 里当文本处理。
+* text eol=lf
+
+# 二进制文件不能被规范化：改写它们会让 PNG 直接损坏。
 *.png binary
 *.jpg binary
 *.jpeg binary
 *.gif binary
-*.webp binary
 *.ico binary
 *.zip binary
 *.tgz binary
-*.gz binary
+*.pdf binary
 *.woff binary
 *.woff2 binary
-*.ttf binary
-*.pdf binary
-*.docx binary
-*.xlsx binary

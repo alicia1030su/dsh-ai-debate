@@ -17,7 +17,18 @@ export interface PersonaDefinition {
     readonly id: PersonaStyle;
     readonly name: string;
     readonly summary: string;
-    /** What the persona does with the argument. */
+    /**
+     * 这个人格「说话的样子」，**不含打法**（v0.2.38）。
+     *
+     * ## 为什么这个字段被收窄
+     *
+     * 它原来是「先钉住对方最虚的那一句，再要求把依据摆出来」这类描述 —— 那是**论证策略**，
+     * 不是语气。四种人格的 approach 于是变成了四份不同的打法说明，而它是当时唯一的打法
+     * 来源，结果就是「换人格＝换打法」，四种人格在真实模型上全都收敛到「追问参照」。
+     *
+     * 现在打法由 `strategy.ts` 独立选择，这里只描述**同一句话在不同人格下长什么样**：
+     * 句子节奏、开口方式、情绪露出的多少。写成打法就会重新把两层绑回去。
+     */
     readonly approach: string;
     /** Sentence-level habits; injected verbatim. */
     readonly voice: readonly string[];

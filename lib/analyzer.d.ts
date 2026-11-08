@@ -249,7 +249,24 @@ export declare function buildHandleDirectory(timeline: readonly TimelineEntry[])
  * attributed to the right person.
  */
 export declare function resolveKey(entry: TimelineEntry, nameByHandle: ReadonlyMap<string, string>): string;
-/** True when the text reads as a question in Chinese or English. */
+/**
+ * True when the text reads as a question in Chinese or English.
+ *
+ * ## 为什么不能只看关键词（v0.2.38）
+ *
+ * 旧实现把「依据」「证据」当成疑问标记，于是「依据我前面贴过了。」被读成一句提问。
+ * 这两个词是**名词**，在陈述句里同样常见：对手在说「我已经贴过依据了」，而分析器
+ * 把它记成「对手在追问依据」—— 同一句话，一边丢掉一条论据，一边多出一条没问过的
+ * 问题。评测语料 `context/01` 的零结构就是这么来的。
+ *
+ * 现在的规则是三档，只有前两档能单独定性：
+ *
+ * 1. 问号 —— 明确。
+ * 2. 疑问代词/疑问副词（为什么/凭什么/怎么/是否/多少……）—— 明确。
+ * 3. 名词性词（依据/证据/数据/理由）—— **只在疑问框架里**才算：要么前面有
+ *    「有/没有/什么/哪」引出，要么后面接「呢/吗/是什么/在哪」。孤立的「依据」
+ *    不再改变句子的语气。
+ */
 export declare function looksLikeQuestion(content: string): boolean;
 /**
  * True when a post actually argues something, rather than only summoning.
@@ -264,6 +281,15 @@ export declare function isSubstantive(content: string): boolean;
  *
  * A claim is a sentence the owner stated as fact or opinion. Interrogatives are
  * excluded, because the owner asking a question is not the owner asserting.
+ *
+ * ## 为什么先按逗号切（v0.2.38）
+ *
+ * 「你那个方案忽略了迁移成本，这一块谁来付？」是一句**又有主张又有追问**的话。
+ * 旧实现整句送给 `looksLikeQuestion`，判成问句就整句丢掉 —— 于是对手唯一一条
+ * 实质论断消失了，简报里连一条对方论据都没有，回复只能空转（`quality/long-01`）。
+ *
+ * 现在先按分句切，再逐句判断：陈述分句留下，疑问分句丢掉。这样「忽略了迁移成本」
+ * 成为可引用的论据，「谁来付」仍然不被当成论据。丢的是语气，不是内容。
  */
 export declare function extractClaims(statements: readonly Statement[], limit?: number): readonly string[];
 /** Summarize a floor's participants, for the UI and the compressor. */

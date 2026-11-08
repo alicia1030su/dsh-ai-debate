@@ -17,11 +17,12 @@ import type { RegistryDiagnostics } from './platforms/registry.js';
 import { type PlatformAccountBinding } from './platforms/accounts.js';
 import { type Dispute, type OwnerIdentity } from './analyzer.js';
 import { type CollectedThread } from './collector.js';
+import { type ArgumentStrategyId } from './strategy.js';
 import { type LlmClient } from './llm.js';
 import { type PersonaConfig } from './persona.js';
 import { type PublishReport } from './publisher.js';
 import { type InteractionPolicy } from './safety.js';
-import { DebateStore, type StoredCandidate, type StoredSession } from './store.js';
+import { DebateStore, type StoredArgumentStrategy, type StoredCandidate, type StoredSession } from './store.js';
 import type { ResolvedConfig } from './config.js';
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
@@ -260,12 +261,13 @@ export declare class SessionCapacityError extends Error {
         activeIds: readonly string[];
     });
 }
-/** Result of a generate run. */
 export interface GenerateOutput {
     readonly sessionId: string;
     readonly candidateId: string;
     readonly text: string;
     readonly strategy: string;
+    /** 程序选出的论证打法（v0.2.38）；旧路径可能没有。 */
+    readonly argumentStrategy?: StoredArgumentStrategy;
     readonly confidence: number;
     readonly violations: readonly string[];
     readonly notes: readonly string[];
@@ -320,6 +322,13 @@ export declare function runGeneration(runtime: Runtime, input: {
      * have an identity check behind it.
      */
     targetPostId?: string;
+    /**
+     * 手工指定的论证策略（v0.2.38）。
+     *
+     * 不填就是自动选择。填了但材料不满足它的门槛时，`selectStrategy` 抛错并说清缺什么 ——
+     * 不会悄悄换成另一个策略，因为那会让主人以为自己指定生效了。
+     */
+    strategy?: ArgumentStrategyId;
     signal?: AbortSignal;
     progress?: Progress;
 }): Promise<GenerateOutput>;
