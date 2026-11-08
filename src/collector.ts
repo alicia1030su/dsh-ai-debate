@@ -265,6 +265,21 @@ export interface FloorWalk {
    */
   readonly truncated: boolean
   /**
+   * True when a page said it was a degraded subset of itself.
+   *
+   * Distinct from `truncated`: `truncated` is "the platform promised more and we
+   * did not get it"; `degraded` is "this page does not know what it does not
+   * know". v0.2.33: the weibo adapter reports `incomplete: true` when the paging
+   * cursor is missing or unrecognisable — the platform answered, but its answer
+   * carries no statement about whether the list ends here.
+   *
+   * Without this field the walk reported `repeated_page` + `complete: false` +
+   * `truncated: false` + **no issues at all** for that case: it knew it had not
+   * finished, and could not say why. Callers reading `truncated` alone saw
+   * "nothing is missing".
+   */
+  readonly degraded?: boolean
+  /**
    * Human-readable notes about coverage, including signal contradictions.
    *
    * v0.2.2: the walk can end while platform signals disagree, and that fact is
@@ -312,6 +327,16 @@ export async function walkFloors(
    * in `stopReason`, and then contradicted itself one field over.
    */
   let sawMorePages = false
+  /**
+   * Any page declared itself a degraded subset (`incomplete: true`).
+   *
+   * Kept separate from `truncated` for the reason on {@link FloorWalk.degraded}:
+   * the two answer different questions, and collapsing them is how "we don't
+   * know" turns into "nothing is missing".
+   */
+  let degraded = false
+  /** Only the first degraded page gets a note; 60 identical notes help nobody. */
+  let degradedNoted = false
   // Contradictions and coverage notes found while walking. Kept here rather than
   // in `collectThread` because the walk is what observes them, and a caller that
   // reads `stopReason` needs the explanation next to it.
@@ -376,6 +401,27 @@ export async function walkFloors(
       break
     }
     pagesRead += 1
+    /**
+     * ## 一页自己说「我不完整」时，必须记下来（v0.2.33）
+     *
+     * 微博的 `pagingState: 'unknown'`（游标缺失或认不出）走的就是这条路：
+     * 平台答了话，但它的话里没有「后面还有没有」。此前 `walkFloors` 完全没读
+     * 这个字段，于是这种读法停在 `repeated_page`，`truncated` 仍是 `false`，
+     * `issues` 是空的——三样加在一起读起来像「读完了，只是碰巧重复了一页」。
+     *
+     * 现在它是一条明确的降级：`degraded: true`，外加一句写清「不知道」的话。
+     */
+    if (result.incomplete === true) {
+      degraded = true
+      if (!degradedNoted) {
+        degradedNoted = true
+        issues = appendIssue(
+          issues,
+          `第 ${page} 页没有说明后面还有没有内容（分页信号缺失或无法识别）：` +
+            `已读取的 ${seen.size + result.floors.length} 条保留，但无法据此断定讨论已读完。`,
+        )
+      }
+    }
     // The platform declares the thread's full floor count and page count; keep
     // the first values reported, since later pages repeat them.
     declaredTotal ??= result.declaredTotal
@@ -497,6 +543,34 @@ export async function walkFloors(
     page += 1
   }
 
+  /**
+   * ## 「没读到」与「读完了」之间还有第三种：平台承诺过、我们没拿到
+   *
+   * `empty_page` 与 `repeated_page` 这两个收尾都是「走不动了」，不是「没有了」。
+   * 如果此前的页面说过 `hasMore: true`，或者平台声明的总数还没读满，那么停止的
+   * 原因就不是「到底了」，而是「平台答应了更多，我们拿不到」——这正是
+   * `truncated` 的定义（有**正面证据**说明还有未读内容）。
+   *
+   * v0.2.33 之前这里只看 `page_cap` 与失败分支，于是「声明 9 条、读到 1 条、
+   * 第 2 页开始重复」会报 `truncated: false`——数据少读了 8 条，却告诉调用方
+   * 「没有漏」。同一族的错误在 v0.2.21 修过一次（403 那回），这里是它的另一半。
+   */
+  if (!truncated && (stopped === 'empty_page' || stopped === 'repeated_page')) {
+    const promisedByCursor = sawMorePages
+    const promisedByTotal = declaredTotal !== undefined && declaredTotal > 0 && seen.size < declaredTotal
+    if (promisedByCursor || promisedByTotal) {
+      truncated = true
+      issues = appendIssue(
+        issues,
+        promisedByTotal
+          ? `平台声明共 ${declaredTotal} 条，实际只读到 ${seen.size} 条，分页在第 ${pagesRead} 页走不动了：` +
+            '已读取的部分保留，但这不是完整结果。'
+          : `第 ${pagesRead} 页之后读不到新内容，而此前的页面明确表示还有更多：` +
+            `已读取的 ${seen.size} 条保留，但这不是完整结果。`,
+      )
+    }
+  }
+
   const floors = [...seen.values()].sort((a, b) => (a.floorNumber ?? 0) - (b.floorNumber ?? 0))
   const missingCount =
     declaredTotal !== undefined && declaredTotal > floors.length ? declaredTotal - floors.length : undefined
@@ -531,6 +605,9 @@ export async function walkFloors(
     error: failed,
     stopReason: stopped,
     truncated,
+    // 只有真发生过才写：`{ degraded: false }` 与「没有这个字段」在读者眼里
+    // 是两件事，前者断言「每一页都说得清」，而没能读到的页根本没资格这么说。
+    ...(degraded ? { degraded: true } : {}),
     issues,
   }
 }
@@ -1051,7 +1128,9 @@ function buildCompleteness(input: {
     reasons.push(
       all.stopReason === 'inconsistent_pagination'
         ? '平台分页信号自相矛盾，无法证明来源已读完整'
-        : `来源未读完整（${all.stopReason}）`,
+        : all.degraded === true
+          ? '有页面没有说明后面还有没有内容（分页信号缺失或无法识别），来源未读完整'
+          : `来源未读完整（${all.stopReason}）`,
     )
   }
 

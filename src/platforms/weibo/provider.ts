@@ -50,14 +50,17 @@ import {
   buildReadiness,
 } from './readiness.js'
 import { probeCredentialPresence } from './credential-state.js'
+import { probeAuthHostReachability } from './network-state.js'
 import {
   inspectCommand,
   listAvailableCommands,
   probeWeiboCli,
   runReadCommand,
+  cliMetrics,
   type WeiboCliCommand,
   type WeiboCliReadiness,
 } from './cli.js'
+import { createReadTrace, type ReadTraceSnapshot } from './trace.js'
 import {
   projectCommentAsFloor,
   projectCommentAsNested,
@@ -359,7 +362,20 @@ interface WeiboReadPlan {
  * becomes a plan.
  */
 async function resolveReadPlan(): Promise<WeiboReadPlan> {
-  const readiness = await probeWeiboCli()
+  /**
+   * ## 两条互不依赖的探测同时跑（v0.2.33 §七）
+   *
+   * `probeWeiboCli()`（`version` + `doctor`）与 `listAvailableCommands()` 之间**没有**
+   * 数据依赖：前者回答「装没装、登录没登录」，后者回答「这个账号有哪些命令」。
+   * 顺序执行时，两个子进程各要 3 秒以上（本机实测 `doctor` 3.6s、`commands list`
+   * 3.4s），加起来就是 7 秒；并发之后是 3.6 秒。
+   *
+   * 这不会掩盖失败：任一条失败，它的结果照旧带着自己的状态进入下面的分支，
+   * 只是两条路径同时走完而已。
+   */
+  const readinessPromise = probeWeiboCli()
+  const listedPromise = listAvailableCommands()
+  const [readiness, listed] = await Promise.all([readinessPromise, listedPromise])
 
   /**
    * ## 命令清单一律读，早退之后也要读（v0.2.30，真实 CLI 实测发现）
@@ -379,8 +395,6 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
    *
    * 所以它提前到这里：无论 `canRead` 真假，都读一次。
    */
-  const listed = await listAvailableCommands()
-
   if (!readiness.canRead) {
     return {
       readiness,
@@ -431,8 +445,9 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
   //     pathological catalog must not turn into dozens of them.
   const MAX_INSPECTIONS = 4
 
-  const candidatesFor = (family: 'thread' | 'comments'): WeiboCliCommand[] => {
+  const candidatesFor = (family: 'thread' | 'comments'): { rows: WeiboCliCommand[]; notes: string[] } => {
     const rows = listed.data!
+    const notes: string[] = []
     const matches =
       family === 'thread'
         ? rows.filter(
@@ -447,11 +462,11 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
     const unlocked = matches.filter((row) => row.access !== 'locked')
     const lockedCount = matches.length - unlocked.length
     if (lockedCount > 0) {
-      plan.selectionNotes.push(
+      notes.push(
         `${family === 'thread' ? '正文' : '评论'}候选里有 ${lockedCount} 条被标记为 locked，已排除（不探测未授权命令）。`,
       )
     }
-    return unlocked
+    return { rows: unlocked, notes }
   }
 
   /** Inspect candidates until one yields a verified plan that can drive `kind`. */
@@ -459,10 +474,21 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
     family: 'thread' | 'comments',
     kind: 'thread' | 'comments',
     capability: 'readThread' | 'readComments',
-  ): Promise<{ plan?: CommandInvocationPlan; problem?: string }> => {
-    const candidates = candidatesFor(family)
+  ): Promise<{ plan?: CommandInvocationPlan; problem?: string; notes: string[] }> => {
+    /**
+     * 每条链带自己的 `notes`。
+     *
+     * 两条链现在并发跑，如果都直接往 `plan.selectionNotes` 里 push，面板上
+     * 说明的顺序会随调度变化——同一台机器两次诊断给出不同的文字顺序，会让人
+     * 以为状态变了。所以各自收集，最后按「正文在前、评论在后」固定合并。
+     */
+    const notes: string[] = []
+    const listedCandidates = candidatesFor(family)
+    notes.push(...listedCandidates.notes)
+    const candidates = listedCandidates.rows
     if (candidates.length === 0) {
       return {
+        notes,
         problem:
           family === 'thread'
             ? '当前账号的可用命令里没有能读取微博正文的命令。'
@@ -491,15 +517,16 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
         continue
       }
       // Record why this one won, so the diagnostic panel can explain the choice.
-      plan.selectionNotes.push(
+      notes.push(
         candidates.length === 1
           ? `选用 ${candidate.name}：${claim.reason}`
           : `选用 ${candidate.name}（共 ${candidates.length} 个候选，前 ${tried.length} 个不适用）：${claim.reason}`,
       )
-      return { plan: invocation }
+      return { plan: invocation, notes }
     }
 
     return {
+      notes,
       problem:
         tried.length === 0
           ? '目录里有候选命令，但没有任何一条通过校验。'
@@ -507,11 +534,27 @@ async function resolveReadPlan(): Promise<WeiboReadPlan> {
     }
   }
 
-  const threadChoice = await choose('thread', 'thread', 'readThread')
+  /**
+   * ## 正文与评论的候选并行探测（v0.2.33 §七）
+   *
+   * 这两条链互不依赖：正文候选只看 `status*` 组，评论候选只看 `comment*` 组，
+   * 各自的 `commands show` 是独立子进程。顺序执行时最坏情况是 4+4 次调用
+   * （每次 3 秒以上），并发之后是「两边各自的最坏值」而不是两者之和。
+   *
+   * 并发不改变判定：每条链仍然在自己的候选上顺序 `inspectCommand`，因为
+   * 「第一个可用即胜出」这件事本身需要顺序。改变的只是两条链之间的等待。
+   *
+   * 失败也照旧各自报告：一边没有可用命令时另一边仍然可以是好的，
+   * 这正是「正文能读、评论不能读」这种真实处境需要被说清楚的地方。
+   */
+  const [threadChoice, commentChoice] = await Promise.all([
+    choose('thread', 'thread', 'readThread'),
+    choose('comments', 'comments', 'readComments'),
+  ])
+  // 固定顺序合并：正文在前、评论在后。并发不改变面板上的阅读顺序。
+  plan.selectionNotes.push(...threadChoice.notes, ...commentChoice.notes)
   plan.threadPlan = threadChoice.plan
   if (threadChoice.problem !== undefined) plan.threadProblem = threadChoice.problem
-
-  const commentChoice = await choose('comments', 'comments', 'readComments')
   plan.commentPlan = commentChoice.plan
   if (commentChoice.problem !== undefined) plan.commentProblem = commentChoice.problem
 
@@ -550,6 +593,14 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
   // TTL for success, a short backoff for recoverable failures, a forced-refresh path, and a
   // generation guard so a slow outdated probe cannot overwrite a newer verdict.
   const diagnostics: WeiboDiagnosticRecorder = createDiagnosticRecorder()
+  /**
+   * 最近一次读取的分阶段耗时（v0.2.33 §七）。
+   *
+   * 只记最后一次，不记历史：诊断面板回答的是「刚才那次为什么慢」，而一份
+   * 越来越长的耗时列表没有比一行更有用。存的是快照，不是记账器——快照不可变，
+   * 页面读到的数字不会在渲染途中被下一次读取改掉。
+   */
+  let lastTrace: ReadTraceSnapshot | undefined
   const planCache = createPlanCache<WeiboReadPlan>(async () => {
     const plan = await resolveReadPlan()
     return { plan, status: plan.readiness.status }
@@ -707,6 +758,17 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
       const serviceActive = resolved.readiness.canRead
       const history = diagnostics.snapshot()
 
+      /**
+       * 本机凭据记录与授权主机可达性（v0.2.31 §六 / v0.2.33 §六）。
+       *
+       * 顺序上有依赖：只有「有记录但拿不到令牌」才需要探测网络。探测本身有
+       * 2.5 秒硬上限，且不带任何凭据，所以它不会拖慢读取路径——它根本不在
+       * 读取路径上，只在诊断面板请求时跑。
+       */
+      const credential = probeCredentialPresence()
+      const needsNetworkProbe = credential.state === 'recorded' && !resolved.readiness.canRead
+      const network = needsNetworkProbe ? await probeAuthHostReachability() : undefined
+
       const lines = buildDiagnosticLines({        cliInstalled,
         ...(cliVersion === undefined ? {} : { cliVersion }),
         oauthLoggedIn,
@@ -788,7 +850,19 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
            * 它存在的唯一作用是让「从没登录过」与「登录过但令牌失效」分开显示——
            * `doctor` 对这两种情况给的是同一个 `×`。
            */
-          credential: probeCredentialPresence(),
+          credential,
+          /**
+           * 授权主机可达性（v0.2.33 §六）。
+           *
+           * ## 为什么只在一种情况下探测
+           *
+           * 它是一次外部网络调用，不能出现在读取路径上。只有「有登录记录、但 CLI
+           * 拿不到令牌」这一种处境才值得花 2.5 秒去区分「网络」和「令牌」——
+           * 因为只有这里的两种原因对应完全相反的下一步。
+           *
+           * 其余情况（没装、没登录、正常）探测都得不到新信息，只会让面板变慢。
+           */
+          ...(network === undefined ? {} : { network }),
           // 额度：本进程不查，理由随快照带出去（`unknown` 而不是 `unavailable`）。
           quota: {
             known: false,
@@ -799,6 +873,7 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
           ...(history.lastRead === undefined ? {} : { lastRead: history.lastRead }),
           ...(history.lastError === undefined ? {} : { lastError: history.lastError }),
         }),
+        ...(lastTrace === undefined ? {} : { readTrace: lastTrace }),
       }
     },
     checkAuthentication: async () => {
@@ -812,18 +887,28 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
       }
     },
     getThread: async (ref, signal) => {
-      const resolved = await requirePlan()
+      /**
+       * ## 一次读取的时间账（v0.2.33 §七）
+       *
+       * 这三个阶段是「一次 `getThread` 到 40 秒」这个观测里能拆开的部分：
+       * 计划解析（`probe`，可能命中缓存）、真实调用（`read`）、投影（`project`）。
+       * 拆开之后，「慢在探测」和「慢在平台」不再是同一个数字。
+       */
+      const trace = createReadTrace(cliMetrics)
+      const resolved = await trace.run('probe', () => requirePlan())
       const plan = resolved.threadPlan
       if (plan === undefined) {
         const message = resolved.threadProblem ?? '当前账号没有可用的微博正文读取命令。'
         diagnostics.recordError('permission_insufficient', message)
+        lastTrace = trace.snapshot()
         throw new WeiboCommandUnavailableError(message)
       }
       throwIfAborted(signal)
       const invocation = plan.argsFor({ threadId: ref.threadId, page: 1 })
-      const read = await runReadCommand<unknown>(plan, invocation.args)
+      const read = await trace.run('read', () => runReadCommand<unknown>(plan, invocation.args), plan.name)
       if (read.status !== 'ok') {
         diagnostics.recordError(diagnosisOfStatus(read.status), read.message)
+        lastTrace = trace.snapshot()
         guardRead(read.status, read.message)
       }
 
@@ -844,6 +929,7 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
           `平台返回的微博不是请求的那一条：请求 ${ref.threadId}，返回 ${shown}。` +
           `${match.reason}这次读取没有被当成目标微博，分析也不会继续。`
         diagnostics.recordError('target_mismatch', message)
+        lastTrace = trace.snapshot()
         throw new WeiboCliError('target_mismatch', message)
       }
 
@@ -854,16 +940,21 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
         const message =
           `${plan.name} 返回了目标微博（id ${ref.threadId}），但它的正文结构无法解析。`
         diagnostics.recordError('failed', message)
+        lastTrace = trace.snapshot()
         throw new WeiboCliError('malformed_response', message)
       }
 
+      const projected = await trace.run('project', async () => projectThread(payload, ref.threadId, ref.url))
       diagnostics.recordRead(true, 'thread', `${plan.name} 返回了正文`)
-      return projectThread(payload, ref.threadId, ref.url)
+      lastTrace = trace.snapshot()
+      return projected
     },
     getReplies: async (ref, page, signal) => {
-      const resolved = await requirePlan()
+      const trace = createReadTrace(cliMetrics)
+      const resolved = await trace.run('probe', () => requirePlan())
       const plan = resolved.commentPlan
       if (plan === undefined) {
+        lastTrace = trace.snapshot()
         throw new WeiboCommandUnavailableError(
           resolved.commentProblem ?? '当前账号没有可用的微博评论读取命令。',
         )
@@ -906,6 +997,7 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
           invocation.omitted.find((entry) => entry.name === 'page')?.reason ??
           `命令 ${plan.name} 无法表达页码。`
         diagnostics.recordError('permission_insufficient', reason)
+        lastTrace = trace.snapshot()
         return {
           floors: [],
           page,
@@ -913,12 +1005,23 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
           // collector stop at its own cap and report a truncated range rather than a clean end.
           hasMore: true,
           incomplete: true,
+          /**
+           * `partial` 而不是 `more`：这条命令**没有**表达下一页的能力，
+           * 所以「还有下一页」不是平台的声明，是这个插件无法再问下去。
+           * 两者在采集器里都会继续翻页，但面板上必须能区分「平台说还有」
+           * 与「我们没法问」——否则用户会以为是平台在拖延。
+           */
+          pagingState: 'partial',
         }
       }
 
-      const read = await runReadCommand<unknown>(plan, invocation.args)
+      const read = await trace.run('read', () => runReadCommand<unknown>(plan, invocation.args), plan.name)
+      if (read.status !== 'ok') {
+        diagnostics.recordError(diagnosisOfStatus(read.status), read.message)
+        lastTrace = trace.snapshot()
+      }
       guardRead(read.status, read.message)
-      const page1 = unwrapComments(read.data)
+      const page1 = await trace.run('parse', async () => unwrapComments(read.data))
       const floors: Floor[] = []
       for (const comment of page1.comments) {
         const floor = projectCommentAsFloor(comment)
@@ -931,12 +1034,27 @@ function createAdapter(context: PlatformContext): PlatformAdapter {
       // no claim of completeness — the collector will see `hasMore: true` and either keep
       // paging or stop at its own cap, which ends as `inconsistent_pagination` rather than a
       // false `confirmed_end`.
+      /**
+       * ## 空列表不是「读完了」（v0.2.33 §六）
+       *
+       * 平台可以在 `total_number` 非零的情况下返回一页 0 条：可能是这一页的窗口
+       * 落在已删除的区间，也可能是接口自己的缺陷。无论哪种，把它当成 `done` 都是
+       * 在声称「这帖子没有评论」——而平台刚刚说了有。
+       *
+       * 所以这里把「空页 + 声明总数非零 + 没有明确的结束信号」判成 `unknown`，
+       * 让采集器继续按自己的上限翻，最终以 `empty_page` 而不是 `confirmed_end` 收尾。
+       */
+      const declaredNonZero = page1.declaredTotal !== undefined && page1.declaredTotal > 0
+      const suspiciousEmpty = page1.comments.length === 0 && declaredNonZero
+      const state = suspiciousEmpty && page1.pagingState === 'done' ? 'unknown' : page1.pagingState
+      lastTrace = trace.snapshot()
       return {
         floors,
         page,
-        hasMore: page1.hasMore,
+        hasMore: page1.hasMore || suspiciousEmpty,
         ...(page1.declaredTotal === undefined ? {} : { declaredTotal: page1.declaredTotal }),
-        ...(page1.pagingState === 'unknown'
+        pagingState: state,
+        ...(state === 'unknown'
           ? {
               incomplete: true,
             }

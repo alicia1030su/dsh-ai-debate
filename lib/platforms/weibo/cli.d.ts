@@ -117,6 +117,30 @@ interface CliInvocation {
     readonly file: string;
     readonly prefixArgs: readonly string[];
 }
+/** 读当前计数。返回副本，调用方改不动内部状态。 */
+export declare function cliMetrics(): {
+    readonly invocations: number;
+    readonly totalMs: number;
+};
+/** 归零。**测试 only**：一个测试不该看见上一个测试的进程数。 */
+export declare function __resetCliMetrics(): void;
+/**
+ * ## 为什么这里**没有**版本号缓存（v0.2.33 §七 的实测结论）
+ *
+ * 第一版给 `version` 加了 5 分钟缓存，理由是「版本号描述磁盘上那个文件，
+ * 不描述账号状态，几十秒内不会变」。理由本身没错，但代价比收益大：
+ *
+ * - 收益是每次探测少一个 0.6 秒的子进程；
+ * - 代价是**多一份需要失效的全局状态**，而它已经让两个测试互相污染了一次
+ *   （换了假 CLI 的脚本，却读到上一个脚本的版本号）。
+ *
+ * 这正是这份代码一直在消灭的那类 bug 的形状：为了省一点时间，引入一个
+ * 「什么时候该忘掉它」的问题。真正的 40 秒来自**串行的 4 次探测 + 2 次
+ * 深度检查**，把它们并发掉就够了；省 0.6 秒不值得换一个状态。
+ *
+ * 所以：一次读取里每个子进程只启动一次，且每次读取都重新启动——
+ * 不缓存任何描述「现在」的东西。
+ */
 /**
  * Point the CLI layer at a stand-in executable. **Tests only.**
  *
@@ -400,6 +424,8 @@ export interface ReadArgContext {
 export declare function canFillArgument(name: string, context: ReadArgContext): boolean;
 /** Whether the CLI can express "replies to this one comment" at all. */
 export declare function nestedFilterSupported(parameters: readonly string[]): string | undefined;
+/** 清空 schema 缓存。**测试 only**。 */
+export declare function __resetSchemaCache(): void;
 /**
  * Read one command's schema with `commands show` and decide whether we can drive it.
  *

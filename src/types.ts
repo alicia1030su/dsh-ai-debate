@@ -330,6 +330,37 @@ export interface ReplyPage {
    * must be able to report that instead of claiming a complete read.
    */
   readonly declaredTotal?: number
+  /**
+   * 这一页的分页状态（v0.2.33 §六）。
+   *
+   * ## 为什么布尔 `hasMore` 不够
+   *
+   * `hasMore` 把三件事压成了一个值：平台明确说还有下一页、平台明确说没有了、
+   * 平台什么都没说。前两种相反，第三种是**没有证据**，而它对是否声称「读完了」
+   * 有决定性影响——「不知道」被当成「有」会多翻一页（便宜），被当成「没有」
+   * 则会直接谎称读完整（昂贵）。
+   *
+   * 五个值是任务书要求区分的全部：
+   *
+   * - `done`：平台明确表示结束（`has_more: false`、`next_cursor: 0`、达到声明总数）；
+   * - `more`：存在可继续读取的有效游标；
+   * - `unknown`：两样信号都没有，无法确认是否读完；
+   * - `partial`：读到了数据，但**这一页本身**是降级子集（例如命令无法表达页码）；
+   * - `failed`：这一页没拿到有效数据。
+   *
+   * 可选：旧适配器不填它，语义等同于按 `hasMore` 推断。
+   */
+  readonly pagingState?: 'done' | 'more' | 'unknown' | 'partial' | 'failed'
+  /**
+   * True when this page is known to be missing rows the platform declared.
+   *
+   * Kept alongside {@link pagingState} because they answer different questions:
+   * `pagingState` is about *navigation* (is there a next page?), `incomplete`
+   * is about *coverage* (does this page represent everything it should?).
+   * A page can be the last page (`done`) and still be incomplete — that is
+   * exactly the "read page 1, platform only served part of it" case.
+   */
+  readonly incomplete?: boolean
 }
 
 /** A page of nested replies. */
