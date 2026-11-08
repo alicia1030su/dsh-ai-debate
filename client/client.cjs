@@ -380,6 +380,7 @@ window.__ModuleLoader__.load({
       manualPersonaPick: '人格',
       manualGenerate: '生成候选回复',
       manualCompareAll: '比较四种人格（4 次模型调用）',
+      manualStrategyAuto: '论证打法：自动（按证据选）',
       manualCompareHint: '会连续发四次模型请求，每一次都计入你的模型额度。取消后已发出的那一次仍会完成，但结果不会写进会话。',
       manualCompareCancel: '取消比较',
       manualCompareResult: '四种人格比较',
@@ -896,6 +897,7 @@ window.__ModuleLoader__.load({
       manualPersonaPick: 'Persona',
       manualGenerate: 'Generate candidate',
       manualCompareAll: 'Compare all four personas (4 model calls)',
+      manualStrategyAuto: 'Argument strategy: auto (pick from evidence)',
       manualCompareHint: 'This sends four model requests in a row; each one counts against your model quota. Cancelling stops the next ones; the one already sent still finishes, and its result is not written to the session.',
       manualCompareCancel: 'Cancel the comparison',
       manualCompareResult: 'Persona comparison',
@@ -4524,6 +4526,13 @@ window.__ModuleLoader__.load({
       const [ownerName, setOwnerName] = useState('')
       const [targetPostId, setTargetPostId] = useState('')
       const [persona, setPersona] = useState('tieba_veteran')
+      /**
+       * 论证打法（v0.2.38）。空串就是「自动」。
+       *
+       * 与人格分开两个控件、分开两次请求：人格决定怎么说，打法决定说什么。
+       * 合成一个下拉，就等于又把两层绑回去 —— v0.2.37 的四种人格就是这么收敛的。
+       */
+      const [strategy, setStrategy] = useState('')
       const [fileHint, setFileHint] = useState('')
       const [preview, setPreview] = useState(null)
       const [error, setError] = useState('')
@@ -5185,6 +5194,18 @@ window.__ModuleLoader__.load({
                     h('option', { key: option.id, value: option.id }, `${option.name} —— ${option.summary}`),
                   ),
                 ),
+                 h(
+                  'select',
+                  {
+                    className: 'dsd-field',
+                    value: strategy,
+                    onChange: (event) => setStrategy(event.target.value),
+                  },
+                  h('option', { value: '' }, t('manualStrategyAuto')),
+                  ...(flow.strategies || []).map((option) =>
+                    h('option', { key: option.id, value: option.id }, `${option.name} —— ${option.summary}`),
+                  ),
+                ),
                 h(
                   'button',
                   {
@@ -5195,6 +5216,7 @@ window.__ModuleLoader__.load({
                       const answer = await run('manual-generate', {
                         sessionId,
                         persona,
+                        ...(strategy === '' ? {} : { strategy }),
                         ...(targetPostId.trim() === '' ? {} : { targetPostId: targetPostId.trim() }),
                       })
                       if (answer && answer.ok === true) {

@@ -31,7 +31,13 @@ import { resolvePersona, type PersonaConfig, type PersonaStyle } from '../../lib
 import { ALL_CASES } from './index.ts'
 import type { EvalCase } from './corpus.ts'
 import { caseThread } from './evaluate-deterministic.ts'
-import { scoreReply, type CaseResult, type RunRecord, type ScoreInput } from './metrics.ts'
+import {
+  scoreReply,
+  type CaseResult,
+  type RunRecord,
+  type ScoreInput,
+  type StructureSummary,
+} from './metrics.ts'
 
 /** Which version's records this is. Written into the report, not read from it. */
 export function pluginVersion(): string {
@@ -103,7 +109,7 @@ interface CaseRun {
   readonly error?: string
   readonly targetPostId?: string
   readonly ownerPosition?: string
-  readonly structure: { arguments: number; unanswered: number; contradictions: number }
+  readonly structure: StructureSummary
   readonly contextText: string
   readonly missingContext: boolean
   readonly inputTokens?: number
@@ -158,6 +164,12 @@ async function runCase(c: EvalCase, clientFactory: (c: EvalCase) => LlmClient): 
         arguments: built.brief.opponentArguments?.length ?? 0,
         unanswered: built.brief.unansweredByOpponent?.length ?? 0,
         contradictions: built.brief.contradictions?.length ?? 0,
+        // v0.2.38：八通道全记，理由见 metrics 的 `StructureSummary`。
+        answeredByOwner: built.brief.answeredByOwner?.length ?? 0,
+        challenges: built.brief.challenges?.length ?? 0,
+        topicShifts: built.brief.topicShifts?.length ?? 0,
+        thirdPartyCitations: built.brief.thirdPartyCitations?.length ?? 0,
+        fallacies: built.brief.fallacies?.length ?? 0,
       },
       contextText: context.text,
       /**
@@ -198,6 +210,7 @@ function scoreCase(c: EvalCase, run: CaseRun): CaseResult {
     missingContext: run.missingContext,
     persona: 'tieba_veteran',
     ...(c.expectation.expectsRefusal === true ? { refusalCase: true } : {}),
+    ...(c.expectation.evidenceState === 'insufficient' ? { evidenceInsufficient: true } : {}),
   }
   return {
     caseId: c.id,

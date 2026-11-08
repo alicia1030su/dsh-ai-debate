@@ -22,6 +22,7 @@
  */
 
 import type { EvalCase } from './corpus.ts'
+import { traceNumbers } from '../../lib/number-trace.js'
 
 /**
  * 分词：CJK 二元组 + 拉丁词 + 数字。
@@ -57,6 +58,49 @@ function subjectTokens(text: string): Set<string> {
 
 /** Whether a dimension is a fact or a stand-in for a judgement. */
 export type MetricKind = 'deterministic' | 'proxy'
+
+/**
+ * 简报里找到的结构，按通道分开记。
+ *
+ * ## 为什么不能只数三项（v0.2.38）
+ *
+ * 旧版只统计「对方论据 / 未答问题 / 矛盾」，于是 `baseline/05` 被判成零结构 ——
+ * 而那一条的简报明明找到了 `answeredByOwner`（对方问了、主人已经答过）和
+ * `challenges`（对方重复提问）。回复要说的正是「这个我答过了」，材料在简报里，
+ * 指标却看不见。
+ *
+ * 这不是把标准调松：一条什么都没找到的简报仍然是全零。它修的是**测错了对象** ——
+ * 「有没有可用的结构」不等于「三个特定字段是不是非空」。
+ */
+export interface StructureSummary {
+  readonly arguments: number
+  readonly unanswered: number
+  readonly contradictions: number
+  /** 对方问了、主人回答过的问题。 */
+  readonly answeredByOwner?: number
+  /** 对方提出、主人没有回应的质疑。 */
+  readonly challenges?: number
+  /** 对方离开话题的次数。 */
+  readonly topicShifts?: number
+  /** 对方帖子里引用第三方的次数。 */
+  readonly thirdPartyCitations?: number
+  /** 论证形式问题（诉诸人身、以偏概全等）。 */
+  readonly fallacies?: number
+}
+
+/** 结构总数：所有通道加起来。 */
+export function structureCountOf(structure: StructureSummary): number {
+  return (
+    structure.arguments +
+    structure.unanswered +
+    structure.contradictions +
+    (structure.answeredByOwner ?? 0) +
+    (structure.challenges ?? 0) +
+    (structure.topicShifts ?? 0) +
+    (structure.thirdPartyCitations ?? 0) +
+    (structure.fallacies ?? 0)
+  )
+}
 
 /** One dimension's outcome. */
 export interface MetricScore {
@@ -96,7 +140,7 @@ export interface ScoreInput {
   /** Every post text in the case, for "did it use a concrete detail". */
   readonly threadText: string
   /** How many structure findings the brief carried (§3.1). */
-  readonly structure: { arguments: number; unanswered: number; contradictions: number }
+  readonly structure: StructureSummary
   /** Replies this session already sent, for the repetition check. */
   readonly previousReplies?: readonly string[]
   /** True when the read was incomplete or the brief listed missing context. */
@@ -115,6 +159,13 @@ export interface ScoreInput {
    * supposed to prevent.
    */
   readonly refusalCase?: boolean
+  /**
+   * 这条案例里，对方本来就没有给出可提取的论据（v0.2.38）。
+   *
+   * 与 `refusalCase` 不同：这里**要**生成一条回复，只是正确行为是追问而不是反驳。
+   * 评分器据此改判：零结构不扣分；反过来，如果硬抽出了结构，那才是编造。
+   */
+  readonly evidenceInsufficient?: boolean
 }
 
 /** Markers that make prose read like a school essay rather than a forum reply. */
@@ -136,13 +187,6 @@ const TEMPLATE_MARKERS = [
 /** Check one dimension. */
 function metric(id: MetricId, label: string, kind: MetricKind, score: number, basis: string): MetricScore {
   return { id, label, kind, score: Math.max(0, Math.min(1, score)), basis }
-}
-
-/** Numbers written in a text, normalised so `8%` and `8 %` compare equal. */
-function numbersIn(text: string): Set<string> {
-  const found = new Set<string>()
-  for (const match of text.matchAll(/\d+(?:\.\d+)?%?/g)) found.add(match[0].replace(/\s+/g, ''))
-  return found
 }
 
 /** How many sentences, and how varied their lengths are. */
@@ -177,8 +221,9 @@ export function scoreReply(input: ScoreInput): readonly MetricScore[] {
       : input.targetPostId === input.expectedTargetPostId
 
   // 2. Argument recognition — did the analysis actually find structure to work with?
-  const structureCount =
-    input.structure.arguments + input.structure.unanswered + input.structure.contradictions
+  //
+  // v0.2.38：八个通道相加，而不是只数三项。理由见 `StructureSummary`。
+  const structureCount = structureCountOf(input.structure)
 
   // 3. Stance consistency — the reply must not argue the owner's own position down.
   const ownerTokens = subjectTokens(input.ownerPosition ?? '')
@@ -194,8 +239,22 @@ export function scoreReply(input: ScoreInput): readonly MetricScore[] {
   for (const token of replyTokens) if (threadTokens.has(token)) concrete += 1
   const concreteRatio = replyTokens.size === 0 ? 0 : concrete / replyTokens.size
 
-  // 5. Factual credibility — every number in the reply must exist in what it was given.
-  const newNumbers = [...numbersIn(reply)].filter((value) => !numbersIn(input.contextText).has(value))
+  /**
+   * 5. Factual credibility — every number must be traceable to what it was given.
+   *
+   * ## 为什么不再只做字面比对（v0.2.38）
+   *
+   * 旧实现把「上下文里没出现过这个字符串」直接判成编造。这会把**一次正确的推算和一次
+   * 编造算成同一件事**：原文写「从 18 涨到 26」，回复写「涨了 44%」——两个数都在原文，
+   * 结论也正确，却因为 `44%` 这个 token 没逐字出现过而被判红（`weibo/06`）。
+   *
+   * 现在区分三种：原文出现（quoted）、由原文两个数可复算（derived）、追不回去
+   * （unknown）。只有 unknown 判 0，并且依据里带上算式，人能当场核对。
+   * 判据在 `src/number-trace.ts`，评分器与产品侧共用同一份。
+   */
+  const numberVerdicts = traceNumbers(reply, [input.contextText])
+  const unknownNumbers = numberVerdicts.filter((verdict) => verdict.kind === 'unknown')
+  const derived = numberVerdicts.filter((verdict) => verdict.kind === 'derived')
 
   // 6. Context use — how much of the reply's vocabulary comes from the supplied context.
   let fromContext = 0
@@ -250,12 +309,26 @@ export function scoreReply(input: ScoreInput): readonly MetricScore[] {
        * 之间，而这两个数的差别不说明洞察力，只说明这一楼里对方说了几句。确定性维度
        * 的用处是「有 / 没有」，数量写在依据里，让人自己判断。
        */
-      input.refusalCase === true || structureCount > 0 ? 1 : 0,
+      input.refusalCase === true
+        ? 1
+        : input.evidenceInsufficient === true
+          ? structureCount === 0
+            ? 1
+            : 0
+          : structureCount > 0
+            ? 1
+            : 0,
       input.refusalCase === true
         ? '这个案例按设计不生成回复，不评价论点识别'
-        : structureCount === 0
-          ? '论证结构里一条都没找到（对方论据/未答问题/矛盾）'
-          : `结构里找到 ${input.structure.arguments} 条对方论据、${input.structure.unanswered} 个未答问题、${input.structure.contradictions} 处矛盾`,
+        : input.evidenceInsufficient === true
+          ? structureCount === 0
+            ? '这个案例里对方本来就只有一句表态、没有任何论据：零结构是正确结果，不扣分'
+            : `这个案例里对方只有一句表态，却抽出了 ${structureCount} 条结构 —— 这是编造，不是识别`
+          : structureCount === 0
+            ? '论证结构里一条都没找到（对方论据/未答问题/矛盾/已答问题/质疑/跑题/引用/谬误）'
+            : `结构里找到 ${structureCount} 条：对方论据 ${input.structure.arguments}、未答问题 ${input.structure.unanswered}、矛盾 ${input.structure.contradictions}` +
+              `、已答问题 ${input.structure.answeredByOwner ?? 0 }、质疑 ${input.structure.challenges ?? 0}` +
+              `、跑题 ${input.structure.topicShifts ?? 0}、引用 ${input.structure.thirdPartyCitations ?? 0}、谬误 ${input.structure.fallacies ?? 0}`,
     ),
     metric(
       'stance_consistency',
@@ -275,10 +348,12 @@ export function scoreReply(input: ScoreInput): readonly MetricScore[] {
       'factual_credibility',
       '事实可信度',
       'deterministic',
-      newNumbers.length === 0 ? 1 : 0,
-      newNumbers.length === 0
-        ? '回复里的数字都能在给定上下文里找到'
-        : `回复里出现了上下文没有的数字：${newNumbers.join('、')}`,
+      unknownNumbers.length === 0 ? 1 : 0,
+      unknownNumbers.length > 0
+        ? `回复里出现了上下文没有、也算不出来的数字：${unknownNumbers.map((verdict) => verdict.value).join('、')}`
+        : derived.length > 0
+          ? `数字都可追溯；其中 ${derived.map((verdict) => `${verdict.value} ${verdict.basis}`).join('；')}`
+          : '回复里的数字都能在给定上下文里找到',
     ),
     metric(
       'context_use',

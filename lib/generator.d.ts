@@ -19,6 +19,7 @@ import type { Dispute } from './analyzer.js';
 import type { CompressedContext } from './compressor.js';
 import { type PersonaConfig } from './persona.js';
 import { type LlmClient } from './llm.js';
+import { type StrategyChoice } from './strategy.js';
 /** What the model is asked to return. */
 export interface GenerationDraft {
     readonly owner_position: string;
@@ -112,6 +113,14 @@ export interface GenerateOptions {
      * consequence of a passed check, not a hint the model may ignore.
      */
     readonly brief?: string;
+    /**
+     * 本轮的论证打法（v0.2.38）。
+     *
+     * 与人格正交：人格决定怎么说，这个决定说什么。由 `selectStrategy` 从简报里已有的、
+     * 已通过校验的证据中挑出，并记录了依据与可信度。缺席时行为与 v0.2.37 一致 ——
+     * 老调用方不需要改，新链路一定传。
+     */
+    readonly strategy?: StrategyChoice;
     /**
      * The facts behind that brief, for the deterministic checks (v0.2.35).
      *

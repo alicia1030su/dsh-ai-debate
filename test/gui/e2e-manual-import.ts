@@ -978,15 +978,78 @@ try {
   //
   // 人格选项的文案是 `名字 —— 一句话说明`，纠错下拉框的选项是 id + 作者 + 摘录。
   // 按这个分隔符筛，测的就还是「人格有几个」，而不是「这一页有几个下拉框」。
-  const personaOptions = await evaluate<string[]>(
-    `[...document.querySelectorAll('select option')]
-      .map((o) => o.textContent.trim())
-      .filter((text) => text.includes(' —— '))`,
-  )
+  /**
+   * 只数**人格那一个下拉**里的选项（v0.2.38）。
+   *
+   * 之前是把页面上所有 `select option` 里带「 —— 」的都数进来。v0.2.38 加了
+   * 「论证打法」下拉，同样是 `名字 —— 说明` 的格式，于是这里数出 12 个并判红 ——
+   * 而人格依然正好四个。判据必须指向那个**装着人格**的下拉，而不是「页面上有几个
+   * 这种格式的选项」：后者会因为功能增加而变红，那种红没有任何信息。
+   */
+  /**
+   * 人格那一个下拉里的选项（v0.2.38）。
+   *
+   * 判据是**这个下拉自己有没有四个 modes**，不是「页面上有没有四个带 —— 的选项」。
+   * 它的 value 是人格 id，所以按 id 找那个下拉；数量从它自己的 options 数出来。
+   *
+   * 之前两版都数错了：第一版把打法下拉的选项也算进来（12 个），第二版按 id 找
+   * 下拉但被 `option` 的 value 匹配错了（0 个）。两次红都不是产品问题，而是
+   * 判据写在了「页面上」而不是「那个控件上」。
+   */
+  const personaSelect = await evaluate<{ count: number; names: string[] } | null>(`(() => {
+    /**
+     * 按**选项文字**找那个下拉，不按 option.value。
+     *
+     * 这一条是被两次真红逼出来的：第一次数了页面上所有「名字 —— 说明」的选项（12 个，
+     * 把打法也算进去了）；第二次改成按 option.value 认下拉，结果是 0 个 ——
+     * 说明这个 React 版本里 option 的 value 并不按我们写的那样出现在 DOM 上。
+     * 文字是页面上真实可见的东西，用它当判据最不容易被实现细节骗。
+     */
+    const wanted = ['贴吧老哥', '小受', '傲娇', '高冷']
+    for (const select of document.querySelectorAll('select')) {
+      const options = [...select.options]
+      const names = options.map((o) => (o.textContent || '').trim().split(' —— ')[0])
+      if (wanted.every((name) => names.includes(name))) return { count: options.length, names }
+    }
+    return null
+  })()`)
   stage(
     '四种人格可选',
-    personaOptions.length === 4 ? 'passed' : 'failed',
-    `${personaOptions.length} 个：${personaOptions.map((o) => o.split(' —— ')[0]).join('/')}`,
+    personaSelect !== null && personaSelect.count === 4 ? 'passed' : 'failed',
+    personaSelect === null
+      ? '找不到人格下拉'
+      : `${personaSelect.count} 个：${personaSelect.names.join('/')}`,
+  )
+
+  /**
+   * 打法下拉必须**独立存在**（v0.2.38 §3）。
+   *
+   * 它与人格是两层：人格决定怎么说，打法决定说什么。如果页面上只有一个下拉、
+   * 或者打法被塞进人格选项里，这一层就没有真正分开 —— 而那正是这一版要修的东西。
+   */
+  const strategySelect = await evaluate<{ options: number; hasAuto: boolean; names: string[] } | null>(`(() => {
+    // 同样按文字找：打法下拉里应当出现「追问关键依据」「证据不足时提出澄清问题」。
+    for (const select of document.querySelectorAll('select')) {
+      const options = [...select.options]
+      const texts = options.map((o) => (o.textContent || '').trim())
+      if (!texts.some((text) => text.startsWith('追问关键依据'))) continue
+      if (!texts.some((text) => text.startsWith('证据不足时提出澄清问题'))) continue
+      return {
+        options: options.length,
+        hasAuto: texts.some((text) => text.startsWith('论证打法：自动')),
+        names: texts.map((text) => text.split(' —— ')[0]),
+      }
+    }
+    return null
+  })()`)
+  stage(
+    '打法下拉独立存在',
+    strategySelect !== null && strategySelect.options >= 8 && strategySelect.hasAuto
+      ? 'passed'
+      : 'failed',
+    strategySelect === null
+      ? '找不到打法下拉'
+      : `${strategySelect.options} 个选项，自动项 ${strategySelect.hasAuto ? '有' : '没有'}`,
   )
 
   /**
@@ -1150,8 +1213,25 @@ try {
   // ── 13/15：编辑正文 ──────────────────────────────────────────────────
   const edited =
     '修不修不是逻辑问题，是账算不算得过来的问题。你说「先修」，那要先说清修完之后还打算用几年。'
+  /**
+   * 精确找到**候选正文**那个 textarea，而不是「第二个长度超过 20 的」。
+   *
+   * v0.2.38 的真实失败：这个页面现在有三个 textarea（导入正文、候选正文、以及
+   * 比较结果里的某处），按「第二个」取到的是候选区之外的那一个。于是「编辑」改的是
+   * 别人的框，候选正文没变，后面的确认自然对不上 —— 而报告读起来像确认功能坏了。
+   *
+   * 判据改成：取候选卡片里那个（它的上方一行写着「正文（可以直接改）」），
+   * 或者退回「值等于当前候选正文的那一个」。两者都失败才判红。
+   */
   const editedOk = await replaceIn(
-    `[...document.querySelectorAll('textarea')].find((t) => (t.value || '').length > 20 && t !== document.querySelector('textarea'))`,
+    `(() => {
+      const boxes = [...document.querySelectorAll('textarea')]
+      const byLabel = boxes.find((t) => {
+        const card = t.closest('.dsd-sect') || t.parentElement
+        return card !== null && /正文（可以直接改）/.test(card.innerText || '')
+      })
+      return byLabel || null
+    })()`,
     edited,
   )
   await sleep(400)

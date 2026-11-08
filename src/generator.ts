@@ -21,6 +21,8 @@ import type { CompressedContext } from './compressor.js'
 import { countCharacters, buildPersonaPrompt, type PersonaConfig } from './persona.js'
 import { LlmError, type LlmClient } from './llm.js'
 import { subjectTokens } from './argument-structure.js'
+import { untraceableQuantityClaims } from './number-trace.js'
+import { renderStrategy, type StrategyChoice } from './strategy.js'
 
 /** Tokens of a text, via the same tokeniser the argument pass uses. */
 function subjectTokensOf(text: string): Set<string> {
@@ -143,6 +145,14 @@ export interface GenerateOptions {
    * consequence of a passed check, not a hint the model may ignore.
    */
   readonly brief?: string
+  /**
+   * 本轮的论证打法（v0.2.38）。
+   *
+   * 与人格正交：人格决定怎么说，这个决定说什么。由 `selectStrategy` 从简报里已有的、
+   * 已通过校验的证据中挑出，并记录了依据与可信度。缺席时行为与 v0.2.37 一致 ——
+   * 老调用方不需要改，新链路一定传。
+   */
+  readonly strategy?: StrategyChoice
   /**
    * The facts behind that brief, for the deterministic checks (v0.2.35).
    *
@@ -273,6 +283,18 @@ export function buildGenerationPrompt(options: GenerateOptions): string {
   lines.push('')
   lines.push('## 对话上下文')
   lines.push(context.text)
+
+  /**
+   * 打法在前，人格在后，两段分开。
+   *
+   * 顺序是有意的：先定这一轮**说什么**，再定**怎么说**。反过来模型会先进入语气，
+   * 再拿语气去凑内容 —— 那正是「四种人格都在追问参照」的成因。
+   */
+  if (options.strategy !== undefined) {
+    lines.push('')
+    lines.push('## 本轮论证打法')
+    lines.push(renderStrategy(options.strategy))
+  }
 
   lines.push('')
   lines.push('## 人格设定')
@@ -507,6 +529,32 @@ export function validateDraft(
       message:
         `回复里说对方没有证据，但对方实际上给出了 ${options.briefFacts?.opponentArgumentCount} 条论据。` +
         '这是事实错误：要么反驳那几条论据，要么改成追问具体来源（例如「这个数字你从哪看的」）。',
+    })
+  }
+
+  /**
+   * ## 数字必须能追回输入（v0.2.38）
+   *
+   * 「为了让反驳有说服力而补一个百分比」是这类回复最危险的失真：它读起来最像内行，
+   * 也最容易被对方一句「哪来的数」当场拆穿。程序手里有模型真正看到的文本，所以这件事
+   * 不该指望提示词自律，而是直接判死。
+   *
+   * 判据分三层（见 `number-trace.ts`）：原文出现、由原文两个数可复算、追不回去。
+   * 只有第三层拦。这样「从 18 涨到 26，涨了 44%」不会被误杀 —— 两个数都在原文，
+   * 44% 是一次除法，人能当场验算；而「涨了 44%」在原文没有 18/26 时仍然被拦。
+   *
+   * 拦截面收窄到带百分号或带量词的数字：编号（「第 3 节」）不算事实主张，
+   * 把它一起拦会让正常回复无谓地被判红。
+   */
+  const numberSources = [options.context.text, options.brief ?? ''].filter((item) => item !== '')
+  const inventedNumbers = untraceableQuantityClaims(draft.reply, numberSources)
+  if (inventedNumbers.length > 0) {
+    violations.push({
+      code: 'fabricated_number',
+      message:
+        `回复里的数字在给定材料里找不到，也不是由材料里的数字算出来的：` +
+        `${inventedNumbers.map((verdict) => verdict.value).join('、')}。` +
+        '要么删掉它，要么改成向对方追问具体数字（例如「这个涨幅是怎么算的」）。',
     })
   }
 

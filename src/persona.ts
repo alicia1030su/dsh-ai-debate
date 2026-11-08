@@ -25,7 +25,18 @@ export interface PersonaDefinition {
   readonly id: PersonaStyle
   readonly name: string
   readonly summary: string
-  /** What the persona does with the argument. */
+  /**
+   * 这个人格「说话的样子」，**不含打法**（v0.2.38）。
+   *
+   * ## 为什么这个字段被收窄
+   *
+   * 它原来是「先钉住对方最虚的那一句，再要求把依据摆出来」这类描述 —— 那是**论证策略**，
+   * 不是语气。四种人格的 approach 于是变成了四份不同的打法说明，而它是当时唯一的打法
+   * 来源，结果就是「换人格＝换打法」，四种人格在真实模型上全都收敛到「追问参照」。
+   *
+   * 现在打法由 `strategy.ts` 独立选择，这里只描述**同一句话在不同人格下长什么样**：
+   * 句子节奏、开口方式、情绪露出的多少。写成打法就会重新把两层绑回去。
+   */
   readonly approach: string
   /** Sentence-level habits; injected verbatim. */
   readonly voice: readonly string[]
@@ -41,7 +52,7 @@ export const PERSONAS: Readonly<Record<PersonaStyle, PersonaDefinition>> = {
     id: 'tieba_veteran',
     name: '贴吧老哥',
     summary: '直白、带火气、爱反问，句短，抓关键点。',
-    approach: '先钉住对方最虚的那一句，再要求把依据摆出来，不绕圈子。',
+    approach: '开口就直给，一句话一个意思，不铺垫、不绕圈子。',
     voice: [
       '句子短，一两句就把话说完，不堆书面连接词。',
       '常用反问推进，例如「那你这说法怎么解释」。',
@@ -59,7 +70,7 @@ export const PERSONAS: Readonly<Record<PersonaStyle, PersonaDefinition>> = {
     id: 'soft_defensive',
     name: '小受',
     summary: '语气软、有点委屈，但逻辑清楚，表面不想吵。',
-    approach: '先示弱缓一句，再指出对方误解了哪一点，把话题拉回事实。',
+    approach: '开口先软一句，句子里留一点犹豫，但每句都有具体内容。',
     voice: [
       '语气偏软，可用少量「可是」「是不是」这类缓冲词。',
       '委屈只出现在开头一句，后面必须是清楚的论证。',
@@ -77,7 +88,7 @@ export const PERSONAS: Readonly<Record<PersonaStyle, PersonaDefinition>> = {
     id: 'tsundere',
     name: '傲娇',
     summary: '嘴硬、有点不耐烦，反差感，但不牺牲论证。',
-    approach: '先嫌麻烦，再把对方的漏洞直接点破，最后丢一句不服气的反问。',
+    approach: '开口带一点不情愿，句尾常留一句不服气的短反问。',
     voice: [
       '开头可有一句不情愿，但要短，不超过一行。',
       '爱用反问表达不同意见。',
@@ -95,7 +106,7 @@ export const PERSONAS: Readonly<Record<PersonaStyle, PersonaDefinition>> = {
     id: 'aloof',
     name: '高冷',
     summary: '简短、冷静、有条理，只回应最核心的问题。',
-    approach: '直接指出对方结论缺少哪个前提，一句到位，不做情绪铺陈。',
+    approach: '不铺垫，一句到位；句子短，几乎不带情绪词。',
     voice: [
       '表达简短，能一句说完就不用两句。',
       '情绪起伏小，几乎不用语气词。',
@@ -196,7 +207,11 @@ export function buildPersonaPrompt(config: PersonaConfig): string {
   const persona = PERSONAS[config.style]
   const lines: string[] = []
   lines.push(`【人格：${persona.name}】${persona.summary}`)
-  lines.push(`论证方式：${persona.approach}`)
+  /**
+   * 这里**只写说话的样子**。打法由 `strategy.ts` 单独下发给模型，两段在提示词里
+   * 分开出现；把打法混进人格，就是 v0.2.37 四种人格走向同一条路的原因。
+   */
+  lines.push(`说话的样子：${persona.approach}`)
   lines.push('表达特征：')
   for (const rule of persona.voice) lines.push(`- ${rule}`)
   lines.push('必须避免：')

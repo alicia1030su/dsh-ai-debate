@@ -464,6 +464,13 @@ export interface SettingsRouteDeps {
       readonly targetPostId?: string
       readonly persona?: string
       readonly ownerInstruction?: string
+      /**
+       * 手工指定的论证打法（v0.2.38）。
+       *
+       * 不传就是自动选择。传了但材料不支撑它时，接口返回 `ok: false` 并说明缺什么 ——
+       * 不会悄悄回落到自动选择，那样主人会以为自己指定生效了。
+       */
+      readonly strategy?: string
     }): Promise<{
       readonly ok: boolean
       readonly candidateId?: string
@@ -472,6 +479,22 @@ export interface SettingsRouteDeps {
       readonly next?: readonly string[]
       readonly securityDecision?: string
       readonly securityReasons?: readonly string[]
+      /** 模型主动要求补充信息（v0.2.38）。 */
+      readonly needsInput?: boolean
+      readonly needsInputReason?: string
+      /** 程序选出的打法与依据（v0.2.38）。 */
+      readonly argumentStrategy?: {
+        readonly id: string
+        readonly name: string
+        readonly source: 'auto' | 'manual'
+        readonly reason: string
+        readonly confidence: 'high' | 'medium' | 'low'
+        readonly evidence: readonly {
+          readonly field: string
+          readonly postIds: readonly string[]
+          readonly why: string
+        }[]
+      }
     }>
     /** 编辑正文并重新评估。 */
     edit(input: {
@@ -933,6 +956,13 @@ export interface WorkbenchView {
     readonly steps: readonly { readonly id: string; readonly title: string; readonly done: boolean; readonly current: boolean }[]
     /** 四种人格，页面渲染成选择器。 */
     readonly personas: readonly { readonly id: string; readonly name: string; readonly summary: string; readonly approach: string }[]
+    /**
+     * 可选论证打法（v0.2.38）。
+     *
+     * 与人格**并列而不是嵌在人格里**：这是两层，页面要能分别选。嵌进去就又会变成
+     * 「选人格顺带决定打法」——那正是这一版要拆开的东西。
+     */
+    readonly strategies?: readonly { readonly id: string; readonly name: string; readonly summary: string }[]
     /** 这份讨论里出现过的人，按分析结果。 */
     readonly participants: readonly { readonly name: string; readonly postCount: number; readonly isOwner: boolean; readonly isOpponent: boolean }[]
     /** 导入内容的来源形式与时间。 */
@@ -1949,6 +1979,11 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
               ...(str(body.ownerInstruction) === undefined
                 ? {}
                 : { ownerInstruction: str(body.ownerInstruction)! }),
+              // 空字符串等于「自动」——页面上的下拉默认项就是不传，这里不再造一个
+              // 特殊值，避免出现「strategy=""」这种既不是自动也不是合法 id 的第三种状态。
+              ...(str(body.strategy) === undefined || str(body.strategy) === ''
+                ? {}
+                : { strategy: str(body.strategy)! }),
             }),
           )
           return

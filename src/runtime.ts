@@ -44,6 +44,8 @@ import { compressContext, fixedCostTotal, resolveBudget, splitBudget } from './c
 import { buildBrief } from './brief-builder.js'
 import { renderBrief, validateBrief } from './brief.js'
 import { generateReply, type GenerationResult } from './generator.js'
+import { selectStrategy, type ArgumentStrategyId, type StrategyChoice } from './strategy.js'
+import { recordCompression, type CompressionRecord } from './compression-record.js'
 import { LlmError, OpenAiCompatibleClient, type LlmClient } from './llm.js'
 import { resolvePersona, type PersonaConfig } from './persona.js'
 import { publishCandidate, type PublishReport } from './publisher.js'
@@ -58,6 +60,7 @@ import {
   newSessionId,
   type DedupeRecord,
   type SecurityEventRecord,
+  type StoredArgumentStrategy,
   type StoredCandidate,
   type StoredSession,
   type TaskState,
@@ -979,11 +982,36 @@ function describeHistoricalPublish(
 }
 
 /** Result of a generate run. */
+/**
+ * 把压缩记录转成候选上的一行人话（v0.2.38 §4）。
+ *
+ * ## 为什么只在丢了东西时才写
+ *
+ * 每次都写「压缩保留了全部六项」会让 notes 变成噪音，而 notes 是给人在确认前
+ * 扫一眼的。只在**丢东西**时开口，这一行才有信息量。
+ *
+ * 丢「核心争议」这类代理判定项也算，但要标出「代理判定」—— 否则人会把一个
+ * 参考值当成结论。
+ */
+function compressionNotes(record: CompressionRecord): string[] {
+  if (record.lost.length === 0) return []
+  const labels = record.items
+    .filter((item) => record.lost.includes(item.key))
+    .map((item) => `${item.label}${item.basis === 'proxy' ? '（代理判定）' : ''}`)
+  return [
+    `这次压缩丢掉了 ${record.lost.length} 项材料：${labels.join('、')}。` +
+      `占用 ${record.tokens}/${record.budget} tokens。` +
+      '如果回复在这一点上显得空，原因可能在这里，而不是模型没看懂。',
+  ]
+}
+
 export interface GenerateOutput {
   readonly sessionId: string
   readonly candidateId: string
   readonly text: string
   readonly strategy: string
+  /** 程序选出的论证打法（v0.2.38）；旧路径可能没有。 */
+  readonly argumentStrategy?: StoredArgumentStrategy
   readonly confidence: number
   readonly violations: readonly string[]
   readonly notes: readonly string[]
@@ -1037,6 +1065,13 @@ export async function runGeneration(
      * have an identity check behind it.
      */
     targetPostId?: string
+    /**
+     * 手工指定的论证策略（v0.2.38）。
+     *
+     * 不填就是自动选择。填了但材料不满足它的门槛时，`selectStrategy` 抛错并说清缺什么 ——
+     * 不会悄悄换成另一个策略，因为那会让主人以为自己指定生效了。
+     */
+    strategy?: ArgumentStrategyId
     signal?: AbortSignal
     progress?: Progress
   },
@@ -1389,6 +1424,33 @@ export async function runGeneration(
   // the brief carries the *structure* (positions, unresolved challenges, who else spoke).
   const briefText = renderBrief(briefBuild.brief)
 
+  /**
+   * 策略在简报通过校验**之后**选（v0.2.38）。
+   *
+   * 顺序不能反：策略的门槛读的是简报字段，而简报可能是错的 —— 拿一份没通过校验的
+   * 简报去选打法，会让「依据」本身建立在编造上。校验在前，选择在后，依据就一定是
+   * 已经能指向真实 post 的那些。
+   */
+  const strategySelection = selectStrategy(briefBuild.brief, input.strategy)
+  const strategy: StrategyChoice | undefined = strategySelection.choice
+
+  /**
+   * 压缩记录（v0.2.38 §4）。
+   *
+   * 记的是**这一次**压缩留下了什么：目标评论、主人立场、对手论据、来源 id、
+   * 核心争议、不确定信息。此前这类信息只能从最终分数反推 —— 分数掉了，分不清是
+   * 模型变差还是材料被裁掉。现在两件事分开记。
+   *
+   * 记录本身不改变生成行为：它只写进 `notes`，让人能看见。想让它影响行为，
+   * 得先有一轮真实数据说明「丢了哪一项会导致哪种具体退化」。
+   */
+  const compression = recordCompression(
+    briefBuild.brief,
+    contentOfPost(collected, publishTargetPostId),
+    context,
+    briefText,
+  )
+
   progress(
     `正在生成回复（上下文 ${context.tokens} + 固定开销 ${fixedCostTotal()} / 总预算 ${total.tokens} tokens）…`,
   )
@@ -1457,6 +1519,7 @@ export async function runGeneration(
       // The validated brief. Reaching this line means `validateBrief` returned no problems,
       // so the model is given structure that cites real posts rather than prose it must infer.
       brief: briefText,
+      ...(strategy === undefined ? {} : { strategy }),
       /**
        * The counts behind that brief (v0.2.35 §3.2).
        *
@@ -1623,6 +1686,29 @@ export async function runGeneration(
   const candidateBase = {
     text: candidateText,
     strategy: result.draft?.strategy ?? 'direct_rebuttal',
+    /**
+     * 程序选出来的打法，连同依据一起落库（v0.2.38）。
+     *
+     * 落的是**选择的那一刻**的样子，不是重新算的：策略门槛依赖简报，而简报来自
+     * 这次读取。事后再算一遍会读到新的帖子，得到的可能是另一个策略，那样「这条
+     * 回复当时是按什么打的」就永远说不清了。
+     */
+    ...(strategy === undefined
+      ? {}
+      : {
+          argumentStrategy: {
+            id: strategy.id,
+            name: strategy.name,
+            source: strategy.source,
+            reason: strategy.reason,
+            confidence: strategy.confidence,
+            evidence: strategy.evidence.map((item) => ({
+              field: item.field,
+              postIds: [...item.postIds],
+              why: item.why,
+            })),
+          },
+        }),
     targetPostId: verifiedTargetPostId,
     // The snapshot travels with the candidate, so an approval binds to the exact
     // target this text was written against.
@@ -1630,7 +1716,10 @@ export async function runGeneration(
     textHash: contentHash(candidateText),
     confidence: result.draft?.confidence ?? 0,
     violations: candidateViolations,
-    notes: result.notes,
+    notes: [
+      ...result.notes,
+      ...compressionNotes(compression),
+    ],
     security: toStorageRecord(guarded.assessment, guarded.fingerprint),
     createdAt: new Date().toISOString(),
     approved: false,
@@ -1800,6 +1889,7 @@ export async function runGeneration(
     candidateId: stored.replyId,
     text: stored.text,
     strategy: stored.strategy,
+    ...(stored.argumentStrategy === undefined ? {} : { argumentStrategy: stored.argumentStrategy }),
     confidence: stored.confidence,
     violations: stored.violations,
     notes: stored.notes,
