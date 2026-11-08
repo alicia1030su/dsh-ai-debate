@@ -219,6 +219,22 @@ export interface ReadinessProbe {
         readonly recordedAt?: string;
         readonly storage?: string;
         readonly reason?: string;
+        /** 本进程看到的凭据环境（v0.2.34）。 */
+        readonly env?: 'production' | 'development';
+        /** 本进程实际查找的配置目录（路径本身不含秘密）。 */
+        readonly configDir?: string;
+        /** 当前环境没有记录、另一套有：这就是「登录状态消失」的共同形状。 */
+        readonly otherEnv?: {
+            readonly env: 'production' | 'development';
+            readonly recordedAt?: string;
+            readonly username?: string;
+        };
+        /** 刷新锁的存在性。新鲜（stale=false）说明另一个进程正在刷新。 */
+        readonly refreshLock?: {
+            readonly present: boolean;
+            readonly ageMs?: number;
+            readonly stale?: boolean;
+        };
     };
     /**
      * 授权主机的可达性（v0.2.33 §六）。

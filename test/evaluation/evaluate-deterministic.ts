@@ -92,7 +92,17 @@ function collected(c: EvalCase): CollectedThread {
   const thread: Thread = {
     platform,
     forum: { platform, ...(platform === 'tieba' ? { id: '1' } : {}), name: platform === 'tieba' ? '评测吧' : '' },
-    id: 'eval-thread',
+    /**
+     * 微博形状下，正文节点自己的 postId 就是它的 id（v0.2.34）。
+     *
+     * 此前这里固定写 `eval-thread`，而 `buildTimeline` 把正文节点的 `postId` 设成
+     * `thread.id` —— 于是正文那条语句的 id 是 `eval-thread`，语料里却写着
+     * `c.body.postId`。两个名字对不上，`claims_traceable` 会把**真实存在的正文**
+     * 判成「引用了一个没读过的帖子」。
+     *
+     * 这是夹具的不一致，不是产品行为：修在这里，而不是把断言放宽。
+     */
+    id: platform === 'weibo' && c.body !== undefined ? c.body.postId : 'eval-thread',
     title: `评测：${c.title}`,
     content: platform === 'weibo' ? (c.body?.content ?? '') : (c.floors[0]?.author.content ?? ''),
     ...(platform === 'weibo' ? { bodyNode: 'standalone' as const } : {}),

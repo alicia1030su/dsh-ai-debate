@@ -116,6 +116,17 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     llmApiKey: z<string, string, "volatile-defined">;
     /** Model name. */
     llmModel: z<string, string, "volatile-defined">;
+    /**
+     * 模型接口的请求形状（v0.2.34 §3.1）。
+     *
+     * `chat` = `/chat/completions`（读 `choices[0].message.content`）；
+     * `responses` = `/responses`（读 `output_text` 或 `output[].content[].text`）。
+     *
+     * 为什么要人填：同一个 Base URL 上两种协议都可能有，而它们的失败方式不同 ——
+     * 协议填错时对方通常返回 200 但结构不对，看起来像「模型没说话」。靠名字猜
+     * （例如「gpt-5 大概是 responses」）会在换模型的那天悄悄坏掉。
+     */
+    llmProtocol: z<"chat" | "responses", "chat" | "responses", "volatile-defined">;
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;
     /**
@@ -290,6 +301,17 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
     llmApiKey: z<string, string, "volatile-defined">;
     /** Model name. */
     llmModel: z<string, string, "volatile-defined">;
+    /**
+     * 模型接口的请求形状（v0.2.34 §3.1）。
+     *
+     * `chat` = `/chat/completions`（读 `choices[0].message.content`）；
+     * `responses` = `/responses`（读 `output_text` 或 `output[].content[].text`）。
+     *
+     * 为什么要人填：同一个 Base URL 上两种协议都可能有，而它们的失败方式不同 ——
+     * 协议填错时对方通常返回 200 但结构不对，看起来像「模型没说话」。靠名字猜
+     * （例如「gpt-5 大概是 responses」）会在换模型的那天悄悄坏掉。
+     */
+    llmProtocol: z<"chat" | "responses", "chat" | "responses", "volatile-defined">;
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;
     /**
@@ -380,6 +402,7 @@ export declare const DEFAULT_CONFIG: {
     llmBaseUrl: string;
     llmApiKey: string;
     llmModel: string;
+    llmProtocol: "chat" | "responses";
     llmTimeoutMs: number;
     llmRetries: number;
     llmTemperature: number;

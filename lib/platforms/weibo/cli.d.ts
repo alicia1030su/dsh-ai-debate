@@ -121,9 +121,15 @@ interface CliInvocation {
 export declare function cliMetrics(): {
     readonly invocations: number;
     readonly totalMs: number;
+    readonly queueWaitMs: number;
 };
 /** 归零。**测试 only**：一个测试不该看见上一个测试的进程数。 */
 export declare function __resetCliMetrics(): void;
+/**
+ * 暴露给测试的分类函数。**测试 only**：它只回答「这条命令会不会去解析令牌」，
+ * 不改任何状态、不启动任何进程。
+ */
+export declare function __needsTokenForTest(args: readonly string[]): boolean;
 /**
  * ## 为什么这里**没有**版本号缓存（v0.2.33 §七 的实测结论）
  *

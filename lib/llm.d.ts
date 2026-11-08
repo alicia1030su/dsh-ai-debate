@@ -70,6 +70,21 @@ export interface OpenAiClientOptions {
     readonly baseUrl: string;
     readonly apiKey: string;
     readonly model: string;
+    /**
+     * 用哪一套请求/响应形状（v0.2.34）。
+     *
+     * ## 为什么必须显式配置，而不是「看起来像就猜」
+     *
+     * 同一个 Base URL 上可能同时挂着 `/chat/completions` 与 `/responses`，而两家
+     * 的 JSON 形状完全不同：前者读 `choices[0].message.content`，后者读
+     * `output_text`（或 `output[].content[].text`）。用返回体去猜「这大概是哪一种」
+     * 在成功时看不出问题，在**失败时会把「协议不对」报成「模型没说话」**——
+     * 那正是最难查的一类故障。
+     *
+     * 所以这里要求调用方说清楚。默认 `chat`：它是最普遍的兼容形状，也是 v0.2.33
+     * 之前唯一支持的形状，升级不该改变既有部署的行为。
+     */
+    readonly protocol?: 'chat' | 'responses';
     readonly timeoutMs?: number;
     readonly fetchImpl?: typeof fetch;
     /**

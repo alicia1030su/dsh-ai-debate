@@ -258,6 +258,21 @@ window.__ModuleLoader__.load({
       httpsNote: 'HTTPS 地址由运行时正常校验证书；连不上时请修好证书，不要关闭校验。',
       llmModel: '模型名称',
       llmModelHint: '接口声明的 model id。',
+      /**
+       * 协议选择（v0.2.34 §3.1）。
+       *
+       * 这一栏必须存在，因为它决定请求打到哪个路径、读哪个字段。填错时对方
+       * 通常仍返回 200，只是 body 里没有我们要的东西——那会被读成「模型没说话」。
+       * 所以不给「自动猜」这个选项：猜错的代价是一次难查的故障，而多填一栏的
+       * 代价是十秒钟。
+       */
+      llmProtocol: '接口协议',
+      llmProtocolHint:
+        'chat = /chat/completions（绝大多数兼容接口）；responses = /responses（OpenAI 新版协议）。' +
+        '填错时对方可能仍返回 200 但内容读不出来——这时先换这一栏，不要去改提示词。',
+      llmProtocolChat: 'chat/completions',
+      llmProtocolResponses: 'responses',
+      llmProbeProtocol: '协议',
       llmApiKeyTitle: '模型 API Key',
       llmApiKeyHint: '同样只存凭据库，不回显。',
       llmTemperature: '温度',
@@ -736,6 +751,13 @@ window.__ModuleLoader__.load({
       httpsNote: 'HTTPS is verified by the runtime as usual. If it fails, fix the certificate — never disable verification.',
       llmModel: 'Model name',
       llmModelHint: 'The model id the endpoint declares.',
+      llmProtocol: 'API protocol',
+      llmProtocolHint:
+        'chat = /chat/completions (most compatible endpoints); responses = /responses (the newer OpenAI protocol). ' +
+        'A wrong choice often still returns 200 with an unreadable body — change this field before touching the prompt.',
+      llmProtocolChat: 'chat/completions',
+      llmProtocolResponses: 'responses',
+      llmProbeProtocol: 'Protocol',
       llmApiKeyTitle: 'Model API key',
       llmApiKeyHint: 'Also stored only in the credential store, never echoed.',
       llmTemperature: 'Temperature',
@@ -2869,6 +2891,26 @@ window.__ModuleLoader__.load({
           state: { value: store.field('llmModel'), dirty: store.dirty('llmModel') },
           onEdit: (value) => store.edit('llmModel', value),
           onReset: () => store.resetField('llmModel'),
+        }),
+        /**
+         * 协议紧跟模型名（v0.2.34 §3.1）。
+         *
+         * 放在这里而不是折叠进「高级」：它与模型名是一对决定，一起填才对；
+         * 分开放会让「换个模型」时忘了换协议，而那个错误的表现是「模型不说话」。
+         */
+        h(SelectField, {
+          id: 'dsd-llm-protocol',
+          t,
+          label: 'llmProtocol',
+          hint: 'llmProtocolHint',
+          enabled,
+          options: [
+            { value: 'chat', label: 'llmProtocolChat' },
+            { value: 'responses', label: 'llmProtocolResponses' },
+          ],
+          state: { value: store.field('llmProtocol'), dirty: store.dirty('llmProtocol') },
+          onEdit: (value) => store.edit('llmProtocol', value),
+          onReset: () => store.resetField('llmProtocol'),
         }),
         h(SecretField, {
           t,

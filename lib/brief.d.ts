@@ -109,7 +109,39 @@ export interface DebateBrief {
     /** Where the two actually disagree, in one sentence each. */
     readonly disagreements: readonly string[];
     readonly agreedFacts: readonly BriefAgreedFact[];
+    /**
+     * The owner's substantive claims, each citing its own post.
+     *
+     * 注意方向：这是**主人**的论据。对方的论据在 {@link opponentArguments}，
+     * 两者分开是有意的 —— 合成一个列表后，模型很容易把对方的话当成主人的立场
+     * 去「坚持」，而那正好是最严重的一类错误（替主人改口）。
+     */
     readonly arguments: readonly BriefArgument[];
+    /**
+     * 对方提出的核心论据（v0.2.34 §4.2）。
+     *
+     * ## 为什么必须单独列出来
+     *
+     * 此前简报只有「对方立场」一句摘要 + 「尚未被回应的质疑」。于是模型知道对方
+     * **大概**在说什么、也知道对方问了什么，但拿不到对方**逐条**的论据 ——
+     * 结果是回复只能泛泛地说「你的说法站不住」，而无法指名反驳第二条论据。
+     *
+     * 任务书 §4.2 把「对方提出的核心论据」列为回复前必须明确的一项，这是它。
+     *
+     * ## 与 `challenges` 的区别
+     *
+     * - `challenges` 是**没被回应**的质疑，带「主人没回」这个判断；
+     * - `opponentArguments` 是对方说过的论据，不论主人回没回。
+     *
+     * 两者可以有重叠，但用途不同：前者用于「补上欠的回答」，后者用于「直接反驳」。
+     *
+     * ## 为什么可选
+     *
+     * 与 `bystanders` 同一条理由：**缺省**表示「这条路径没有收集对方论据」（旧调用方），
+     * `[]` 表示「收集了，对方没给出可抽取的论据」。把两者合成一个空数组，会让
+     * 「我们没看」和「对方没说过」变成同一句话。
+     */
+    readonly opponentArguments?: readonly BriefArgument[];
     readonly challenges: readonly BriefChallenge[];
     /**
      * Questions the **opponent** put to the owner that the owner never answered.

@@ -114,6 +114,8 @@ const EDITABLE_FIELDS = new Set([
   'directness',
   'llmBaseUrl',
   'llmModel',
+  // 协议必须可保存，否则用户在页面上选了 responses 却存不下去（v0.2.34 §3.1）。
+  'llmProtocol',
   'llmTimeoutMs',
   'llmTemperature',
   'llmMaxOutputTokens',
@@ -1291,6 +1293,7 @@ function publicConfig(config: ResolvedConfig): Record<string, unknown> {
     directness: config.directness,
     llmBaseUrl: config.llmBaseUrl,
     llmModel: config.llmModel,
+    llmProtocol: config.llmProtocol,
     llmTimeoutMs: config.llmTimeoutMs,
     llmTemperature: config.llmTemperature,
     llmMaxOutputTokens: config.llmMaxOutputTokens,
