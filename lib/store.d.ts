@@ -83,6 +83,24 @@ export interface StoredCandidate {
      */
     readonly security?: CandidateSecurityRecord;
     readonly createdAt: string;
+    /**
+     * 生成这条候选时用的人格 id（v0.2.37 §7）。
+     *
+     * ## 为什么必须落库，而不是渲染时去读配置
+     *
+     * 「四种人格比较」这件事的前提是**每条候选记得自己是哪一种**。配置里的人格是
+     * 「下一次生成用什么」，生成完再改配置，之前那条候选的风格来源就丢了 —— 于是
+     * 页面上四张卡片长得一样，用户只能靠正文猜。
+     *
+     * 可选：v0.2.36 及以前的候选没有这个字段，那时读配置也还算准（一次只会有一
+     * 种人格）。旧数据缺失时不补一个猜的值，页面上显示「未记录」。
+     */
+    readonly persona?: string;
+    /** 这次生成实际花了多久（v0.2.37 §8）。没记录时为 undefined，不推算。 */
+    readonly elapsedMs?: number;
+    /** 这次生成的 token 用量（接口提供时）。 */
+    readonly inputTokens?: number;
+    readonly outputTokens?: number;
     /** True once a human approved this exact text at this exact version. */
     readonly approved: boolean;
     /** Set after publishing, when the platform confirmed it. */

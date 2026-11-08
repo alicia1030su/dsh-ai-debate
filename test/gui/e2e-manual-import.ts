@@ -265,7 +265,16 @@ async function screenshot(name: string): Promise<void> {
 async function clickByLabel(label: string): Promise<boolean> {
   const rect = await evaluate<{ x: number; y: number } | null>(`(() => {
     const nodes = [...document.querySelectorAll('button, [role=tab], a')]
-    const node = nodes.find((n) => (n.textContent || '').trim() === ${JSON.stringify(label)})
+    /**
+     * 先找完全相等，再找「以它开头」。
+     *
+     * 只按相等匹配在这里会漏掉那一类**按钮上带额度提示**的按钮：v0.2.37 的
+     * 「比较四种人格（4 次模型调用）」—— 提示是按钮文案的一部分（必须让用户点之前
+     * 就知道要花四次），所以匹配要允许前缀。优先级仍是相等优先，避免点到
+     * 「生成候选」而不是「生成候选回复」这种包含关系。
+     */
+    const exact = nodes.find((n) => (n.textContent || '').trim() === ${JSON.stringify(label)})
+    const node = exact ?? nodes.find((n) => (n.textContent || '').trim().startsWith(${JSON.stringify(label)}))
     if (!node) return null
     const first = node.getBoundingClientRect()
     if (first.width === 0 || first.height === 0) return null
@@ -1003,6 +1012,78 @@ try {
     return (fromSection || fromBody || section.slice(-160)).slice(0, 300).replace(/\n/g, ' / ')
   }
 
+  /**
+   * ── 四种人格比较（v0.2.37 §7/§3.3）──────────────────────────────────
+   *
+   * 只在 `DSH_E2E_COMPARE=1` 时跑：一次点击是**四次真实模型调用**，而普通回归
+   * 用假模型跑四遍只会多花四份时间、证明不了额外的东西。真实模型那一轮打开它。
+   */
+  if (process.env.DSH_E2E_COMPARE === '1') {
+    const compareClicked = await clickByLabel('比较四种人格')
+    stage(
+      '点击「比较四种人格」',
+      compareClicked ? 'passed' : 'failed',
+      compareClicked ? '已点击真实按钮（4 次模型调用）' : '按钮不存在或不可点',
+    )
+    if (compareClicked) {
+      const deadline = Date.now() + (process.env.DSH_E2E_REAL_MODEL === '1' ? 600_000 : 120_000)
+      let done = false
+      while (Date.now() < deadline) {
+        await sleep(2000)
+        const text = await manualSectionText()
+        if (text.includes('四种人格比较') && /(贴吧老哥|小受|傲娇|高冷)/.test(text)) {
+          done = true
+          break
+        }
+        if (text.includes('比较失败')) break
+      }
+      const text = await manualSectionText()
+      stage(
+        '比较结果渲染出来',
+        done ? 'passed' : 'failed',
+        done
+          ? '页面上出现了四种人格的比较区块'
+          : `等待超时或失败：${text.slice(-200).replace(/\n/g, ' / ')}`,
+      )
+      if (done) {
+        /**
+         * 四份都必须**对准同一个目标**。判据是每条候选旁边渲染的目标说明与当前
+         * 目标一致 —— 这正是 §3.3 第一条门槛（「对准同一个目标」）在界面上的样子。
+         */
+        const block = text.slice(text.lastIndexOf('四种人格比较'))
+        /**
+         * 逐行数「真正出了结果的」，不是数「名字出现过」。
+         *
+         * 第一版就是数名字 —— 而人格选择器把四个名字都渲染在页面上，于是这条断言
+         * 在**只有三个人格成功**的一轮里照样变绿。改成读每一条的结果行
+         * （`人格名 · 通过/需确认/阻止` 或 `人格名 · 这一条没生成出来`），
+         * 只有 OK 的才算数，失败的单独列出来。
+         */
+        const names = ['贴吧老哥', '小受', '傲娇', '高冷']
+        const okRows = names.filter((name) =>
+          block.split('\n').some((line) => line.startsWith(name) && !line.includes('没生成出来')),
+        )
+        const failedRows = block
+          .split('\n')
+          .filter((line) => line.includes('没生成出来'))
+          .map((line) => line.slice(0, 80))
+        stage(
+          '四种人格都在结果里',
+          okRows.length === 4 ? 'passed' : 'failed',
+          failedRows.length === 0
+            ? `${okRows.length} 个：${okRows.join('/')}`
+            : `${okRows.length} 个成功；失败：${failedRows.join(' ｜ ')}`,
+        )
+        const targetLine = block.split('\n').find((line) => line.includes('这段话是回给')) ?? ''
+        stage(
+          '比较结果带着回复目标',
+          targetLine !== '' ? 'passed' : 'failed',
+          targetLine.slice(0, 120) || '结果区块里没有目标说明',
+        )
+      }
+    }
+  }
+
   // ── 10/15：生成候选 ──────────────────────────────────────────────────
   const genClicked = await clickByLabel('生成候选回复')
   let generated = false
@@ -1088,6 +1169,20 @@ try {
   )
   await screenshot('07-edited')
 
+  /**
+   * 确认没生效时，把页面**说出的原因**抓出来。
+   *
+   * 只记「25 秒内没有变化」等于什么都没说：确认可能被服务端拒绝（正文不一致 /
+   * 安全阻止 / 快照缺失），而那句话就渲染在分区里，截尾部永远看不到。
+   */
+  const approveFailureDetail = async (): Promise<string> => {
+    const text = await manualSectionText()
+    const line = text
+      .split('\n')
+      .find((row) => /不一致|不能|失败|阻止|错误|刷新页面|没有候选/.test(row))
+    return (line ?? text.slice(-160)).slice(0, 220).replace(/\n/g, ' / ')
+  }
+
   // ── 14/15：人工确认 ──────────────────────────────────────────────────
   const approveClicked = await clickByLabel('人工确认')
   let approved = false
@@ -1101,7 +1196,11 @@ try {
     await sleep(900)
   }
   stage('点击人工确认', approveClicked ? 'passed' : 'failed', approveClicked ? '已点击真实按钮' : '按钮不存在')
-  stage('确认生效', approved ? 'passed' : 'failed', approved ? '按钮变为「已确认」' : '25 秒内没有变化')
+  stage(
+    '确认生效',
+    approved ? 'passed' : 'failed',
+    approved ? '按钮变为「已确认」' : `25 秒内没有变化：${await approveFailureDetail()}`,
+  )
   await screenshot('08-approved')
 
   // ── 15/15：复制 ──────────────────────────────────────────────────────

@@ -235,6 +235,37 @@ export interface BriefDecisivePoint {
   readonly why: string
   /** 排序权重，越大越靠前。写出来是为了让「为什么它排第一」可被检查。 */
   readonly weight: number
+  /**
+   * 这个判断有多可靠（v0.2.37 §5.1 的 confidence）。
+   *
+   * ## 为什么 priority 不能兼任 confidence
+   *
+   * v0.2.36 只有一个 `weight`。它同时被当成两件事用：排序，以及（在渲染时隐含地）
+   * 「这条是真的」。于是「前后矛盾」以 100 分排第一时，模型会写成「你前后矛盾」——
+   * 而那可能只是**条件不同**的两句话（「如果涨价我就退出」/「降价了我也不退出」），
+   * 或者**时间不同**造成的观点改变。
+   *
+   * 现在三个概念分开：
+   *
+   * | 概念 | 字段 | 含义 |
+   * | --- | --- | --- |
+   * | 有没有原文可对 | {@link BriefDecisivePoint.evidenceKind} | quoted / inferred |
+   * | 这个判断有多可靠 | `confidence` | high / medium / low |
+   * | 若成立它有多重要 | {@link BriefDecisivePoint.weight} | 0–100 |
+   *
+   * **priority 高不等于 confidence 高。** 一条「priority 100 / confidence medium」的
+   * 判断，渲染时会被写成「值得核实」，而不是「对方矛盾」。
+   */
+  readonly confidence: 'high' | 'medium' | 'low'
+  /**
+   * 依据的种类。
+   *
+   * - `quoted`：判断建立在**两段可核对的原文**上（矛盾的两句、提问与回避、被引用的第三方）。
+   * - `inferred`：规则推测，没有第二段原文可对（缺证据、未回答的提问）。
+   *
+   * 只有 `quoted` + `confidence: high` 才允许被渲染成断言。其余一律降级为「值得核实」。
+   */
+  readonly evidenceKind: 'quoted' | 'inferred'
 }
 
 /** A third party who spoke inside the argument's floor (v0.2.11). */
@@ -659,6 +690,25 @@ export function validateBrief(
     if (!Number.isFinite(point.weight)) {
       problems.push({ field, reason: '权重不是有限数，排序会失效' })
     }
+    /**
+     * 置信度与依据必须自洽（v0.2.37 §5.1）。
+     *
+     * 两条硬规则：
+     * 1. `high` 必须有第二段原文 —— 一个只靠规则的判断没有资格被写成断言；
+     * 2. `inferred` 不许自报 `high` —— 没有原文可对的推断，最高只能到 medium。
+     *
+     * 这两条不是风格要求：渲染层按 `confidence === 'high' && evidenceKind === 'quoted'`
+     * 决定「写成断言还是写成待核实」，所以一个自相矛盾的标注会直接变成一个
+     * 说错话的回复。
+     */
+    if (point.confidence === 'high') {
+      if (point.evidenceKind !== 'quoted') {
+        problems.push({ field, reason: '标为高置信但依据是推断：没有原文可对的判断不能当成事实' })
+      }
+      if (point.otherPostId === undefined || point.otherQuote === undefined) {
+        problems.push({ field, reason: '标为高置信却没有对照原文：高置信要求两段可核对的原文' })
+      }
+    }
     if (point.otherPostId === undefined) continue
     // 对照帖一律属于对方：矛盾的前一句、被回避的回应、更早的话题，都是对方说的。
     checkSide(`${field}.other`, 'opponent', [point.otherPostId])
@@ -961,10 +1011,26 @@ export function renderBrief(brief: DebateBrief): string {
   if (brief.decisivePoints !== undefined && brief.decisivePoints.length > 0) {
     lines.push('## 最值得先回应的（按影响结论的程度排序，第一条最重要）')
     for (const point of brief.decisivePoints) {
-      lines.push(`- 「${point.quote}」（${point.postId}）`)
+      /**
+       * 措辞跟着 confidence 走（v0.2.37 §5.1）。
+       *
+       * 一个高优先级的「疑似矛盾」如果被写成断言，模型就会产出「你前后矛盾」——
+       * 而它可能只是条件不同或时间不同。这类错误在论坛里是最伤的一类：说错了，
+       * 对方一句话就能反驳，整条回复的可信度全没了。
+       */
+      if (point.confidence === 'high' && point.evidenceKind === 'quoted') {
+        lines.push(`- 「${point.quote}」（${point.postId}）${point.otherPostId === undefined ? '' : ` vs 「${point.otherQuote ?? ''}」（${point.otherPostId}）`}`)
+        lines.push(`  ${point.why}`)
+        continue
+      }
+      lines.push(
+        `- 待核实：「${point.quote}」（${point.postId}，置信度${point.confidence === 'medium' ? '中' : '低'}）`,
+      )
       lines.push(`  ${point.why}`)
+      lines.push('  这一条**不要**写成断言；要么先问清前提，要么不碰。')
     }
     lines.push('回复应当正面回应第一条；其余可以一句带过，不要平均用力。')
+    lines.push('只有「置信度高」的那些才能当成对方确实说过的话来引用。')
     lines.push('')
   }
 

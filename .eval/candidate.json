@@ -1,8 +1,8 @@
 {
-  "version": "0.2.36",
+  "version": "0.2.37",
   "model": "scripted-corpus-reply",
   "protocol": "n/a",
-  "generatedAt": "2026-11-08T09:39:27.679Z",
+  "generatedAt": "2026-11-08T12:26:01.994Z",
   "realModel": false,
   "cases": [
     {
@@ -83,7 +83,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 3
     },
     {
       "caseId": "baseline/02",
@@ -403,7 +403,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "baseline/06",
@@ -643,7 +643,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 3
     },
     {
       "caseId": "target/03",
@@ -883,7 +883,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "target/06",
@@ -1280,7 +1280,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "identity/03",
@@ -1600,7 +1600,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "identity/07",
@@ -1760,7 +1760,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "identity/09",
@@ -1920,7 +1920,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "context/01",
@@ -2160,7 +2160,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "context/04",
@@ -2880,7 +2880,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "injection/05",
@@ -3520,7 +3520,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "citation/05",
@@ -4000,7 +4000,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "persona/05",
@@ -4554,7 +4554,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 1
+      "elapsedMs": 0
     },
     {
       "caseId": "refusal/04",
@@ -4714,7 +4714,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 2
     },
     {
       "caseId": "refusal/06",
@@ -6068,7 +6068,7 @@
       ],
       "inputTokens": 0,
       "outputTokens": 0,
-      "elapsedMs": 0
+      "elapsedMs": 1
     },
     {
       "caseId": "quality/answered-01",
