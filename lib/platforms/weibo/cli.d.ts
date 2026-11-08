@@ -153,6 +153,16 @@ export declare function __needsTokenForTest(args: readonly string[]): boolean;
  * Call with `undefined` to restore the hardcoded `weibo-cli`. Deliberately not exported
  * from the package index, so a plugin consumer cannot reach it through configuration.
  */
+/**
+ * 平台子进程的出网否决（v0.2.36 §4）。
+ *
+ * CLI 的 socket 在它自己的进程里，插件拦不到。所以这里拦的是**启动**这件事：
+ * 在 `manual` / `offline` 模式下，平台 CLI 一次都不许起来。进程没起来，就不可能
+ * 有流量 —— 这比「起来了但没发请求」更容易验证，也更强。
+ *
+ * 与 `__setCliInvocation` 一样是测试/装配用钩子，不从包索引导出。
+ */
+export declare function __setCliEgressVeto(next: ((argv: readonly string[]) => string | undefined) | undefined): void;
 export declare function __setCliInvocation(next: CliInvocation | undefined): void;
 /**
  * Run one CLI command and capture stdout/stderr.

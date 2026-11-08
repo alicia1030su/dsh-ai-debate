@@ -275,3 +275,84 @@ test('没有对方的帖子时，结构为空而不是崩溃', () => {
   assert.deepEqual(structure.contradictions, [])
   assert.deepEqual(structure.fallacies, [])
 })
+
+/**
+ * v0.2.36 §5.2：最值得先回应的那几条。
+ *
+ * ## 这一组为什么必须存在
+ *
+ * 简报此前把「对方说了什么」列全了，但没有回答「先打哪一点」。十条材料摆在一起时，
+ * 模型会挑最好反驳的那条 —— 于是回复读起来像在挑软柿子。`decisivePoints` 把
+ * 「哪一条真的会改变结论」显式排序，而排序必须是可检查的，不能是隐式的。
+ */
+test('重点排序：前后矛盾排第一，转移话题排最后', () => {
+  const { structure } = structureOf([
+    { id: '8101', who: 'opponent', text: '这个方案的成本会翻倍，根本做不了。' },
+    { id: '8102', who: 'owner', text: '翻倍这个结论你有测算吗？' },
+    { id: '8103', who: 'opponent', text: '其实这个方案的成本不会翻倍，问题在别的地方。' },
+    { id: '8104', who: 'opponent', text: '你这人说话态度就有问题，难怪没人愿意跟你合作。' },
+  ])
+
+  const points = structure.decisivePoints
+  assert.ok(points.length > 0, '这个讨论里有矛盾也有转移话题，必须至少给出一条重点')
+  assert.equal(points[0]!.kind, 'contradiction', `第一条应是前后矛盾，实际 ${points[0]!.kind}`)
+  assert.equal(points[0]!.postId, '8103', '矛盾的后一句是那条否定的发言')
+  assert.equal(points[0]!.otherPostId, '8101', '矛盾要带上前一句，否则读者无法核对')
+
+  // 权重显式写出，且严格递减：同权重靠后的不会被排到前面。
+  for (let index = 1; index < points.length; index += 1) {
+    assert.ok(
+      points[index - 1]!.weight >= points[index]!.weight,
+      '排序必须按权重递减，否则「为什么它排第一」不可检查',
+    )
+  }
+})
+
+test('重点排序：主人问过、对方回避的那条权重高于单纯的未回答', () => {
+  // 顺序很重要：先由对方挑起（这样它才是对手），主人再追问，对方用一句无关的话绕开。
+  const { structure } = structureOf([
+    { id: '8200', who: 'opponent', text: '这个方案的成本会翻倍，根本做不了。' },
+    { id: '8201', who: 'owner', text: '这个数字你从哪来的？有原始测算吗？' },
+    { id: '8202', who: 'opponent', text: '反正我身边做这行的人都这么说。' },
+  ])
+  const evasion = structure.decisivePoints.find((point) => point.kind === 'evasion')
+  assert.ok(evasion !== undefined, '被绕开的问题必须进重点列表')
+  assert.equal(evasion!.postId, '8201', '提问帖属于主人')
+  assert.ok(
+    evasion!.otherPostId === '8202' || evasion!.otherPostId === undefined,
+    '回避帖（如果有）属于对方',
+  )
+  assert.ok(evasion!.weight >= 60, `被回避的权重应不低于 60，实际 ${evasion!.weight}`)
+})
+
+test('重点排序：最多三条，不把清单原样倒给模型', () => {
+  const { structure } = structureOf([
+    { id: '8301', who: 'opponent', text: '成本会翻倍，做不到。' },
+    { id: '8302', who: 'owner', text: '翻倍有依据吗？' },
+    { id: '8303', who: 'opponent', text: '成本不会翻倍，问题在工期。' },
+    { id: '8304', who: 'owner', text: '工期我算过，三个月足够。' },
+    { id: '8305', who: 'opponent', text: '你这态度没法聊。' },
+    { id: '8306', who: 'owner', text: '那回到成本，你那个数字怎么算的？' },
+  ])
+  assert.ok(structure.decisivePoints.length <= 3, `重点最多三条，实际 ${structure.decisivePoints.length}`)
+})
+
+test('重点排序：只引用真实存在的帖子和原文（validateBrief 会逐条查）', () => {
+  const { collected, structure } = structureOf([
+    { id: '8401', who: 'opponent', text: '「专家说成本会翻倍」，这不是我一个人这么看。' },
+    { id: '8402', who: 'owner', text: '哪个专家？有原文吗？' },
+  ])
+  const known = new Set(collected.floors.flatMap((row) => [row.floor.postId, ...row.nested.map((n) => n.postId)]))
+  for (const point of structure.decisivePoints) {
+    assert.equal(known.has(point.postId), true, `重点引用了不存在的帖子 ${point.postId}`)
+    const host = collected.floors
+      .flatMap((row) => [row.floor, ...row.nested])
+      .find((statement) => statement.postId === point.postId)
+    assert.ok(host !== undefined)
+    assert.match(
+      host!.content.replace(/\s+/g, ''),
+      new RegExp(point.quote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '')),
+      `引文「${point.quote}」不在 ${point.postId} 里`,
+    )
+  }
+})

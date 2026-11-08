@@ -58,6 +58,10 @@ export declare function buildRuntime(resolve: () => ReturnType<typeof resolveCon
      * its own namespace.
      */
     resolveCredential?: (platform: string, ref: string) => Promise<string | undefined>;
+    /** 宿主的模型服务；宿主没提供时省略（v0.2.36）。 */
+    hostLlm?: import('./host-llm.js').HostLlmLike;
+    /** 出网守卫；省略时不做限制（测试与旧调用方，v0.2.36）。 */
+    egress?: import('./net-audit.js').EgressGuard;
     /**
      * Share an existing store instead of opening the file again.
      *

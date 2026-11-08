@@ -35,6 +35,19 @@ export interface GenerationClaim {
     readonly token: number;
     readonly targetPostId: string;
     readonly startedAt: number;
+    /**
+     * 这次生成依赖的输入指纹（目标 + 人格 + 上下文摘要，v0.2.36 §8）。
+     *
+     * ## 为什么仅比目标不够
+     *
+     * 两次调用可以目标相同、人格不同。那时「同目标」的判定会把它当成重复点击拒绝掉，
+     * 而用户的意图明明是「换个人格再来一次」。反过来，人格改了、目标没改，旧请求
+     * 回来时也不能算有效 —— 它回答的是另一个问题。
+     *
+     * 指纹把「这次要生成什么」变成可比较的东西。空串表示调用方没提供指纹，
+     * 此时退化为只比目标（与 v0.2.35 行为一致）。
+     */
+    readonly inputKey?: string;
 }
 /** Why a claim could not be started. */
 export interface GenerationBusy {
@@ -71,7 +84,7 @@ export declare class GenerationGuard {
      * Returns `ok: false` only when the *same* target is already being generated — the
      * double-click case. A different target supersedes the previous claim.
      */
-    begin(sessionId: string, targetPostId: string, now?: number): GenerationStarted | GenerationBusy;
+    begin(sessionId: string, targetPostId: string, now?: number, inputKey?: string): GenerationStarted | GenerationBusy;
     /** Release the claim, but only if it is still the active one. */
     finish(sessionId: string, claim: GenerationClaim): void;
     /**

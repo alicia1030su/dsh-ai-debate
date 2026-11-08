@@ -112,6 +112,8 @@ const EDITABLE_FIELDS = new Set([
   'emojiLevel',
   'sarcasmLevel',
   'directness',
+  'llmSource',
+  'egressMode',
   'llmBaseUrl',
   'llmModel',
   // 协议必须可保存，否则用户在页面上选了 responses 却存不下去（v0.2.34 §3.1）。
@@ -194,6 +196,10 @@ export interface SettingsRouteDeps {
   namespace(): string
   /** Run the model-connection probe. */
   testModel(): Promise<ModelProbe>
+  /** 宿主模型服务探测（v0.2.36）。省略时报告「拿不到」。 */
+  probeHostLlm?(): Promise<unknown>
+  /** 出网守卫自检（v0.2.36）。省略时报告「没有守卫」。 */
+  probeEgress?(): Promise<{ blocked: boolean; mode: string; host: string; reason: string }>
   /** Probe the bound account's login state. */
   checkLogin(): Promise<LoginProbe>
   /**
@@ -1033,6 +1039,17 @@ export interface ModelProbe {
   }
   /** Total wall-clock time of the whole probe, including both calls. */
   readonly totalMs?: number
+  /**
+   * 这次探测实际走的是哪条路（v0.2.36 §3.2）。
+   *
+   * 必须显示：同一个「连接正常」，走宿主和走自己配置的接口是两件不同的事 ——
+   * 前者花的是宿主那边的额度，后者花的是填在插件里的那把 key。
+   */
+  readonly source?: 'host' | 'custom' | 'none'
+  /** 宿主是否有可用的模型服务，即使这次没走它。 */
+  readonly hostAvailable?: boolean
+  /** 实际用到的模型标识（`provider/model`），由客户端回报。 */
+  readonly provider?: string
 }
 
 /** Result of probing the Tieba login state. */
@@ -1320,6 +1337,8 @@ function publicConfig(config: ResolvedConfig): Record<string, unknown> {
     emojiLevel: config.emojiLevel,
     sarcasmLevel: config.sarcasmLevel,
     directness: config.directness,
+    llmSource: config.llmSource,
+    egressMode: config.egressMode,
     llmBaseUrl: config.llmBaseUrl,
     llmModel: config.llmModel,
     llmProtocol: config.llmProtocol,
@@ -1711,6 +1730,40 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
     }
     if (action === 'check-login') {
       writeJson(response, 200, await deps.checkLogin())
+      return
+    }
+    /**
+     * 宿主模型能力探测（v0.2.36 §3.1）。
+     *
+     * 只读 `listProviders` / `listModels`，不发补全 —— 刷新这一栏不花额度。
+     * 它存在的意义是让用户知道「还有一条路」，而不是让他在两者之间猜。
+     */
+    if (action === 'probe-host-llm') {
+      if (deps.probeHostLlm === undefined) {
+        writeJson(response, 200, {
+          available: false,
+          servicePresent: false,
+          providers: [],
+          models: [],
+          reason: '当前构建拿不到宿主模型服务',
+        })
+        return
+      }
+      writeJson(response, 200, await deps.probeHostLlm())
+      return
+    }
+    /**
+     * 出网边界自检（v0.2.36 §4.3）。
+     *
+     * 故意访问一个必然被拒的地址，证明守卫是活的。返回 `blocked:false` 就是
+     * 「这次没被拦住」——页面必须照实显示，不能把它读成通过。
+     */
+    if (action === 'probe-egress') {
+      if (deps.probeEgress === undefined) {
+        writeJson(response, 200, { blocked: false, mode: 'open', host: '', reason: '当前构建没有出网守卫' })
+        return
+      }
+      writeJson(response, 200, await deps.probeEgress())
       return
     }
     // The diagnostic panel's refresh button (v0.2.13 §四).

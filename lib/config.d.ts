@@ -126,6 +126,31 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      * 协议填错时对方通常返回 200 但结构不对，看起来像「模型没说话」。靠名字猜
      * （例如「gpt-5 大概是 responses」）会在换模型的那天悄悄坏掉。
      */
+    /**
+      * 模型来源（v0.2.36 §3.1）。
+      *
+      * - `auto` —— 自己配了 Base URL 与模型名就用自己那份；没配就看宿主有没有提供
+      *   模型服务，有就用宿主的。这是默认值：升级不该改变已有部署的行为，而在
+      *   什么都没配的新装环境里，它让「打开就能用」成为可能。
+      * - `host` —— 只用宿主模型服务。插件**不读、不存、不转发任何密钥**：请求由
+      *   宿主发出，插件只拿回文本与 token 数。
+      * - `custom` —— 只用插件自己的 OpenAI 兼容配置，等同于 v0.2.35 的行为。
+      *
+      * 为什么需要显式三态而不是一个布尔：宿主模型花的是宿主那边的额度，用户
+      * 有权要求「别用宿主的，只用我这个」。一个开关如果默认会切走，就不该默认开。
+      */
+    llmSource: z<"auto" | "host" | "custom", "auto" | "host" | "custom", "volatile-defined">;
+    /**
+     * 出网策略（v0.2.36 §4）。
+     *
+     * `open` 是默认值，等同于 v0.2.35 的行为：平台读取与模型都可用。
+     * `manual` 只允许模型地址与回环，平台主机一律拒绝 —— 手动导入就该是这个语义。
+     * `offline` 除回环外全拒，用于离线验收与「拔网线也能用」。
+     *
+     * 为什么把模式做成显式配置而不是「检测到离线就自动切」：自动切换会在网络抖动
+     * 时让一次正常的微博读取突然被拒，而使用者看不出原因。模式是承诺，不是猜测。
+     */
+    egressMode: z<"open" | "manual" | "offline", "open" | "manual" | "offline", "volatile-defined">;
     llmProtocol: z<"chat" | "responses", "chat" | "responses", "volatile-defined">;
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;
@@ -311,6 +336,31 @@ export declare const Config: z<Schemastery.ObjectS<NoInfer<{
      * 协议填错时对方通常返回 200 但结构不对，看起来像「模型没说话」。靠名字猜
      * （例如「gpt-5 大概是 responses」）会在换模型的那天悄悄坏掉。
      */
+    /**
+      * 模型来源（v0.2.36 §3.1）。
+      *
+      * - `auto` —— 自己配了 Base URL 与模型名就用自己那份；没配就看宿主有没有提供
+      *   模型服务，有就用宿主的。这是默认值：升级不该改变已有部署的行为，而在
+      *   什么都没配的新装环境里，它让「打开就能用」成为可能。
+      * - `host` —— 只用宿主模型服务。插件**不读、不存、不转发任何密钥**：请求由
+      *   宿主发出，插件只拿回文本与 token 数。
+      * - `custom` —— 只用插件自己的 OpenAI 兼容配置，等同于 v0.2.35 的行为。
+      *
+      * 为什么需要显式三态而不是一个布尔：宿主模型花的是宿主那边的额度，用户
+      * 有权要求「别用宿主的，只用我这个」。一个开关如果默认会切走，就不该默认开。
+      */
+    llmSource: z<"auto" | "host" | "custom", "auto" | "host" | "custom", "volatile-defined">;
+    /**
+     * 出网策略（v0.2.36 §4）。
+     *
+     * `open` 是默认值，等同于 v0.2.35 的行为：平台读取与模型都可用。
+     * `manual` 只允许模型地址与回环，平台主机一律拒绝 —— 手动导入就该是这个语义。
+     * `offline` 除回环外全拒，用于离线验收与「拔网线也能用」。
+     *
+     * 为什么把模式做成显式配置而不是「检测到离线就自动切」：自动切换会在网络抖动
+     * 时让一次正常的微博读取突然被拒，而使用者看不出原因。模式是承诺，不是猜测。
+     */
+    egressMode: z<"open" | "manual" | "offline", "open" | "manual" | "offline", "volatile-defined">;
     llmProtocol: z<"chat" | "responses", "chat" | "responses", "volatile-defined">;
     /** Per-request timeout. */
     llmTimeoutMs: z<number, number, "volatile-defined">;
@@ -402,6 +452,8 @@ export declare const DEFAULT_CONFIG: {
     llmBaseUrl: string;
     llmApiKey: string;
     llmModel: string;
+    llmSource: "auto" | "host" | "custom";
+    egressMode: "open" | "manual" | "offline";
     llmProtocol: "chat" | "responses";
     llmTimeoutMs: number;
     llmRetries: number;

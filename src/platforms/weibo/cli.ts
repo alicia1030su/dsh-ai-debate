@@ -311,6 +311,28 @@ function childEnv(): NodeJS.ProcessEnv | undefined {
  * Call with `undefined` to restore the hardcoded `weibo-cli`. Deliberately not exported
  * from the package index, so a plugin consumer cannot reach it through configuration.
  */
+/**
+ * 平台子进程的出网否决（v0.2.36 §4）。
+ *
+ * CLI 的 socket 在它自己的进程里，插件拦不到。所以这里拦的是**启动**这件事：
+ * 在 `manual` / `offline` 模式下，平台 CLI 一次都不许起来。进程没起来，就不可能
+ * 有流量 —— 这比「起来了但没发请求」更容易验证，也更强。
+ *
+ * 与 `__setCliInvocation` 一样是测试/装配用钩子，不从包索引导出。
+ */
+export function __setCliEgressVeto(next: ((argv: readonly string[]) => string | undefined) | undefined): void {
+  egressVeto = next
+}
+
+/**
+ * 参数保持**数组**传给否决函数。
+ *
+ * 这里刻意不 `join(' ')`：那个字符串一旦被拼出来，就很容易被下一处顺手当成命令行
+ * 交给 shell，而这个模块的全部安全性都建立在「参数永远是数组」上。标签由调用方
+ * 自己从 argv 里取前两项。
+ */
+let egressVeto: ((argv: readonly string[]) => string | undefined) | undefined
+
 export function __setCliInvocation(next: CliInvocation | undefined): void {
   invocation = next ?? DEFAULT_INVOCATION
   // 换了可执行文件，上一份读到的 schema 也不再描述这台机器了。
@@ -551,6 +573,19 @@ async function runCliOnce(
   // A refused command that still executed is a write that already happened. Checking
   // here means every path in this module — current and future — inherits the boundary,
   // because `runCli` is the only way out of this process.
+  // 出网否决先于只读守卫：在离线/手动模式下，连「读」都不该起来。
+  if (egressVeto !== undefined) {
+    const veto = egressVeto(args)
+    if (veto !== undefined) {
+      return {
+        code: 1,
+        stdout: '',
+        stderr: JSON.stringify({ success: false, code: 'EGRESS_BLOCKED', message: veto }),
+        errorCode: 'EGRESS_BLOCKED',
+      }
+    }
+  }
+
   const verdict = guardCliInvocation(args)
   if (!verdict.allowed) {
     return {

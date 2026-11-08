@@ -35,6 +35,8 @@ export type AuthHostReachability = {
     readonly state: 'unknown';
     readonly reason: string;
 };
+/** 设置探针的出网检查。传 undefined 恢复不限。 */
+export declare function __setAuthHostEgressGate(next: ((url: string) => void) | undefined): void;
 /**
  * 探测授权主机是否可达。
  *

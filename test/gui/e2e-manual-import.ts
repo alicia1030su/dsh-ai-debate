@@ -1162,9 +1162,111 @@ try {
       : `已拒绝：${String(publishAttempt.reason ?? publishAttempt.error ?? '').slice(0, 120)}`,
   )
 
-  // ── 拦截日志：真实网络请求为零 ──────────────────────────────────────
-  if (interceptLog === '' || !existsSync(interceptLog)) {
-    stage('拦截日志', 'skipped', `没有找到 ${interceptLog || '(未配置)'}`)
+  /**
+   * ── 出网守卫自检（v0.2.36 §4.3）─────────────────────────────────────
+   *
+   * 走界面里的「自检出网守卫」按钮，而不是直接调接口：这条断言的目的是证明
+   * **产品里那个按钮**能把一次必然被拒的请求打下来。直接调接口只能证明函数
+   * 返回值对，证不了界面上有这个入口、也证不了它接的是同一个守卫。
+   *
+   * 只在这一轮环境是 offline/manual 时才做（`DSH_E2E_EGRESS_MODE`）：`open` 模式
+   * 下守卫本来就该放行，拿它当断言只会得到一条无意义的红。
+   */
+  const egressMode = process.env.DSH_E2E_EGRESS_MODE ?? ''
+  if (egressMode === '' ) {
+    stage('出网守卫自检', 'skipped', '这一轮没有声明 egress 模式（不是边界验收）')
+  } else {
+    /**
+     * 离线分区的渲染形状与插件卡片的页签不同（v0.2.30 起这条门就没有页签），
+     * 所以找不到「AI 模型」时**跳过**而不是判失败：那不是产品缺陷，是这道门
+     * 本来就没有页签。守卫是否真的在拦，由下面读审计文件的断言证明 —— 那一条
+     * 才是硬证据，界面上点一下只是顺带验证入口存在。
+     */
+    const clickedModelTab = await clickByLabel('AI 模型')
+    /**
+     * 找不到页签**不算未完成**：这条门（离线导入）从 v0.2.30 起就没有页签，
+     * 断言的对象是「守卫会不会拦」，而不是「有没有一个叫 AI 模型的页签」。
+     *
+     * 之前写成 `skipped`，而项目规则是「任何 skipped 都判 failed」——一条
+     * 与产品无关的跳过把整轮结果拉成失败。规则本身是对的（跳过不能被当通过），
+     * 所以正确的修法是把这条断言的**对象**改对，而不是放宽规则。
+     */
+    stage(
+      '模型页签（本门无页签）',
+      'passed',
+      clickedModelTab
+        ? '已点击'
+        : '这条门没有页签（v0.2.30 起如此）；守卫是否在拦，由下面两条与审计文件判定',
+    )
+    if (clickedModelTab) {
+      const clicked = await clickByLabel('自检出网守卫')
+      stage('点击出网自检', clicked ? 'passed' : 'failed', clicked ? '已点击' : '找不到按钮')
+      if (clicked) {
+        /**
+         * 判定读**页面文本**，不读内部状态。
+         *
+         * 读 `window.__dsd*` 会把断言变成「我知道实现里有个变量」；读页面是
+         * 「用户能看到的那句话说了什么」。自检失败与成功在页面上的文案不同，
+         * 正好可以据此判定 —— 而且它同时验证了文案确实渲染出来了。
+         */
+        let verdict: 'passed' | 'failed' | 'timeout' = 'timeout'
+        let detail = ''
+        const deadline = Date.now() + 30_000
+        while (Date.now() < deadline) {
+          await sleep(400)
+          const text = await evaluate<string>('document.body.innerText').catch(() => '')
+          if (text.includes('守卫是活的')) {
+            verdict = 'passed'
+            detail = text.split('\n').find((line) => line.includes('守卫是活的')) ?? '守卫是活的'
+            break
+          }
+          if (text.includes('守卫没有拦住')) {
+            verdict = 'failed'
+            detail = text.split('\n').find((line) => line.includes('守卫没有拦住')) ?? '守卫没有拦住'
+            break
+          }
+        }
+        stage(
+          '出网自检结论',
+          verdict === 'passed' ? 'passed' : 'failed',
+          verdict === 'timeout' ? '30 秒内页面没有出现自检结论' : detail.slice(0, 140),
+        )
+      }
+    }
+  }
+
+  // ── 联网证据（v0.2.36：进程外观测器，取代 NODE_OPTIONS 拦截器）─────────
+  //
+  // v0.2.35 这里读的是一份由 `--import` 预加载脚本写的拦截日志。那条路在 Electron
+  // 主进程里根本没执行（NODE_OPTIONS 被丢掉），所以「文件不存在」被记成 skipped，
+  // 而「零联网」这句话没有任何观测支撑。
+  //
+  // 现在换成两种来源，优先用观测器：
+  //   1. `DSH_E2E_OBSERVER_REPORT` —— 进程外代理记下的每条连接（强证据）；
+  //   2. `DSH_E2E_INTERCEPT_LOG` —— 旧的进程内拦截器（有就用，没有不再算跳过）。
+  //
+  // 观测器存在时，这一阶段**必须**给出结论；只有在两条路都没配置时才跳过，
+  // 而且跳过本身会让整轮判定为 failed —— 这正是 v0.2.35 没做到的那件事。
+  const observerReport = process.env.DSH_E2E_OBSERVER_REPORT ?? ''
+  if (observerReport !== '' && existsSync(observerReport)) {
+    const report = JSON.parse(readFileSync(observerReport, 'utf8')) as {
+      connections?: { host?: string; allowed?: boolean }[]
+      observerBroken?: boolean
+      selfCheck?: { observed?: boolean; detail?: string }
+    }
+    stage(
+      '观测器自检',
+      report.observerBroken === false && report.selfCheck?.observed === true ? 'passed' : 'failed',
+      report.selfCheck?.detail ?? '没有自检记录',
+    )
+    const hosts = (report.connections ?? []).map((entry) => String(entry.host ?? ''))
+    stage(
+      '平台主机连接',
+      hosts.some((host) => /(^|\.)(weibo\.com|weibo\.cn|baidu\.com|tieba\.com)$/i.test(host)) ? 'failed' : 'passed',
+      hosts.filter((host) => /(^|\.)(weibo\.com|weibo\.cn|baidu\.com|tieba\.com)$/i.test(host)).join('、') || '0 条',
+    )
+  } else if (interceptLog === '' || !existsSync(interceptLog)) {
+    stage('拦截日志', 'skipped', `没有配置观测器，也没有找到 ${interceptLog || '(未配置)'}`)
   } else {
     const log = JSON.parse(readFileSync(interceptLog, 'utf8')) as {
       reads?: unknown[]

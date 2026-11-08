@@ -272,6 +272,25 @@ window.__ModuleLoader__.load({
         '填错时对方可能仍返回 200 但内容读不出来——这时先换这一栏，不要去改提示词。',
       llmProtocolChat: 'chat/completions',
       llmProtocolResponses: 'responses',
+      llmSourceTitle: '模型来源',
+      llmSourceHint: '自动：自己配了接口就用它，没配就用宿主已配置的模型。宿主模型由 DSH 调用，插件不读取也不保存任何密钥。',
+      llmSourceAuto: '自动',
+      llmSourceHost: '宿主模型',
+      llmSourceCustom: '自己配置',
+      hostLlmTitle: '宿主模型服务',
+      hostLlmProbe: '查看宿主可用模型',
+      hostLlmAvailable: '可用模型',
+      hostLlmUnavailable: '不可用',
+      hostLlmNone: '宿主没有提供模型服务（旧版 DSH 或未启用）。不影响「自己配置」那条路。',
+      egressTitle: '出网边界',
+      egressHint: 'open：平台读取与模型都可用。manual：手动导入时只允许模型地址与本机回环，平台一律拒绝。offline：除本机回环外全部拒绝。',
+      egressOpen: '不限制（open）',
+      egressManual: '手动导入（manual）',
+      egressOffline: '完全离线（offline）',
+      egressSelfTest: '自检出网守卫',
+      egressSelfTestOk: '守卫是活的：这次自检请求被拒绝',
+      egressSelfTestFailed: '守卫没有拦住这次自检请求 —— 不要把它读成通过',
+      modelProbeSource: '来源',
       llmProbeProtocol: '协议',
       llmProbeContractOk: '契约探测：通过',
       llmProbeContractFailed: '契约探测：未通过',
@@ -760,6 +779,25 @@ window.__ModuleLoader__.load({
         'A wrong choice often still returns 200 with an unreadable body — change this field before touching the prompt.',
       llmProtocolChat: 'chat/completions',
       llmProtocolResponses: 'responses',
+      llmSourceTitle: 'Model source',
+      llmSourceHint: 'Auto: use your own endpoint when configured, otherwise the model DSH already has. Host models are called by DSH; this plugin never reads or stores a key.',
+      llmSourceAuto: 'Auto',
+      llmSourceHost: 'Host model',
+      llmSourceCustom: 'Own endpoint',
+      hostLlmTitle: 'Host model service',
+      hostLlmProbe: 'List host models',
+      hostLlmAvailable: 'Available models',
+      hostLlmUnavailable: 'Unavailable',
+      hostLlmNone: 'The host exposes no model service (older DSH or disabled). This does not affect the "own endpoint" path.',
+      egressTitle: 'Network boundary',
+      egressHint: 'open: platform reads and model calls allowed. manual: only the model endpoint and loopback; any platform host is refused. offline: everything except loopback is refused.',
+      egressOpen: 'Unrestricted (open)',
+      egressManual: 'Manual import (manual)',
+      egressOffline: 'Fully offline (offline)',
+      egressSelfTest: 'Self-test the egress guard',
+      egressSelfTestOk: 'Guard is live: the self-test request was refused',
+      egressSelfTestFailed: 'The guard did NOT block the self-test request — do not read this as a pass',
+      modelProbeSource: 'Source',
       llmProbeProtocol: 'Protocol',
       llmProbeContractOk: 'Contract probe: passed',
       llmProbeContractFailed: 'Contract probe: failed',
@@ -2866,9 +2904,65 @@ window.__ModuleLoader__.load({
       const probe = state.probes['test-llm']
       const baseRisk = httpRiskOf(store.field('llmBaseUrl'))
 
+      const hostProbe = state.probes['probe-host-llm']
+      const egressProbe = state.probes['probe-egress']
+      const hostModels =
+        hostProbe && hostProbe.state === 'done' && hostProbe.result && hostProbe.result.available
+          ? hostProbe.result.models.map((entry) => `${entry.provider}/${entry.model}`)
+          : []
+
       return h(
         Fragment,
         null,
+        /**
+         * 模型来源放在最前面（v0.2.36 §3.2）。
+         *
+         * 顺序是有意义的：先回答「这份配置会走哪条路」，再谈那条路的参数。
+         * 反过来（先要 Base URL）会让「宿主已经能用」的用户以为必须先填 key。
+         */
+        h(SelectField, {
+          id: 'dsd-llm-source',
+          t,
+          label: 'llmSourceTitle',
+          hint: 'llmSourceHint',
+          enabled,
+          options: [
+            { value: 'auto', label: 'llmSourceAuto' },
+            { value: 'host', label: 'llmSourceHost' },
+            { value: 'custom', label: 'llmSourceCustom' },
+          ],
+          state: { value: store.field('llmSource'), dirty: store.dirty('llmSource') },
+          onEdit: (value) => store.edit('llmSource', value),
+          onReset: () => store.resetField('llmSource'),
+        }),
+        h(
+          'div',
+          { className: 'dsd-inline', style: { marginBottom: 8 } },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsd-btn dsd-btn-ghost',
+              disabled: hostProbe && hostProbe.state === 'running',
+              onClick: () => store.probe('probe-host-llm'),
+            },
+            hostProbe && hostProbe.state === 'running' ? t('testing') : t('hostLlmProbe'),
+          ),
+        ),
+        hostProbe && hostProbe.state === 'done' && hostProbe.result
+          ? h(
+              'p',
+              {
+                className:
+                  hostProbe.result.available === true ? 'dsd-hint' : 'dsd-hint dsd-hint-error',
+                role: 'status',
+                style: { margin: '0 0 12px' },
+              },
+              hostProbe.result.available === true
+                ? `${t('hostLlmAvailable')}：${hostModels.join('、')}`
+                : `${t('hostLlmUnavailable')}：${hostProbe.result.reason || t('hostLlmNone')}`,
+            )
+          : null,
         h(Field, {
           id: 'dsd-llm-base',
           t,
@@ -3077,6 +3171,57 @@ window.__ModuleLoader__.load({
                     ),
                   )
                 : null,
+            )
+          : null,
+        /**
+         * 出网边界（v0.2.36 §4）。
+         *
+         * 放在模型分区末尾而不是「安全」页：它和模型是同一个决定的两个面 ——
+         * 用云端模型就必须允许一个具体主机，用离线模式就必须拒绝所有主机。
+         * 分开两页会让「我明明开了离线」与「为什么生成失败」发生在同一个屏幕上。
+         */
+        h('h4', { className: 'dsd-sect-title', style: { marginTop: 18 } }, t('egressTitle')),
+        h('p', { className: 'dsd-hint', style: { marginTop: 0 } }, t('egressHint')),
+        h(SelectField, {
+          id: 'dsd-egress-mode',
+          t,
+          label: 'egressTitle',
+          hint: 'egressHint',
+          enabled,
+          options: [
+            { value: 'open', label: 'egressOpen' },
+            { value: 'manual', label: 'egressManual' },
+            { value: 'offline', label: 'egressOffline' },
+          ],
+          state: { value: store.field('egressMode'), dirty: store.dirty('egressMode') },
+          onEdit: (value) => store.edit('egressMode', value),
+          onReset: () => store.resetField('egressMode'),
+        }),
+        h(
+          'div',
+          { className: 'dsd-inline', style: { marginBottom: 8 } },
+          h(
+            'button',
+            {
+              type: 'button',
+              className: 'dsd-btn dsd-btn-ghost',
+              disabled: egressProbe && egressProbe.state === 'running',
+              onClick: () => store.probe('probe-egress'),
+            },
+            egressProbe && egressProbe.state === 'running' ? t('testing') : t('egressSelfTest'),
+          ),
+        ),
+        egressProbe && egressProbe.state === 'done' && egressProbe.result
+          ? h(
+              'p',
+              {
+                className:
+                  egressProbe.result.blocked === true ? 'dsd-hint' : 'dsd-hint dsd-hint-error',
+                role: 'status',
+                style: { margin: 0 },
+              },
+              (egressProbe.result.blocked === true ? t('egressSelfTestOk') : t('egressSelfTestFailed')) +
+                `（${egressProbe.result.mode}：${egressProbe.result.reason}）`,
             )
           : null,
       )

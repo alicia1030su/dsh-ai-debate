@@ -36,6 +36,19 @@ export interface GenerationClaim {
   readonly token: number
   readonly targetPostId: string
   readonly startedAt: number
+  /**
+   * 这次生成依赖的输入指纹（目标 + 人格 + 上下文摘要，v0.2.36 §8）。
+   *
+   * ## 为什么仅比目标不够
+   *
+   * 两次调用可以目标相同、人格不同。那时「同目标」的判定会把它当成重复点击拒绝掉，
+   * 而用户的意图明明是「换个人格再来一次」。反过来，人格改了、目标没改，旧请求
+   * 回来时也不能算有效 —— 它回答的是另一个问题。
+   *
+   * 指纹把「这次要生成什么」变成可比较的东西。空串表示调用方没提供指纹，
+   * 此时退化为只比目标（与 v0.2.35 行为一致）。
+   */
+  readonly inputKey?: string
 }
 
 /** Why a claim could not be started. */
@@ -48,6 +61,25 @@ export interface GenerationBusy {
 export interface GenerationStarted {
   readonly ok: true
   readonly claim: GenerationClaim
+}
+
+/**
+ * 两次调用是不是「同一次」。
+ *
+ * 规则写在这里而不是散在 `begin` 里：
+ * - 没给指纹（旧调用方）→ 只比目标；
+ * - 给了指纹 → 目标与指纹都要相同。
+ *
+ * 为什么不比「人格」这种具体字段而是比指纹：以后新增影响因素（上下文压缩档位、
+ * 主人的额外指示）时，只要把它算进指纹，这里一个字都不用改。
+ */
+function sameInput(
+  a: { readonly targetPostId: string; readonly inputKey?: string },
+  b: { readonly targetPostId: string; readonly inputKey?: string },
+): boolean {
+  if (a.targetPostId !== b.targetPostId) return false
+  if (a.inputKey === undefined || b.inputKey === undefined) return true
+  return a.inputKey === b.inputKey
 }
 
 /** The guard itself. One per runtime instance. */
@@ -76,13 +108,23 @@ export class GenerationGuard {
    * Returns `ok: false` only when the *same* target is already being generated — the
    * double-click case. A different target supersedes the previous claim.
    */
-  begin(sessionId: string, targetPostId: string, now: number = Date.now()): GenerationStarted | GenerationBusy {
+  begin(
+    sessionId: string,
+    targetPostId: string,
+    now: number = Date.now(),
+    inputKey?: string,
+  ): GenerationStarted | GenerationBusy {
     const current = this.active.get(sessionId)
-    if (current !== undefined && current.targetPostId === targetPostId) {
+    if (current !== undefined && sameInput(current, { targetPostId, inputKey })) {
       return { ok: false, active: current }
     }
     this.sequence += 1
-    const claim: GenerationClaim = { token: this.sequence, targetPostId, startedAt: now }
+    const claim: GenerationClaim = {
+      token: this.sequence,
+      targetPostId,
+      startedAt: now,
+      ...(inputKey === undefined ? {} : { inputKey }),
+    }
     this.active.set(sessionId, claim)
     this.latest.set(sessionId, claim.token)
     return { ok: true, claim }
