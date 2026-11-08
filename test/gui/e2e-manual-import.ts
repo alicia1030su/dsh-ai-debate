@@ -1051,11 +1051,28 @@ try {
          * 目标一致 —— 这正是 §3.3 第一条门槛（「对准同一个目标」）在界面上的样子。
          */
         const block = text.slice(text.lastIndexOf('四种人格比较'))
-        const personas = ['贴吧老哥', '小受', '傲娇', '高冷'].filter((name) => block.includes(name))
+        /**
+         * 逐行数「真正出了结果的」，不是数「名字出现过」。
+         *
+         * 第一版就是数名字 —— 而人格选择器把四个名字都渲染在页面上，于是这条断言
+         * 在**只有三个人格成功**的一轮里照样变绿。改成读每一条的结果行
+         * （`人格名 · 通过/需确认/阻止` 或 `人格名 · 这一条没生成出来`），
+         * 只有 OK 的才算数，失败的单独列出来。
+         */
+        const names = ['贴吧老哥', '小受', '傲娇', '高冷']
+        const okRows = names.filter((name) =>
+          block.split('\n').some((line) => line.startsWith(name) && !line.includes('没生成出来')),
+        )
+        const failedRows = block
+          .split('\n')
+          .filter((line) => line.includes('没生成出来'))
+          .map((line) => line.slice(0, 80))
         stage(
           '四种人格都在结果里',
-          personas.length === 4 ? 'passed' : 'failed',
-          `${personas.length} 个：${personas.join('/')}`,
+          okRows.length === 4 ? 'passed' : 'failed',
+          failedRows.length === 0
+            ? `${okRows.length} 个：${okRows.join('/')}`
+            : `${okRows.length} 个成功；失败：${failedRows.join(' ｜ ')}`,
         )
         const targetLine = block.split('\n').find((line) => line.includes('这段话是回给')) ?? ''
         stage(

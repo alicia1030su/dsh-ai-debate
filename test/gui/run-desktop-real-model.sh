@@ -82,6 +82,33 @@ grep -E "DevTools listening" "$OUT/desktop.log" | head -2
 
 cd "$WT" || exit 1
 node --experimental-transform-types test/gui/e2e-manual-import.ts
-CODE=$?
+GUI_CODE=$?
+
+# ## 把候选快照落到本轮目录（v0.2.37）
+#
+# store 是**共享的**：下一次运行会清空 state.json，于是「上一轮四个人的真实输出」
+# 就没了 —— 而那是要写进质量报告的证据。每轮结束时把候选抄一份到 run 目录，
+# 证据才跟运行绑定，而不是跟「最后一次跑」绑定。
+node -e "
+const fs = require('node:fs');
+const path = 'C:/AI-Workspace/dsh-ai-debate/tmp/desk-real-model/plugin-store/state.json';
+const out = process.env.DSH_E2E_OUT_DIR;
+if (!fs.existsSync(path)) { console.log('没有 state.json，跳过候选快照'); process.exit(0) }
+const j = JSON.parse(fs.readFileSync(path, 'utf8'));
+const rows = (j.sessions || []).flatMap((s) => (s.candidates || []).map((c) => ({
+  persona: c.persona ?? null,
+  targetPostId: c.targetPostId,
+  text: c.text,
+  elapsedMs: c.elapsedMs ?? null,
+  inputTokens: c.inputTokens ?? null,
+  outputTokens: c.outputTokens ?? null,
+  security: c.security ? { decision: c.security.decision, reasons: c.security.reasons } : null,
+  approved: c.approved,
+})));
+fs.writeFileSync(out + '/candidates.json', JSON.stringify({ sessionId: j.sessions?.[0]?.id ?? null, rows }, null, 2) + '\n');
+console.log('候选快照：' + rows.length + ' 条 -> ' + out + '/candidates.json');
+"
+
+CODE=$GUI_CODE
 echo "exit=$CODE"
 exit $CODE
