@@ -235,6 +235,28 @@ if (existsSync(sourceZipPacker)) {
   } else if (!/BUILD_OUTPUT_DIRS/.test(packer)) {
     fail('source-zip.mjs 把 lib/ 当成普通源码目录整包放行；它应当只发布 .js/.d.ts/.map')
   }
+
+  /**
+   * 正式发布路径必须 fail-closed（v0.2.39 复审 §1）。
+   *
+   * 打包器保留了一个显式的本地模式（`--allow-working-tree`），用于安全测试夹具与
+   * 「从拷贝出来的目录看一眼」。它绝不能被发布流程打开 —— 那会让「打的是哪个提交」
+   * 重新变成一个没人能回答的问题。
+   *
+   * 行为层由 `test/v0239-publish-gate.test.ts` 钉住（无 Git、无效 rev、空 rev 都必须失败）；
+   * 这里检查的是另一半：两个工作流都没有传那个开关，且打包器仍然保有这套判断。
+   */
+  if (!/--allow-working-tree/.test(packer) || !/insideGitWorkTree/.test(packer)) {
+    fail('source-zip.mjs 的发布模式判断被拆掉了：必须区分「没有 Git」与「这个 rev 解析不了」')
+  }
+  for (const workflow of ['ci.yml', 'release.yml']) {
+    const file = join(root, '.github', 'workflows', workflow)
+    if (!existsSync(file)) continue
+    const text = readFileSync(file, 'utf8')
+    if (text.includes('--allow-working-tree')) {
+      fail(`${workflow} 使用了 --allow-working-tree：发布流程不得打工作树`)
+    }
+  }
 }
 
 if (existsSync(pkgPath)) {

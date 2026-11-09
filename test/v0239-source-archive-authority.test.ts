@@ -24,6 +24,15 @@ import { inflateRawSync } from 'node:zlib'
 const REPO = join(import.meta.dirname, '..')
 const PACKER = join(REPO, 'scripts', 'source-zip.mjs')
 const GIT_OBJECTS = join(REPO, 'scripts', 'lib', 'git-objects.mjs')
+const FIXTURE_ALLOWLIST = join(REPO, 'scripts', 'lib', 'fixture-allowlist.mjs')
+
+/** 打包器的三份来源：脚本本身 + 两个它 import 的模块。 */
+function copyPackerInto(dir: string): void {
+  mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true })
+  copyFileSync(PACKER, join(dir, 'scripts', 'source-zip.mjs'))
+  copyFileSync(GIT_OBJECTS, join(dir, 'scripts', 'lib', 'git-objects.mjs'))
+  copyFileSync(FIXTURE_ALLOWLIST, join(dir, 'scripts', 'lib', 'fixture-allowlist.mjs'))
+}
 
 /** 在一个隔离目录里建一个真实的 Git 仓库，内容与断言无关，结构与真实仓库一致。 */
 function makeRepo(name: string): string {
@@ -31,13 +40,11 @@ function makeRepo(name: string): string {
   const git = (...args: string[]) => execFileSync('git', args, { cwd: dir, encoding: 'utf8' })
 
   mkdirSync(join(dir, 'src'), { recursive: true })
-  mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true })
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'src-fixture', version: '9.9.9' }), 'utf8')
   writeFileSync(join(dir, 'README.md'), '# fixture\n', 'utf8')
   writeFileSync(join(dir, 'src', 'index.ts'), 'export const a = 1\nexport const b = 2\n', 'utf8')
   writeFileSync(join(dir, '.gitignore'), 'ignored.txt\n', 'utf8')
-  copyFileSync(PACKER, join(dir, 'scripts', 'source-zip.mjs'))
-  copyFileSync(GIT_OBJECTS, join(dir, 'scripts', 'lib', 'git-objects.mjs'))
+  copyPackerInto(dir)
 
   git('init', '-q')
   git('config', 'user.email', 'fixture@example.invalid')
@@ -190,24 +197,23 @@ test('源码包：必需的 fixture 在包里，其余 node_modules 仍然排除
   }
 })
 
-test('源码包：没有 Git 时回落工作树，并在输出里说明不能复现', () => {
+test('源码包：本地模式下回落工作树，并在输出里说明不能复现', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-src-nogit-'))
   try {
     mkdirSync(join(dir, 'src'), { recursive: true })
-    mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true })
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'src-fixture', version: '9.9.9' }), 'utf8')
     writeFileSync(join(dir, 'README.md'), '# fixture\n', 'utf8')
     writeFileSync(join(dir, 'src', 'index.ts'), 'export const a = 1\n', 'utf8')
-    copyFileSync(PACKER, join(dir, 'scripts', 'source-zip.mjs'))
-    copyFileSync(GIT_OBJECTS, join(dir, 'scripts', 'lib', 'git-objects.mjs'))
+    copyPackerInto(dir)
 
     const outDir = mkdtempSync(join(tmpdir(), 'dsh-src-out-'))
+    // 复审 §1：默认已经 fail-closed，工作树路径必须显式声明是本地模式。
     const stdout = execFileSync(
       process.execPath,
-      [join(dir, 'scripts', 'source-zip.mjs'), '--out', outDir],
+      [join(dir, 'scripts', 'source-zip.mjs'), '--out', outDir, '--allow-working-tree'],
       { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
     )
-    assert.match(stdout, /不能.*复现/, '没有 Git 时必须明说这一份不能从提交复现')
+    assert.match(stdout, /不能.*复现/, '本地模式必须明说这一份不能从提交复现')
     assert.match(stdout, /working-tree/)
     rmSync(outDir, { recursive: true, force: true })
   } finally {

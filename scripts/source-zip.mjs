@@ -36,9 +36,24 @@
  * the working tree while the repository stored LF. v0.2.38 diagnosed it and added a drift check,
  * but a check only helps if someone remembers to run it. The cause stayed.
  *
- * Now every byte comes from `git cat-file --batch` at a named commit. The working tree is used
- * only when there is no Git at all (a copied-out directory, the security test's fixture), and
- * that fallback is labelled as such in the output because it is *not* byte-reproducible.
+ * Now every byte comes from `git cat-file --batch` at a named commit.
+ *
+ * ## Publish mode and local mode are different programs (v0.2.39 复审 §1)
+ *
+ * Reading the commit is only half the guarantee. The other half is **refusing to run when the
+ * commit cannot be named**:
+ *
+ * - `--rev` that does not resolve (a tag not created yet, a typo, a shallow clone) used to be
+ *   caught by the same `catch` that means "there is no Git here", so the packer silently fell
+ *   back to the working tree and produced a plausible archive of the wrong thing. A release
+ *   asset that does not correspond to any commit is worse than no release asset.
+ * - The same applied to an empty `--rev`: `argValue` returned `''`, which defaulted to `HEAD`.
+ *
+ * So the default is **publish mode**: Git is required, the revision must resolve, and every
+ * failure exits non-zero without writing a file. The working-tree walk still exists for the
+ * security tests and for looking at a copied-out directory, but it must be asked for by name —
+ * `--allow-working-tree` — and it refuses to combine with `--rev`, because "package this commit"
+ * and "package whatever is on disk" are not the same request.
  *
  * ## What publishes
  *
@@ -50,15 +65,42 @@ import { execFileSync } from 'node:child_process'
 import { join, posix, relative, resolve, sep } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 
+import { isRegisteredFakeLiteral } from './lib/fixture-allowlist.mjs'
 import { readBlobs } from './lib/git-objects.mjs'
 
 const root = process.cwd()
 
-/** Read `--name value`, or `''` when absent. */
+/**
+ * Stop before writing anything.
+ *
+ * Exit code 2 means "refused to start" (bad arguments, no Git, unresolvable revision), which is
+ * distinct from a content-scan failure (a thrown error). Both are non-zero and both leave no
+ * archive behind; the distinction only helps whoever reads the CI log.
+ */
+function refuse(reason) {
+  console.error(`源码包未生成：${reason}`)
+  process.exit(2)
+}
+
+/**
+ * Read `--name value`.
+ *
+ * A flag with no value is an error rather than a silent default. `--rev` in particular used to
+ * become `''`, which then became `HEAD` — a request that named nothing produced an archive of
+ * something.
+ */
 function argValue(name) {
   const index = process.argv.indexOf(`--${name}`)
-  return index === -1 ? '' : (process.argv[index + 1] ?? '')
+  if (index === -1) return undefined
+  const value = process.argv[index + 1]
+  if (value === undefined || value.startsWith('--')) {
+    refuse(`--${name} 需要一个值，实际后面是${value === undefined ? '结尾' : `「${value}」`}。`)
+  }
+  return value
 }
+
+const revGiven = process.argv.includes('--rev')
+const allowWorkingTree = process.argv.includes('--allow-working-tree')
 
 /**
  * The commit whose contents get published.
@@ -67,9 +109,24 @@ function argValue(name) {
  * answer "what would the archive for tag v0.2.39 contain" without checking that tag out first —
  * the acceptance for this version needs to compare two working trees of the same commit.
  */
-const requestedRev = argValue('rev') === '' ? 'HEAD' : argValue('rev')
+const requestedRev = revGiven ? argValue('rev') : 'HEAD'
 
-/** The commit sha for `requestedRev`, or `null` when this is not a Git repository. */
+/** True when this directory is inside a Git work tree. A missing `git` binary answers false. */
+function insideGitWorkTree() {
+  try {
+    return (
+      execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim() === 'true'
+    )
+  } catch {
+    return false
+  }
+}
+
+/** The commit sha for `rev`, or `null` when it does not name a commit in this repository. */
 function resolveCommit(rev) {
   try {
     return execFileSync('git', ['rev-parse', '--verify', `${rev}^{commit}`], {
@@ -82,7 +139,40 @@ function resolveCommit(rev) {
   }
 }
 
-const commit = resolveCommit(requestedRev)
+const hasGit = insideGitWorkTree()
+
+// "Package the working tree" and "package this commit" are different requests. Accepting both
+// flags would silently honour one of them.
+if (allowWorkingTree && revGiven) {
+  refuse('--allow-working-tree 与 --rev 不能同时使用：一个要打磁盘，一个要打提交。')
+}
+if (allowWorkingTree && hasGit) {
+  refuse('这个目录是 Git 工作树，--allow-working-tree 不适用：提交里的字节才是可复现的那一份。')
+}
+
+/**
+ * `null` means "working tree", and is only reachable in the explicit local mode.
+ *
+ * Every other path either resolves a commit or has already exited. There is deliberately no
+ * third state: "Git exists but the revision is bad" is not a reason to package something else.
+ */
+let commit = null
+if (hasGit) {
+  commit = resolveCommit(requestedRev)
+  if (commit === null) {
+    refuse(
+      `--rev ${requestedRev} 在这个仓库里解析不到提交，不会回退到工作树。` +
+        `先确认标签/分支存在：git rev-parse --verify ${requestedRev}^{commit}`,
+    )
+  }
+} else if (revGiven) {
+  refuse(`--rev ${requestedRev} 需要一个 Git 仓库，但这里不是。不会拿工作树顶替一个指定的提交。`)
+} else if (!allowWorkingTree) {
+  refuse(
+    '这里不是 Git 工作树。正式发布必须从提交打包；' +
+      '如果只是本地预览，显式加 --allow-working-tree（产物不能字节级复现，不得用于发布）。',
+  )
+}
 
 /**
  * Tracked entries at the commit: mode, type, object id and path.
@@ -124,7 +214,8 @@ const version =
 // therefore passes --out ., and the archive is written into the workspace instead. Keeping one
 // script with one behaviour would mean either breaking local workflow or leaving the release
 // job permanently red, so the output directory is a parameter rather than a constant.
-const outDir = argValue('out') === '' ? join(root, '..') : resolve(root, argValue('out'))
+const outArg = argValue('out')
+const outDir = outArg === undefined ? join(root, '..') : resolve(root, outArg)
 const outFile = join(outDir, `dsh-ai-debate-source-${version}.zip`)
 
 // --- 1. The allowlist -------------------------------------------------------
@@ -438,21 +529,19 @@ const SECRET_PATTERNS = [
 ]
 
 /**
- * Files that legitimately contain credential-*shaped* strings.
+ * 精确的假数据例外（v0.2.39 复审 §2）。
  *
- * These are the security tests and the detector itself: they contain the patterns on purpose, and
- * a build that refused to publish its own security tests would push authors to delete them.
- * The exception is narrow — an exact path, not a pattern — so a real `.env` cannot hide behind it.
+ * 原来是三件东西叠在一起：一个按文件名的豁免表、一个「行里出现 fixture 就跳过」的正则、
+ * 以及 `test/`、`docs/` 的整目录跳过。三者的共同问题不是「太宽」而是**不可验证**：
+ *
+ * - 整目录跳过意味着把一把真 AWS key 粘进任何测试文件都不会让构建失败；
+ * - 行级关键字意味着 `// example: <真钥匙>` 也能过 —— 一句注释就买到了豁免；
+ * - 文件级豁免意味着那三个文件里可以藏任何东西，而它们是源码，不是一次性夹具。
+ *
+ * 现在只有一个判据：`path` 与**逐字**登记的假值相等。登记表在
+ * `scripts/lib/fixture-allowlist.mjs`，由测试逐条核对「仍然出现在那个文件里」。
+ * 换一把钥匙、换一个文件、同一文件里多一把，都不匹配。
  */
-const SCAN_EXEMPT = new Set([
-  'src/security/output-guard.ts',
-  'test/v0214-target-identity.test.ts',
-  'scripts/source-zip.mjs',
-])
-
-/** Lines that are obviously a fixture, so a scanned test file does not fail the build. */
-const FIXTURE_MARKER = /(?:fixture|dummy|example|fake|placeholder|test-only|FIXTURE)/i
-
 const findings = []
 for (const rel of files) {
   // Scan **the bytes that will be published**, not a fresh read of the disk. If those two could
@@ -462,18 +551,18 @@ for (const rel of files) {
   // Binary files cannot carry a readable secret and scanning them is noise.
   if (raw.includes(0)) continue
   const text = raw.toString('utf8')
+  const lines = text.split(/\r?\n/)
 
   for (const { re, label } of SECRET_PATTERNS) {
     if (!re.test(text)) continue
-    if (SCAN_EXEMPT.has(rel)) continue
-    // A test fixture legitimately holds a fake secret. Only real-looking values in non-test
-    // files fail the build; the path check above already limits this to a known list.
-    const lines = text.split(/\r?\n/)
+    // One pattern can hit more than once on a line. Each hit is judged on its own, so a
+    // registered fake at the start of a line cannot carry an unregistered key behind it.
+    const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)
     for (const line of lines) {
-      if (!re.test(line)) continue
-      if (FIXTURE_MARKER.test(line)) continue
-      if (rel.startsWith('test/') || rel.startsWith('docs/')) continue
-      findings.push({ path: rel, label, sample: line.trim().slice(0, 120) })
+      for (const match of line.matchAll(global)) {
+        if (isRegisteredFakeLiteral(rel, match[0], line)) continue
+        findings.push({ path: rel, label, sample: line.trim().slice(0, 120) })
+      }
     }
   }
 }
@@ -607,8 +696,8 @@ console.log(`  来源：${source}`)
 console.log(`  文件数：${files.length}`)
 console.log(`  大小：${zip.length} 字节`)
 if (commit === null) {
-  console.log('  注意：这里没有 Git 仓库，字节来自磁盘，**不能**从某个提交复现。')
-  console.log('        正式发布必须在一个 Git 检出里打包（CI 与 release 都是）。')
+  console.log('  模式：本地（--allow-working-tree）—— 字节来自磁盘，**不能**从某个提交复现。')
+  console.log('        这只是给人本地看一眼用的，不得作为发布产物。')
 }
 if (skipped.length > 0) {
   console.log(`  跳过：${skipped.length} 个`)

@@ -127,14 +127,19 @@ function makeDirtyRepo() {
   // Copy the real packer so the test exercises the shipped logic, not a stub.
   //
   // v0.2.39: 打包器现在从 `lib/git-objects.mjs` 读提交内容，所以那份模块也必须一起复制。
-  // 这个 fixture 目录**没有** Git 仓库，于是打包器走「工作树」回落路径 —— 而这恰好是本
-  // 组测试要覆盖的场景（工作目录里有 .env、私钥、符号链接）。补一份模块依赖不改变任何
-  // 断言，只是让被复制的程序能启动。
+  // 这个 fixture 目录**没有** Git 仓库，于是打包器需要显式的 `--allow-working-tree`
+  // 才会走工作树路径（v0.2.39 复审：默认落盘模式已经改成 fail-closed）。这正是本组测试
+  // 要覆盖的场景 —— 工作目录里有 .env、私钥、符号链接，且它们都不该进包。
   writeFileSync(join(dir, 'scripts', 'source-zip.mjs'), readFileSync(PACKER), 'utf8')
   mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true })
   writeFileSync(
     join(dir, 'scripts', 'lib', 'git-objects.mjs'),
     readFileSync(join(dirname(PACKER), 'lib', 'git-objects.mjs')),
+    'utf8',
+  )
+  writeFileSync(
+    join(dir, 'scripts', 'lib', 'fixture-allowlist.mjs'),
+    readFileSync(join(dirname(PACKER), 'lib', 'fixture-allowlist.mjs')),
     'utf8',
   )
 
@@ -143,7 +148,8 @@ function makeDirtyRepo() {
 
 /** Run the packer in `dir` and return the ZIP path it wrote (outside the tree). */
 function runPacker(dir) {
-  execFileSync(process.execPath, [join(dir, 'scripts', 'source-zip.mjs')], {
+  // 复查 §1：没有 Git 时默认 fail-closed，夹具必须显式声明这是本地模式。
+  execFileSync(process.execPath, [join(dir, 'scripts', 'source-zip.mjs'), '--allow-working-tree'], {
     cwd: dir,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],

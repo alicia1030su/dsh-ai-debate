@@ -25,6 +25,8 @@ import { readFileSync } from 'node:fs'
 import { extname } from 'node:path'
 import { inflateRawSync, gunzipSync } from 'node:zlib'
 
+import { isRegisteredFakeLiteral } from './lib/fixture-allowlist.mjs'
+
 const path = process.argv[2]
 const asJson = process.argv.includes('--json')
 
@@ -82,22 +84,16 @@ const SECRET_PATTERNS = [
 ]
 
 /**
- * Paths whose whole purpose is to contain credential shapes, so a scan hit is expected there.
+ * 精确的假数据例外（v0.2.39 复审 §2）。
  *
- * Narrow on purpose: an exact path, never a pattern. A real `.env` cannot claim this exemption.
+ * 这里原来也有一条 `test/`、`docs/` 整目录跳过，外加一份按文件名的豁免表和一串
+ * 「行里出现 fixture 关键字」的正则。三者都不可验证：把一把真钥匙放进任何一个测试文件，
+ * 独立扫描器会安静地放行 —— 而它存在的意义正是「不信任打包器」。
+ *
+ * 现在只认「这个路径里的这一串确切字符」。登记表与打包器共用
+ * `scripts/lib/fixture-allowlist.mjs`：共用的是「哪些字节被认定为假数据」这个事实，
+ * 两边的模式表与判定流程仍然各写各的，所以一个扫描器漏掉的形状，另一个仍有机会拦到。
  */
-const SCAN_EXEMPT = new Set([
-  'src/security/output-guard.ts',
-  'scripts/source-zip.mjs',
-  'scripts/scan-archive.mjs',
-  'test/v0214-target-identity.test.ts',
-  'test/v0215-source-zip-security.test.ts',
-  'test/security-boundary.test.ts',
-  'test/security-injection.test.ts',
-])
-
-/** A line mentioning one of these is a fixture by construction. */
-const FIXTURE_MARKER = /(fixture|dummy|example|fake|placeholder|test-only|redact|<.*>|\bxxx+\b)/i
 
 // --- readers ---------------------------------------------------------------
 
@@ -181,19 +177,19 @@ for (const entry of entries) {
 
   for (const { re, label } of SECRET_PATTERNS) {
     if (!re.test(text)) continue
-    if (SCAN_EXEMPT.has(normalised)) continue
-    for (const line of text.split(/\r?\n/)) {
-      if (!re.test(line)) continue
-      if (FIXTURE_MARKER.test(line)) continue
-      // Test and docs files legitimately quote patterns; name rules already barred the dangerous
-      // paths, so a shape here is illustrative rather than leaked.
-      if (normalised.startsWith('test/') || normalised.startsWith('docs/')) continue
-      findings.push({
-        path: normalised,
-        label,
-        kind: 'content',
-        sample: line.trim().slice(0, 120),
-      })
+    const lines = text.split(/\r?\n/)
+    // 同一行可能命中多次；逐次判定，别让一处登记过的假值替后面的真值开路。
+    const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)
+    for (const line of lines) {
+      for (const match of line.matchAll(global)) {
+        if (isRegisteredFakeLiteral(normalised, match[0], line)) continue
+        findings.push({
+          path: normalised,
+          label,
+          kind: 'content',
+          sample: line.trim().slice(0, 120),
+        })
+      }
     }
   }
 }
