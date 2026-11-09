@@ -544,7 +544,10 @@ for (const entry of entries) {
     findings.push(pathFinding({ path: normalised, rule: '重复的条目名', kind: 'type' }))
   }
   seenNames.add(normalised)
-  if (isUnsafePath(normalised)) {
+  // 目录条目的名字以 `/` 结尾；去掉尾斜杠再判穿越，否则 `package/src/` 归一后
+  // 变成 `src/`，会被当成「空路径」。空路径只可能是归档根目录本身，不算穿越。
+  const safetyPath = normalised.replace(/\/+$/, '')
+  if (safetyPath !== '' && isUnsafePath(safetyPath)) {
     findings.push(pathFinding({ path: normalised, rule: '路径穿越或绝对路径', kind: 'type' }))
   }
 
