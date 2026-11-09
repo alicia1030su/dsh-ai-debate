@@ -54,7 +54,7 @@ import type {
   ThreadRef,
   UserProfile,
 } from '../lib/types.js'
-import { grantApproval } from './helpers.ts'
+import { candidateIdOf, grantApproval } from './helpers.ts'
 
 // ---------------------------------------------------------------------------
 // A shared fake platform, parameterized so two instances differ structurally
@@ -728,10 +728,10 @@ test('假平台A：读取 → 分析 → 生成 → 发表 → 回读 全链路�
 
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
     assert.equal(report.ok, true, report.message)
@@ -773,10 +773,10 @@ test('假平台B：同一套核心、不同分页与 id 方案，全链路同样
     })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
     assert.equal(report.ok, true, report.message)
@@ -867,10 +867,10 @@ test('没有发布能力的平台在读阶段正常，发表阶段被拒绝而�
     })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
     assert.equal(report.ok, false, '没有发布能力时不能返回成功')

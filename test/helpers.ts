@@ -642,3 +642,22 @@ function resolvePublishingAccount(
     return legacy
   }
 }
+
+/**
+ * 取一次成功生成的候选 id（v0.2.39 §3.1）。
+ *
+ * `GenerateOutput.candidateId` 变成可选：拒绝、故障、材料不足都不再产出候选。
+ * 测试里凡是要走「有候选之后」的流程，都必须先确认真的产出了候选 —— 用 `!`
+ * 抹掉类型会把「这次没生成」变成更远处的奇怪失败。
+ *
+ * 抛错而不是返回空串：空串会让 `store` 里出现一条 id 为空的记录，那比测试失败更糟。
+ */
+export function candidateIdOf(generated: {
+  readonly candidateId?: string
+  readonly outcome?: string
+}): string {
+  if (generated.candidateId === undefined) {
+    throw new Error(`这条测试要求一次成功生成，实际结果是 ${generated.outcome ?? '未知'}`)
+  }
+  return generated.candidateId
+}

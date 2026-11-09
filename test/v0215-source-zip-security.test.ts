@@ -27,7 +27,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import test from 'node:test'
 
 const REPO = join(import.meta.dirname, '..')
@@ -125,7 +125,18 @@ function makeDirtyRepo() {
   writeFileSync(join(dir, 'src', 'nested', 'credentials.json'), FAKE_CREDENTIALS, 'utf8')
 
   // Copy the real packer so the test exercises the shipped logic, not a stub.
+  //
+  // v0.2.39: 打包器现在从 `lib/git-objects.mjs` 读提交内容，所以那份模块也必须一起复制。
+  // 这个 fixture 目录**没有** Git 仓库，于是打包器走「工作树」回落路径 —— 而这恰好是本
+  // 组测试要覆盖的场景（工作目录里有 .env、私钥、符号链接）。补一份模块依赖不改变任何
+  // 断言，只是让被复制的程序能启动。
   writeFileSync(join(dir, 'scripts', 'source-zip.mjs'), readFileSync(PACKER), 'utf8')
+  mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true })
+  writeFileSync(
+    join(dir, 'scripts', 'lib', 'git-objects.mjs'),
+    readFileSync(join(dirname(PACKER), 'lib', 'git-objects.mjs')),
+    'utf8',
+  )
 
   return dir
 }

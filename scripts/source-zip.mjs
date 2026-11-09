@@ -26,6 +26,20 @@
  * The scan is a second line, not the first: the allowlist is what actually keeps `.env` out. The
  * scan exists because "the allowlist is complete" is exactly the assumption that leaks.
  *
+ * ## What actually decides the bytes (v0.2.39 §5)
+ *
+ * The answer is **the commit**, not the working tree.
+ *
+ * Until v0.2.38 this script listed files with Git and then read their contents with `readFile`.
+ * Half of it read the commit, the other half read the disk, and the two can disagree: v0.2.37's
+ * 2369-byte difference came from exactly that — twenty text files had been rewritten as CRLF in
+ * the working tree while the repository stored LF. v0.2.38 diagnosed it and added a drift check,
+ * but a check only helps if someone remembers to run it. The cause stayed.
+ *
+ * Now every byte comes from `git cat-file --batch` at a named commit. The working tree is used
+ * only when there is no Git at all (a copied-out directory, the security test's fixture), and
+ * that fallback is labelled as such in the output because it is *not* byte-reproducible.
+ *
  * ## What publishes
  *
  * Source, tests, fixtures, docs, CI workflows, build scripts, LICENSE, README. Everything a
@@ -36,8 +50,71 @@ import { execFileSync } from 'node:child_process'
 import { join, posix, relative, resolve, sep } from 'node:path'
 import { deflateRawSync } from 'node:zlib'
 
+import { readBlobs } from './lib/git-objects.mjs'
+
 const root = process.cwd()
-const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
+
+/** Read `--name value`, or `''` when absent. */
+function argValue(name) {
+  const index = process.argv.indexOf(`--${name}`)
+  return index === -1 ? '' : (process.argv[index + 1] ?? '')
+}
+
+/**
+ * The commit whose contents get published.
+ *
+ * Defaults to `HEAD`, which is what a release checkout is. `--rev` exists so the same script can
+ * answer "what would the archive for tag v0.2.39 contain" without checking that tag out first —
+ * the acceptance for this version needs to compare two working trees of the same commit.
+ */
+const requestedRev = argValue('rev') === '' ? 'HEAD' : argValue('rev')
+
+/** The commit sha for `requestedRev`, or `null` when this is not a Git repository. */
+function resolveCommit(rev) {
+  try {
+    return execFileSync('git', ['rev-parse', '--verify', `${rev}^{commit}`], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return null
+  }
+}
+
+const commit = resolveCommit(requestedRev)
+
+/**
+ * Tracked entries at the commit: mode, type, object id and path.
+ *
+ * `ls-tree` rather than `ls-files`: the index can hold staged-but-uncommitted changes, and
+ * "what is committed" is the only thing a release archive may contain.
+ */
+function treeEntries(sha) {
+  const listing = execFileSync('git', ['ls-tree', '-r', '-z', '--full-tree', sha], {
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  })
+  const found = []
+  for (const record of listing.toString('utf8').split('\0')) {
+    if (record === '') continue
+    const tab = record.indexOf('\t')
+    if (tab === -1) continue
+    const [mode, type, object] = record.slice(0, tab).split(' ')
+    found.push({ mode, type, object, path: record.slice(tab + 1) })
+  }
+  return found
+}
+
+const entries = commit === null ? null : treeEntries(commit)
+
+const version =
+  entries === null
+    ? JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).version
+    : JSON.parse(
+        readBlobs(root, commit, ['package.json']).get('package.json').data.toString('utf8'),
+      ).version
 
 // Where the archive lands. Default is the directory *above* the project, which is where a
 // developer expects to find it and where CI's own housekeeping has always looked.
@@ -47,8 +124,7 @@ const version = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).v
 // therefore passes --out ., and the archive is written into the workspace instead. Keeping one
 // script with one behaviour would mean either breaking local workflow or leaving the release
 // job permanently red, so the output directory is a parameter rather than a constant.
-const outFlag = process.argv.indexOf('--out')
-const outDir = outFlag === -1 ? join(root, '..') : resolve(root, process.argv[outFlag + 1] ?? '.')
+const outDir = argValue('out') === '' ? join(root, '..') : resolve(root, argValue('out'))
 const outFile = join(outDir, `dsh-ai-debate-source-${version}.zip`)
 
 // --- 1. The allowlist -------------------------------------------------------
@@ -182,11 +258,50 @@ const FORBIDDEN_DIRS = new Set([
  */
 const SKIP_FILES = new Set(['SHA256SUMS.txt'])
 
+/**
+ * Tracked test fixtures that live under a normally-forbidden directory (v0.2.39 §5.2).
+ *
+ * ## The conflict this resolves
+ *
+ * `.gitignore` has carried an exception for `test/fixtures/fake-weibo-pkg/node_modules/**` since
+ * v0.2.33, with a stated reason: the微博 desktop acceptance puts that pseudo-package on `PATH`
+ * and lets the real `weibo-cli` entry resolution find it, so without it "换台机器复现桌面验收"
+ * does not hold. It is committed on purpose.
+ *
+ * `FORBIDDEN_DIRS` excludes `node_modules` unconditionally, so those two files could never enter
+ * the archive — and the archive is exactly what a downloader uses to reproduce that acceptance.
+ * Two rules disagreed, and the disagreement was only visible from the outside.
+ *
+ * ## Why the fix is an exact-path list, not "allow test fixtures"
+ *
+ * Dropping `node_modules` from `FORBIDDEN_DIRS` would publish every real dependency directory a
+ * developer happens to have installed — hundreds of megabytes of third-party code with its own
+ * licenses, and a new path for a stray secret in some package's local cache. Widening to "anything
+ * under test/fixtures/" is the same mistake one step smaller: fixtures are where people paste
+ * sample responses, and sample responses are where people paste real cookies.
+ *
+ * So each entry is a **whole path**, and it must also be a blob the named commit actually
+ * contains. A directory that a `pnpm install` creates can never satisfy that, which is the point.
+ */
+const TRACKED_FIXTURE_EXCEPTIONS = new Set([
+  'test/fixtures/fake-weibo-pkg/node_modules/@weibo-ai/weibo-cli/package.json',
+  'test/fixtures/fake-weibo-pkg/node_modules/@weibo-ai/weibo-cli/dist/index.js',
+])
+
 /** True when a relative path may be published. The single decision point. */
 function isPublishable(rel) {
   const segments = rel.split('/')
   const name = segments[segments.length - 1]
   const top = segments[0]
+
+  if (TRACKED_FIXTURE_EXCEPTIONS.has(rel)) {
+    // The exception still has to pass every name check: it may be under node_modules, but a
+    // `.env` or a key file sitting at that exact path must still be refused.
+    if (FORBIDDEN_NAMES.some((pattern) => pattern.test(name))) return false
+    if (SKIP_FILES.has(name)) return false
+    if (/\.(tgz|zip|tar|gz|7z|rar)$/i.test(name)) return false
+    return true
+  }
 
   for (const segment of segments) {
     if (FORBIDDEN_DIRS.has(segment)) return false
@@ -205,34 +320,6 @@ function isPublishable(rel) {
 }
 
 // --- 2. Enumerate candidates ------------------------------------------------
-
-/**
- * Ask Git for the tracked files.
- *
- * Returns `null` when this is not a Git repository or `git` is unavailable, which is the normal
- * case on this machine. A `null` here means "fall back to the allowlist walk", never "include
- * everything".
- */
-function gitTrackedFiles() {
-  try {
-    const inside = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-    if (inside !== 'true') return null
-    const listing = execFileSync('git', ['ls-files', '-z', '--cached'], {
-      cwd: root,
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    })
-    return listing.split('\0').filter((entry) => entry.length > 0)
-  } catch {
-    // No git, or not a repository: the caller falls back to the allowlist.
-    return null
-  }
-}
 
 /** Walk the tree, returning posix-style rel paths of **regular files only**. */
 async function walk(dir, acc = []) {
@@ -261,25 +348,67 @@ async function walk(dir, acc = []) {
 
 const skipped = []
 
-const tracked = gitTrackedFiles()
-const source = tracked === null ? 'allowlist-walk' : 'git-ls-files'
-const candidates = (tracked ?? (await walk(root))).map((rel) => rel.split(sep).join(posix.sep))
-
+/**
+ * The bytes to publish, keyed by path.
+ *
+ * A `Map` rather than reading inside each later loop, because there are two fundamentally
+ * different sources and every consumer must not care which one was used:
+ *
+ * - `git`: bytes come from the object database at `commit`. This is the reproducible path.
+ * - `working-tree`: bytes come from disk. Only reachable when there is no Git at all, and the
+ *   output says so plainly, because an archive built this way cannot be reproduced from the
+ *   commit it claims to describe.
+ */
+let contents
+let source
 const files = []
-for (const rel of candidates.sort()) {
-  if (!isPublishable(rel)) continue
-  // A tracked path can still be a symlink (Git stores the link, not its target), so the check
-  // applies to both sources rather than only to the walk.
-  const info = await lstat(join(root, rel.split('/').join(sep)))
-  if (info.isSymbolicLink()) {
-    skipped.push({ path: rel, reason: '符号链接（不跟随）' })
-    continue
+
+if (entries === null) {
+  source = 'working-tree（没有 Git 仓库，不能字节级复现）'
+  contents = new Map()
+  const walked = (await walk(root)).map((rel) => rel.split(sep).join(posix.sep))
+  for (const rel of walked.sort()) {
+    if (!isPublishable(rel)) continue
+    const info = await lstat(join(root, rel.split('/').join(sep)))
+    if (info.isSymbolicLink()) {
+      skipped.push({ path: rel, reason: '符号链接（不跟随）' })
+      continue
+    }
+    if (!info.isFile()) {
+      skipped.push({ path: rel, reason: '非常规文件' })
+      continue
+    }
+    files.push(rel)
+    contents.set(rel, await readFile(join(root, rel.split('/').join(sep))))
   }
-  if (!info.isFile()) {
-    skipped.push({ path: rel, reason: '非常规文件' })
-    continue
+} else {
+  source = `git ${requestedRev}（${commit.slice(0, 12)}）`
+  contents = new Map()
+  const candidates = []
+  for (const entry of entries) {
+    if (entry.type !== 'blob') {
+      // A submodule is a commit pointer, not content: publishing it would silently drop a
+      // directory and leave a checkout that cannot be built.
+      skipped.push({ path: entry.path, reason: `提交里的 ${entry.type}（不是文件内容）` })
+      continue
+    }
+    // 120000 is a symlink in Git's mode encoding. Git stores the link target as the blob, so
+    // publishing it would create a link in the archive pointing wherever it pointed here.
+    if (entry.mode === '120000') {
+      skipped.push({ path: entry.path, reason: '符号链接（不跟随）' })
+      continue
+    }
+    if (!isPublishable(entry.path)) continue
+    candidates.push(entry.path)
   }
-  files.push(rel)
+  candidates.sort()
+  const blobs = readBlobs(root, commit, candidates)
+  for (const rel of candidates) {
+    const blob = blobs.get(rel)
+    if (blob === undefined) throw new Error(`提交 ${commit} 里读不到 ${rel}`)
+    files.push(rel)
+    contents.set(rel, blob.data)
+  }
 }
 
 if (files.length === 0) {
@@ -326,7 +455,10 @@ const FIXTURE_MARKER = /(?:fixture|dummy|example|fake|placeholder|test-only|FIXT
 
 const findings = []
 for (const rel of files) {
-  const raw = await readFile(join(root, rel.split('/').join(sep)))
+  // Scan **the bytes that will be published**, not a fresh read of the disk. If those two could
+  // differ, the scan would be certifying something other than the artifact.
+  const raw = contents.get(rel)
+  if (raw === undefined) throw new Error(`内部不一致：${rel} 有名字没有内容`)
   // Binary files cannot carry a readable secret and scanning them is noise.
   if (raw.includes(0)) continue
   const text = raw.toString('utf8')
@@ -361,13 +493,16 @@ if (findings.length > 0) {
  * By construction every entry passed `isPublishable`, so this can only fail if that function and
  * this one disagree — which is exactly the regression worth catching. It runs on the final list,
  * not on the candidates, so a future refactor that bypasses the check still fails here.
+ *
+ * The exception list is re-checked here too, deliberately re-derived rather than trusting
+ * `isPublishable`: the point of this gate is to be a second opinion, so it must not call the
+ * first opinion to form its own.
  */
 const leaky = files.filter((rel) => {
   const name = rel.split('/').pop()
-  return (
-    FORBIDDEN_NAMES.some((pattern) => pattern.test(name)) ||
-    rel.split('/').some((segment) => FORBIDDEN_DIRS.has(segment))
-  )
+  if (FORBIDDEN_NAMES.some((pattern) => pattern.test(name))) return true
+  if (TRACKED_FIXTURE_EXCEPTIONS.has(rel)) return !contents.has(rel)
+  return rel.split('/').some((segment) => FORBIDDEN_DIRS.has(segment))
 })
 if (leaky.length > 0) {
   throw new Error(`最终清单仍含禁止文件，构建已失败：${leaky.join(', ')}`)
@@ -408,7 +543,8 @@ const central = []
 let offset = 0
 
 for (const rel of files) {
-  const raw = await readFile(join(root, rel.split('/').join(sep)))
+  const raw = contents.get(rel)
+  if (raw === undefined) throw new Error(`内部不一致：${rel} 有名字没有内容`)
   const compressed = deflateRawSync(raw, { level: 9 })
   const nameBytes = Buffer.from(rel, 'utf8')
   const crc = crc32(raw)
@@ -470,6 +606,10 @@ console.log(`已写入 ${outFile}`)
 console.log(`  来源：${source}`)
 console.log(`  文件数：${files.length}`)
 console.log(`  大小：${zip.length} 字节`)
+if (commit === null) {
+  console.log('  注意：这里没有 Git 仓库，字节来自磁盘，**不能**从某个提交复现。')
+  console.log('        正式发布必须在一个 Git 检出里打包（CI 与 release 都是）。')
+}
 if (skipped.length > 0) {
   console.log(`  跳过：${skipped.length} 个`)
   for (const entry of skipped) console.log(`    ${entry.path} — ${entry.reason}`)

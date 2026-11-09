@@ -102,6 +102,19 @@ function makeRig(input: {
   }
 }
 
+/**
+ * 取一次成功生成的候选 id（v0.2.39）。
+ *
+ * `candidateId` 现在只在产出草稿时存在。这些测试都在验证「有候选之后的流程」，
+ * 所以断言它必须存在 —— 用 `!` 抹掉类型会让「其实没有候选」变成更远处的奇怪失败。
+ */
+function candidateOf(generated: { candidateId?: string; outcome: string }): string {
+  if (generated.candidateId === undefined) {
+    throw new Error(`这条测试要求一次成功生成，实际结果是 ${generated.outcome}`)
+  }
+  return generated.candidateId
+}
+
 test('a snapshot with only a display name is not a stable author', () => {
   const named = {
     platform: 'tieba' as const,
@@ -153,10 +166,10 @@ test('publishing is refused when the target is identified only by a nickname', a
 
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: candidateOf(generated), config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateOf(generated),
       approvedText: generated.text,
     })
 
@@ -176,10 +189,10 @@ test('publishing still works when the target carries a stable id', async () => {
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: candidateOf(generated), config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateOf(generated),
       approvedText: generated.text,
     })
     assert.equal(report.ok, true, `有稳定 ID 时应该能发表：${report.message}`)
@@ -200,10 +213,10 @@ test('the per-thread cap is counted from the ledger, so expiry cannot reset it',
     const generated = await runGeneration(first.runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(first.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: first.runtime.config })
+    await grantApproval(first.runtime.store, { sessionId: analysis.sessionId, candidateId: candidateOf(generated), config: first.runtime.config })
     const sent = await runPublish(first.runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateOf(generated),
       approvedText: generated.text,
     })
     assert.equal(sent.ok, true, `首次发表应该成功：${sent.message}`)
@@ -234,10 +247,10 @@ test('the per-thread cap is counted from the ledger, so expiry cannot reset it',
     const otherGen = await runGeneration(second.runtime, { sessionId: other.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(second.runtime.store, { sessionId: other.sessionId, candidateId: otherGen.candidateId, config: second.runtime.config })
+    await grantApproval(second.runtime.store, { sessionId: other.sessionId, candidateId: candidateOf(otherGen), config: second.runtime.config })
     const blocked = await runPublish(second.runtime, {
       sessionId: other.sessionId,
-      candidateId: otherGen.candidateId,
+      candidateId: candidateOf(otherGen),
       approvedText: otherGen.text,
     })
 
@@ -257,10 +270,10 @@ test('the cap for one thread does not block another thread', async () => {
     const gen = await runGeneration(rig.runtime, { sessionId: first.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(rig.runtime.store, { sessionId: first.sessionId, candidateId: gen.candidateId, config: rig.runtime.config })
+    await grantApproval(rig.runtime.store, { sessionId: first.sessionId, candidateId: candidateOf(gen), config: rig.runtime.config })
     const sent = await runPublish(rig.runtime, {
       sessionId: first.sessionId,
-      candidateId: gen.candidateId,
+      candidateId: candidateOf(gen),
       approvedText: gen.text,
     })
     assert.equal(sent.ok, true, `首次发表应该成功：${sent.message}`)
@@ -281,10 +294,10 @@ test('the cap for one thread does not block another thread', async () => {
     const otherGen = await runGeneration(otherRuntime, { sessionId: otherAnalysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(otherRuntime.store, { sessionId: otherAnalysis.sessionId, candidateId: otherGen.candidateId, config: otherRuntime.config })
+    await grantApproval(otherRuntime.store, { sessionId: otherAnalysis.sessionId, candidateId: candidateOf(otherGen), config: otherRuntime.config })
     const otherSent = await runPublish(otherRuntime, {
       sessionId: otherAnalysis.sessionId,
-      candidateId: otherGen.candidateId,
+      candidateId: candidateOf(otherGen),
       approvedText: otherGen.text,
     })
 
@@ -310,10 +323,10 @@ test('an unresolved attempt occupies a thread slot', async () => {
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: candidateOf(generated), config: rig.runtime.config })
     const report = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateOf(generated),
       approvedText: generated.text,
     })
 

@@ -18,7 +18,7 @@ import { DEFAULT_CONFIG, resolveConfig } from '../lib/config.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
 import { NO_MARKER_REASON, readAuthFromHtml } from '../lib/platforms/tieba/adapter.js'
-import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
+import { FakeAdapter, threePartyThread, grantApproval , candidateIdOf} from './helpers.ts'
 
 const TRIGGER = 'n7'
 
@@ -77,7 +77,7 @@ async function prepare(rig: ReturnType<typeof makeRig>): Promise<{ sessionId: st
   const data = threePartyThread({ authorSource: 'wap_inline' })
   const analysis = await runAnalysis(rig.runtime, { url: data.thread.url, postId: TRIGGER })
   const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
-  return { sessionId: analysis.sessionId, candidateId: generated.candidateId, text: generated.text }
+  return { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), text: generated.text }
 }
 
 test('a read-back that matches is reported as verified', async () => {

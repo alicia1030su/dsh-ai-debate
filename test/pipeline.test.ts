@@ -19,7 +19,7 @@ import { isAllowedOwner, describeFailure, healthCheck, getSession, stopSession }
 import { ScriptedLlmClient, LlmError } from '../lib/llm.js'
 import { PlatformError } from '../lib/types.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
-import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
+import { candidateIdOf, FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 /** Build a runtime over a temporary store and a fake adapter. */
 function makeRuntime(input: {
@@ -156,10 +156,10 @@ test('the full pipeline produces a publishable candidate', async () => {
 
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
     assert.equal(report.ok, true, `发表被拒绝：${report.errorCode ?? ''} ${report.message}`)
@@ -352,10 +352,10 @@ test('stopping a session is terminal and blocks publishing', async () => {
 
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
     assert.equal(report.ok, false)
@@ -686,7 +686,7 @@ test('generation records a target snapshot and a candidate version', async () =>
     const analysis = await runAnalysis(runtime, { url: fixture.thread.url, postId: 'n7' })
     const generated = await runGeneration(runtime, { sessionId: analysis.sessionId })
     const session = (await getSession(runtime, analysis.sessionId)).session
-    const candidate = session.candidates.find((row) => row.replyId === generated.candidateId)!
+    const candidate = session.candidates.find((row) => row.replyId === candidateIdOf(generated))!
 
     assert.ok(candidate.targetSnapshot, 'every publishable candidate carries a snapshot')
     assert.equal(candidate.targetSnapshot!.targetPostId, candidate.targetPostId)

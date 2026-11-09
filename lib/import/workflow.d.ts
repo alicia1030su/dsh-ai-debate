@@ -28,6 +28,7 @@ import type { CollectedThread } from '../collector.js';
 import type { Dispute } from '../analyzer.js';
 import { type PersonaConfig, type PersonaStyle } from '../persona.js';
 import { type ArgumentStrategyId } from '../strategy.js';
+import { type GenerationOutcome } from '../outcome.js';
 import type { ResolvedConfig } from '../config.js';
 import type { LlmClient } from '../llm.js';
 import type { DebateStore, StoredManualImport, StoredSession } from '../store.js';
@@ -52,6 +53,13 @@ export interface StepResult<T> {
     readonly reason?: string;
     /** 用户能做的事，按顺序。失败时通常非空。 */
     readonly next?: readonly string[];
+    /**
+     * 生成步骤的结果分类（v0.2.39 §3.1）。只有 `generate` 会填。
+     *
+     * 失败也要带：`needs_more_context` 与 `technical_failure` 都是 `ok: false`，但一个
+     * 该引导用户补材料，一个该引导重试。没有这个字段，页面只能二选一地猜。
+     */
+    readonly outcome?: GenerationOutcome;
 }
 /**
  * 四种人格，供页面选择。
@@ -177,8 +185,17 @@ export interface ManualGenerateInput {
     readonly llm: () => LlmClient;
     readonly signal?: AbortSignal;
     readonly progress?: (message: string) => void;
+    /**
+     * 用户是否明确点了「生成」。
+     *
+     * 为真时，模型说「材料不足」不会被评为 `unjustified_refusal` —— 详见 `outcome.ts`。
+     * 页面走的就是这条路径；后台批处理不传。
+     */
+    readonly forceAttempt?: boolean;
 }
 export interface ManualGenerateOutput {
+    /** 本次生成属于哪一类结果（v0.2.39 §3.1）。 */
+    readonly outcome: GenerationOutcome;
     /** 程序选出的论证打法，连同依据（v0.2.38）。 */
     readonly argumentStrategy?: {
         readonly id: string;
@@ -205,6 +222,20 @@ export interface ManualGenerateOutput {
 }
 /**
  * 为导入的会话生成候选。
+ *
+ * ## v0.2.39：`input.forceAttempt` 把「材料够不够」的判断交回给模型
+ *
+ * `classifyOutcome` 用「简报里有没有可打的论据」判「该不该拒绝」。这个判据是**保守的**，
+ * 它只看数量，不看内容 —— 于是「对方说了一句『方案我贴了』」也算一条论据，而模型完全
+ * 可以合理地答「这句话支撑不了任何具体主张」。第一次真实采集里，q06 与 q19 就是这样被
+ * 判成了缺陷（`unjustified_refusal`），而模型的理由其实站得住。
+ *
+ * 用户从页面点「生成候选回复」时，他**明确表达了意图**：先试着写一条。这时把「材料够不够」
+ * 的最终判断交给模型，比由计数规则替他决定更合适 —— 模型拒绝时会给出具体缺口，而那个
+ * 缺口会原样回到页面上。
+ *
+ * 这条开关不改变安全边界：拒绝仍然不落候选，违规仍然拦下，目标仍然校验。它只改变
+ * 「模型说材料不够」这一条被判成什么。
  *
  * ## 与 `runGeneration` 的关系
  *

@@ -160,6 +160,14 @@ test('白名单目录里出现真凭据形状时打包直接失败', () => {
     writeFileSync(join(dir, 'src', 'index.ts'), 'export const name = "fixture"\n', 'utf8')
     mkdirSync(join(dir, 'scripts'), { recursive: true })
     writeFileSync(join(dir, 'scripts', 'source-zip.mjs'), readFileSync(PACKER), 'utf8')
+    // v0.2.39：打包器从 `lib/git-objects.mjs` 读提交内容，这份模块也要一起复制。
+    // 临时目录没有 Git 仓库，于是走工作树回落路径 —— 正是这条测试要验证的场景。
+    mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true })
+    writeFileSync(
+      join(dir, 'scripts', 'lib', 'git-objects.mjs'),
+      readFileSync(join(REPO, 'scripts', 'lib', 'git-objects.mjs')),
+      'utf8',
+    )
 
     // 放在 src/ 下面 —— 这个目录是白名单，所以「文件名过滤」救不了它，
     // 只有字节级扫描能拦住。这正是 v0.2.15 加的那一层。

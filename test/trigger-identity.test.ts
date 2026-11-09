@@ -34,7 +34,7 @@ import {
 import { DEFAULT_CONFIG, resolveConfig } from '../lib/config.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { runAnalysis, runGeneration, runPublish, type Runtime } from '../lib/runtime.js'
-import { FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
+import { candidateIdOf, FakeAdapter, threePartyThread, grantApproval } from './helpers.ts'
 
 const THREAD_ID = '900000000000'
 const OWNER_ID = '111111'
@@ -358,10 +358,10 @@ test('P0: after a nickname change the confirmed publish is not re-opened', async
     const generated = await runGeneration(rig.runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: rig.runtime.config })
+    await grantApproval(rig.runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: rig.runtime.config })
     const sent = await runPublish(rig.runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
     assert.equal(sent.ok, true, `首次发表应该成功：${sent.message}`)
@@ -609,14 +609,14 @@ test('P1: pruning interacts safely with a concurrent publish write', async () =>
     // the test would be measuring a different interleaving than the one it names.
     await grantApproval(rig.runtime.store, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       config: rig.runtime.config,
     })
     const [, report] = await Promise.all([
       rig.store.mutate((store) => ({ ...store, sessions: [...store.sessions] })),
       runPublish(rig.runtime, {
         sessionId: analysis.sessionId,
-        candidateId: generated.candidateId,
+        candidateId: candidateIdOf(generated),
         approvedText: generated.text,
       }),
     ])

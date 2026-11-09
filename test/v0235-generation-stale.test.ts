@@ -24,7 +24,7 @@ import { GenerationGuard } from '../lib/generation-guard.js'
 import { ScriptedLlmClient } from '../lib/llm.js'
 import { getSession, runAnalysis, runGeneration, type Runtime } from '../lib/runtime.js'
 import { DebateStore } from '../lib/store.js'
-import { FakeAdapter, threePartyThread } from './helpers.ts'
+import { FakeAdapter, candidateIdOf, threePartyThread } from './helpers.ts'
 
 /** The JSON contract a scripted model answers with, aimed at a given post. */
 function answer(target: string, reply: string): string {
@@ -131,7 +131,7 @@ test('换目标后旧响应被丢弃，会话里只留新目标的候选', async
     while (call === 0) await new Promise((resolve) => setTimeout(resolve, 0))
 
     const fresh = await runGeneration(runtime, { sessionId: analysis.sessionId, targetPostId: 'n5' })
-    assert.equal(fresh.candidateId.length > 0, true)
+    assert.equal(candidateIdOf(fresh).length > 0, true)
 
     releaseFirst?.()
     const discarded = await stale.then(

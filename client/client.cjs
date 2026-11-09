@@ -351,6 +351,10 @@ window.__ModuleLoader__.load({
       approveTitle: '发表授权',
       // v0.2.30：离线讨论导入与工作流。
       manualTitle: '离线讨论导入',
+      firstRunTitle: '第一次用，按这三步走：',
+      firstRunStepModel: '在「设置 → 模型」里确认有可用模型（点一次「检查宿主模型」或「测试模型连接」）。没配过就选「自己配置的模型接口」，填地址、模型名和 Key。',
+      firstRunStepImport: '把一段讨论粘到下面的框里：第一行「作者：内容」是原帖，单独一行 ---，之后每条评论一行「作者：内容」。',
+      firstRunStepGenerate: '点「预览解析结果」确认读对了，再「确认导入并分析」；然后在评论列表里选一条目标，点「生成候选回复」。',
       manualIntro:
         '官方接口读不到时（未登录、认证或服务未开通），可以把一段讨论粘进来，' +
         '用同一套分析器还原争论并起草回复。内容来自剪贴板，未经平台核验。',
@@ -379,6 +383,11 @@ window.__ModuleLoader__.load({
       manualTargetPick: '要回复哪一条',
       manualPersonaPick: '人格',
       manualGenerate: '生成候选回复',
+      outcome_valid_draft: '已生成候选',
+      outcome_needs_more_context: '材料不足，模型要求补充',
+      outcome_unjustified_refusal: '材料够，但模型拒绝回应',
+      outcome_invalid_draft: '生成了，但未通过检查',
+      outcome_technical_failure: '技术故障，没有生成结果',
       manualCompareAll: '比较四种人格（4 次模型调用）',
       manualStrategyAuto: '论证打法：自动（按证据选）',
       manualCompareHint: '会连续发四次模型请求，每一次都计入你的模型额度。取消后已发出的那一次仍会完成，但结果不会写进会话。',
@@ -621,6 +630,8 @@ window.__ModuleLoader__.load({
       dshVersion: 'DSH 版本',
       pluginVersion: '插件版本',
       storePath: '状态文件目录',
+      storePathSource: '这个路径由谁决定',
+      storePathNote: '会话存在这个目录里。换一个 DSH profile 时，这里可能指向别处 —— 历史会话没有消失，只是这个 profile 指向另一个目录。插件不会去扫描其他 profile 的会话。',
       sessions: '会话',
       sessionsDetail: '总计 {total}，进行中 {active}，待确认 {awaitingConfirmation}，已发表 {published}',
       ledger: '发表台账',
@@ -867,6 +878,10 @@ window.__ModuleLoader__.load({
       approveTitle: 'Publishing authorisation',
       // v0.2.30: offline discussion import and workflow.
       manualTitle: 'Offline discussion import',
+      firstRunTitle: 'First time? Three steps:',
+      firstRunStepModel: 'Check that a model is available under Settings → Model (run "Check host models" or "Test model connection"). If none, pick "Your own model endpoint" and fill in URL, model name and key.',
+      firstRunStepImport: 'Paste a discussion below: first line "Author: text" is the original post, then a line with ---, then one "Author: text" per comment.',
+      firstRunStepGenerate: 'Click "Preview parse" to confirm it read correctly, then "Confirm import and analyse"; pick a target comment and click "Generate candidate reply".',
       manualIntro:
         'When the official API is unavailable (not logged in, certification or service inactive), paste a discussion here. ' +
         'The same analyzer reconstructs the dispute. Content comes from your clipboard and is not verified against the platform.',
@@ -896,6 +911,11 @@ window.__ModuleLoader__.load({
       manualTargetPick: 'Which comment to answer',
       manualPersonaPick: 'Persona',
       manualGenerate: 'Generate candidate',
+      outcome_valid_draft: 'Draft generated',
+      outcome_needs_more_context: 'Not enough material — the model asked for more',
+      outcome_unjustified_refusal: 'Material was sufficient, but the model refused',
+      outcome_invalid_draft: 'Generated, but it failed the checks',
+      outcome_technical_failure: 'Technical failure — nothing was generated',
       manualCompareAll: 'Compare all four personas (4 model calls)',
       manualStrategyAuto: 'Argument strategy: auto (pick from evidence)',
       manualCompareHint: 'This sends four model requests in a row; each one counts against your model quota. Cancelling stops the next ones; the one already sent still finishes, and its result is not written to the session.',
@@ -1138,6 +1158,8 @@ window.__ModuleLoader__.load({
       dshVersion: 'DSH version',
       pluginVersion: 'Plugin version',
       storePath: 'State directory',
+      storePathSource: 'Chosen by',
+      storePathNote: 'Sessions live in this directory. A different DSH profile may point somewhere else — your history is not gone, this profile just looks elsewhere. The plugin never scans other profiles.',
       sessions: 'Sessions',
       sessionsDetail: 'total {total}, active {active}, awaiting {awaitingConfirmation}, published {published}',
       ledger: 'Publish ledger',
@@ -4536,6 +4558,14 @@ window.__ModuleLoader__.load({
       const [fileHint, setFileHint] = useState('')
       const [preview, setPreview] = useState(null)
       const [error, setError] = useState('')
+      /**
+       * 生成结果的结构化提示（v0.2.39 §3.1）。
+       *
+       * `error` 只有一个红色样式，而「材料不足」和「技术故障」不是同一种颜色的事：
+       * 前者是模型在守规矩，后者是链路坏了。把两句话画成同一个红条，用户只会学会
+       * 「看到红条就重试」，而重试对「材料不足」永远没用。
+       */
+      const [notice, setNotice] = useState(null)
       const [draft, setDraft] = useState('')
       const [copied, setCopied] = useState('')
       /**
@@ -4600,8 +4630,15 @@ window.__ModuleLoader__.load({
       const run = async (action, payload) => {
         setError('')
         setCopied('')
+        setNotice(null)
         const answer = await store.runManualAction(action, payload)
-        if (answer && answer.ok === false) {
+        /**
+         * 带 outcome 的失败不走通用红条：它有自己的说法（见 `notice` 的渲染）。
+         *
+         * 判据是 `outcome` 存在，不是 `action` 的名字 —— 将来别的动作带结果类型时，
+         * 这里不用跟着改。
+         */
+        if (answer && answer.ok === false && answer.outcome === undefined) {
           setError([answer.reason || '', ...(answer.next || [])].filter(Boolean).join(' ｜ '))
         }
         return answer
@@ -4758,9 +4795,35 @@ window.__ModuleLoader__.load({
         ),
       )
 
+      /**
+       * 首次使用清单（v0.2.39 §4.1）。
+       *
+       * ## 为什么把三步写在最上面
+       *
+       * 这一版之前，新用户面对的是：一个文本框、一个文件名、一个「预览」按钮，以及
+       * 一个藏在设置里的模型配置。哪一步不做会卡住、卡住之后去哪儿改，全靠自己猜。
+       *
+       * 这三步只陈述**顺序**，不假装知道用户配没配模型 —— 页面拿不到「宿主有没有可用
+       * 模型」这个事实（那要发一次探测），所以它说的是「如果你还没配」。把不确定的事
+       * 写成确定的提醒，比不提醒更坏。
+       */
+      const firstRun = h(
+        'div',
+        { className: 'dsd-hint' },
+        h('strong', null, t('firstRunTitle')),
+        h(
+          'ol',
+          { style: { margin: '4px 0 0 18px', padding: 0 } },
+          h('li', null, t('firstRunStepModel')),
+          h('li', null, t('firstRunStepImport')),
+          h('li', null, t('firstRunStepGenerate')),
+        ),
+      )
+
       const form = h(
         'div',
         { className: 'dsd-sect' },
+        firstRun,
         h('p', { className: 'dsd-hint' }, t('manualIntro')),
         h('p', { className: 'dsd-hint' }, t('manualKindHint')),
         kindPicker,
@@ -5219,6 +5282,21 @@ window.__ModuleLoader__.load({
                         ...(strategy === '' ? {} : { strategy }),
                         ...(targetPostId.trim() === '' ? {} : { targetPostId: targetPostId.trim() }),
                       })
+                      /**
+                       * 按结果类型分别处理（v0.2.39 §3.1）。
+                       *
+                       * `ok === false` 也可能是**正确**的结果（材料不足时模型拒绝）。
+                       * 所以这里不把 ok 当唯一判据：先看 outcome，再决定给什么样的提示。
+                       */
+                      if (answer && answer.outcome !== undefined) {
+                        setNotice({
+                          outcome: answer.outcome,
+                          text: answer.outcome === 'valid_draft'
+                            ? ''
+                            : String(answer.reason || ''),
+                          next: answer.next || [],
+                        })
+                      }
                       if (answer && answer.ok === true) {
                         setDraft(answer.text || '')
                         await store.loadWorkbench(sessionId)
@@ -5602,11 +5680,42 @@ window.__ModuleLoader__.load({
               ),
             )
 
+      /**
+       * 生成结果的提示条（v0.2.39 §3.1）。
+       *
+       * 三种「没有候选」的原因，三种说法：
+       *
+       * - `needs_more_context`：模型在守规矩，引导去补材料。用普通提示样式，不用红色 ——
+       *   红色会让用户以为自己做错了什么。
+       * - `unjustified_refusal`：材料够却拒绝，这是缺陷，标红并给出换模型/换打法的出路。
+       * - `technical_failure`：链路坏了，标红并引导重试。
+       *
+       * 第四个分支 `invalid_draft` 有正文但没过检查，页面上已经有违规清单，这里不重复。
+       */
+      const noticeBlock =
+        notice === null || notice.outcome === 'valid_draft' || notice.text === ''
+          ? null
+          : h(
+              'div',
+              {
+                className:
+                  notice.outcome === 'needs_more_context'
+                    ? 'dsd-hint'
+                    : 'dsd-hint dsd-hint-error',
+              },
+              h('strong', null, t(`outcome_${notice.outcome}`) || notice.outcome),
+              ` —— ${notice.text}`,
+              (notice.next || []).length === 0
+                ? null
+                : h('ul', null, ...notice.next.map((line) => h('li', { key: line }, line))),
+            )
+
       return h(
         'div',
         { className: 'dsd-sect' },
         header,
         sourceLine,
+        noticeBlock,
         error === '' ? null : h('p', { className: 'dsd-hint dsd-hint-error' }, error),
         form,
         previewBlock,
@@ -6412,6 +6521,20 @@ window.__ModuleLoader__.load({
           h('dd', null, status.pluginVersion),
           h('dt', null, t('storePath')),
           h('dd', null, status.storePath),
+          /**
+           * 数据目录的来源与「换 profile 会看到什么」（v0.2.39 §6.4）。
+           *
+           * ## 为什么要把这件事说出来
+           *
+           * 历史会话存在一个由 `storeDir` 决定的目录里。换一个 DSH profile 打开同一个
+           * 插件，那个目录可能指向别处 —— 于是「我的会话全没了」。它们没消失，只是这个
+           * profile 指向另一个目录；而插件**不会**去扫描别的 profile 把会话找回来
+           * （那等于越过用户的隔离边界）。
+           *
+           * 所以这里做的是「把事实写出来」：数据在哪、是谁决定的、换 profile 时不要慌。
+           */
+          h('dt', null, t('storePathSource')),
+          h('dd', null, `${status.storeDirSource || '—'}${status.dshHome ? `（DSH_HOME=${status.dshHome}）` : ''}`),
           h('dt', null, t('sessions')),
           h('dd', null, format(t('sessionsDetail'), status.sessions)),
           h('dt', null, t('ledger')),
@@ -6421,6 +6544,7 @@ window.__ModuleLoader__.load({
           h('dt', null, t('rateLimit')),
           h('dd', null, status.rateLimit && status.rateLimit.note ? status.rateLimit.note : '—'),
         ),
+        h('p', { className: 'dsd-hint' }, t('storePathNote')),
         h('p', { className: 'dsd-sect-title', style: { marginTop: 14 } }, t('recentErrors')),
         status.recentErrors && status.recentErrors.length > 0
           ? h(
