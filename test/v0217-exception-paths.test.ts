@@ -175,6 +175,11 @@ test('白名单目录里出现真凭据形状时打包直接失败', () => {
       readFileSync(join(REPO, 'scripts', 'lib', 'fixture-allowlist.mjs')),
       'utf8',
     )
+    writeFileSync(
+      join(dir, 'scripts', 'lib', 'scan-finding.mjs'),
+      readFileSync(join(REPO, 'scripts', 'lib', 'scan-finding.mjs')),
+      'utf8',
+    )
 
     // 放在 src/ 下面 —— 这个目录是白名单，所以「文件名过滤」救不了它，
     // 只有字节级扫描能拦住。这正是 v0.2.15 加的那一层。

@@ -25,6 +25,7 @@ const REPO = join(import.meta.dirname, '..')
 const PACKER = join(REPO, 'scripts', 'source-zip.mjs')
 const GIT_OBJECTS = join(REPO, 'scripts', 'lib', 'git-objects.mjs')
 const FIXTURE_ALLOWLIST = join(REPO, 'scripts', 'lib', 'fixture-allowlist.mjs')
+const SCAN_FINDING = join(REPO, 'scripts', 'lib', 'scan-finding.mjs')
 
 /** 打包器的三份来源：脚本本身 + 两个它 import 的模块。 */
 function copyPackerInto(dir: string): void {
@@ -32,6 +33,7 @@ function copyPackerInto(dir: string): void {
   copyFileSync(PACKER, join(dir, 'scripts', 'source-zip.mjs'))
   copyFileSync(GIT_OBJECTS, join(dir, 'scripts', 'lib', 'git-objects.mjs'))
   copyFileSync(FIXTURE_ALLOWLIST, join(dir, 'scripts', 'lib', 'fixture-allowlist.mjs'))
+  copyFileSync(SCAN_FINDING, join(dir, 'scripts', 'lib', 'scan-finding.mjs'))
 }
 
 /** 在一个隔离目录里建一个真实的 Git 仓库，内容与断言无关，结构与真实仓库一致。 */

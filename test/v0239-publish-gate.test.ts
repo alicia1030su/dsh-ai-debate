@@ -34,6 +34,7 @@ const REPO = join(import.meta.dirname, '..')
 const PACKER = join(REPO, 'scripts', 'source-zip.mjs')
 const GIT_OBJECTS = join(REPO, 'scripts', 'lib', 'git-objects.mjs')
 const FIXTURE_ALLOWLIST = join(REPO, 'scripts', 'lib', 'fixture-allowlist.mjs')
+const SCAN_FINDING = join(REPO, 'scripts', 'lib', 'scan-finding.mjs')
 
 /** 把待测打包器与它的两个依赖装进一个隔离目录。 */
 function installPacker(dir: string): void {
@@ -41,6 +42,7 @@ function installPacker(dir: string): void {
   copyFileSync(PACKER, join(dir, 'scripts', 'source-zip.mjs'))
   copyFileSync(GIT_OBJECTS, join(dir, 'scripts', 'lib', 'git-objects.mjs'))
   copyFileSync(FIXTURE_ALLOWLIST, join(dir, 'scripts', 'lib', 'fixture-allowlist.mjs'))
+  copyFileSync(SCAN_FINDING, join(dir, 'scripts', 'lib', 'scan-finding.mjs'))
 }
 
 /** 一个真实的 Git 仓库：打包器的发布模式要求它。 */
@@ -303,6 +305,70 @@ test('扫描：独立扫描器也不再对 test/ 整目录放行', () => {
   } finally {
     rmSync(join(archive, '..'), { recursive: true, force: true })
   }
+})
+
+test('审计：发布白名单与禁止清单没有被意外扩大', () => {
+  /**
+   * 这张快照是「发布什么」的唯一判据。任何一条新增都必须同时改这里 —— 改测试的人会被迫
+   * 回答一个问题：这个目录/文件为什么可以公开？这正是复审要的「白名单没有意外扩大」。
+   *
+   * 只钉「成员」，不钉顺序：顺序不影响判定，钉住会让无关的整理也变红。
+   */
+  const source = readFileSync(PACKER, 'utf8')
+  const members = (name: string): string[] => {
+    const block = new RegExp(`const ${name} = new Set\\(\\[([\\s\\S]*?)\\]\\)`).exec(source)
+    assert.ok(block !== null, `找不到 ${name}`)
+    return block[1]!
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("'"))
+      .map((line) => line.replace(/^'/, '').replace(/',?$/, ''))
+      .sort()
+  }
+
+  assert.deepEqual(members('ALLOWED_DIRS'), ['.github', 'client', 'docs', 'scripts', 'src', 'templates', 'test'])
+  assert.deepEqual(
+    members('ALLOWED_FILES'),
+    [
+      '.editorconfig',
+      '.env.example',
+      '.gitattributes',
+      '.gitignore',
+      '.npmignore',
+      'AGENTS.md',
+      'CHANGELOG.md',
+      'LICENSE',
+      'README.md',
+      'SECURITY.md',
+      'cordis.patch.yml',
+      'package.json',
+      'pnpm-lock.yaml',
+      'test-typecheck-baseline.json',
+      'tsconfig.json',
+      'tsconfig.test.json',
+    ],
+  )
+  assert.deepEqual(members('TRACKED_FIXTURE_EXCEPTIONS'), [
+    'test/fixtures/fake-weibo-pkg/node_modules/@weibo-ai/weibo-cli/dist/index.js',
+    'test/fixtures/fake-weibo-pkg/node_modules/@weibo-ai/weibo-cli/package.json',
+  ])
+})
+
+test('审计：授予批准只发生在三个显式操作里，生成链路没有第四个入口', () => {
+  const runtime = readFileSync(join(REPO, 'src', 'runtime.ts'), 'utf8')
+  assert.doesNotMatch(runtime, /approved\s*:\s*true/, 'runtime.ts 不得授予批准')
+
+  // 逐文件确认：这三个文件承载「主人点确认 / 导入链路确认 / 发表成功回写」。
+  // 多出第四个文件，说明有人开了新的批准路径，必须重新审核。
+  const grants = execFileSync('git', ['grep', '-l', 'approved: true', '--', 'src'], {
+    cwd: REPO,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .sort()
+  assert.deepEqual(grants, ['src/import/workflow.ts', 'src/index.ts', 'src/publisher.ts'])
 })
 
 test('扫描：例外表必须仍能对上真实文件（没有过期条目，也没有漏登记）', async () => {

@@ -67,6 +67,7 @@ import { deflateRawSync } from 'node:zlib'
 
 import { isRegisteredFakeLiteral } from './lib/fixture-allowlist.mjs'
 import { readBlobs } from './lib/git-objects.mjs'
+import { contentFinding, formatFinding } from './lib/scan-finding.mjs'
 
 const root = process.cwd()
 
@@ -541,6 +542,12 @@ const SECRET_PATTERNS = [
  * 现在只有一个判据：`path` 与**逐字**登记的假值相等。登记表在
  * `scripts/lib/fixture-allowlist.mjs`，由测试逐条核对「仍然出现在那个文件里」。
  * 换一把钥匙、换一个文件、同一文件里多一把，都不匹配。
+ *
+ * ## 命中之后不打印原文
+ *
+ * 这里的 `findings` 只记路径、规则名与行/列号。原来它带一个 `sample`（整行前 120 字），
+ * 然后被拼进抛出的异常 —— 于是「发现泄露」这一步自己把泄露又写进了 CI 日志。
+ * 现在的形状由 `scripts/lib/scan-finding.mjs` 固定：调用方没有参数能带出命中内容。
  */
 const findings = []
 for (const rel of files) {
@@ -548,30 +555,51 @@ for (const rel of files) {
   // differ, the scan would be certifying something other than the artifact.
   const raw = contents.get(rel)
   if (raw === undefined) throw new Error(`内部不一致：${rel} 有名字没有内容`)
-  // Binary files cannot carry a readable secret and scanning them is noise.
-  if (raw.includes(0)) continue
+  /**
+   * 二进制也要扫。
+   *
+   * 原来 `if (raw.includes(0)) continue` 直接跳过：一张 PNG 的元数据、一段压缩数据的
+   * 偶然字节里同样可能藏着 ASCII 形状的令牌。跳过的理由（「读不出可读文本」）站不住 ——
+   * 模式都是 ASCII，按 UTF-8 解码后的字节流仍然能匹配。所以二进制走同一条扫描，只是
+   * 位置用字节偏移表示，因为「第几行」对它没有意义。
+   */
+  const binary = raw.includes(0)
   const text = raw.toString('utf8')
-  const lines = text.split(/\r?\n/)
 
   for (const { re, label } of SECRET_PATTERNS) {
     if (!re.test(text)) continue
     // One pattern can hit more than once on a line. Each hit is judged on its own, so a
     // registered fake at the start of a line cannot carry an unregistered key behind it.
     const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`)
-    for (const line of lines) {
+
+    if (binary) {
+      for (const match of text.matchAll(global)) {
+        // 二进制文件不会有登记在案的假数据；传空行只用于接口一致。
+        if (isRegisteredFakeLiteral(rel, match[0], '')) continue
+        findings.push(contentFinding({ path: rel, rule: label, offset: match.index }))
+      }
+      continue
+    }
+
+    text.split(/\r?\n/).forEach((line, index) => {
       for (const match of line.matchAll(global)) {
         if (isRegisteredFakeLiteral(rel, match[0], line)) continue
-        findings.push({ path: rel, label, sample: line.trim().slice(0, 120) })
+        findings.push(
+          contentFinding({
+            path: rel,
+            rule: label,
+            line: index + 1,
+            column: (match.index ?? 0) + 1,
+          }),
+        )
       }
-    }
+    })
   }
 }
 
 if (findings.length > 0) {
-  const detail = findings
-    .map((f) => `  ${f.path} — ${f.label}\n    ${f.sample}`)
-    .join('\n')
-  throw new Error(`源码包包含疑似凭据，构建已失败：\n${detail}`)
+  const detail = findings.map((finding) => `  ${formatFinding(finding)} — ${finding.rule}`).join('\n')
+  throw new Error(`源码包包含疑似凭据，构建已失败（只显示位置，不显示内容）：\n${detail}`)
 }
 
 // --- 4. Final gate: re-read the list ---------------------------------------

@@ -142,6 +142,11 @@ function makeDirtyRepo() {
     readFileSync(join(dirname(PACKER), 'lib', 'fixture-allowlist.mjs')),
     'utf8',
   )
+  writeFileSync(
+    join(dir, 'scripts', 'lib', 'scan-finding.mjs'),
+    readFileSync(join(dirname(PACKER), 'lib', 'scan-finding.mjs')),
+    'utf8',
+  )
 
   return dir
 }
