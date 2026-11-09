@@ -14,6 +14,8 @@
  * 2. `version.mjs check` 在版本是预发布时，额外要求工作流里有 `--prerelease`。
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import {
@@ -23,6 +25,8 @@ import {
   readmeVersions,
   rewriteReadme,
 } from '../scripts/lib/version-core.mjs'
+
+const REPO = join(import.meta.dirname, '..')
 
 test('版本解析：三段数字与预发布都认，其它一律 null', () => {
   assert.deepEqual(parseVersion('0.3.0'), {
@@ -84,10 +88,57 @@ test('README 改写：预发布里的点要被转义，不能当通配符', () =
   assert.match(after, /0\.3\.0-rcX1/, '不该把 rc.1 里的点当通配符去改别的字符')
 })
 
-/**
- * 工作流那一条（`gh release create` 必须按版本号条件带 `--prerelease`）**不在这里**。
- *
- * 它断言的是 `.github/workflows/release.yml` 的内容，而那是 `workflow` 敏感路径 ——
- * 断言与改动必须在同一个 PR 里，否则这条测试要么先红着进 main，要么逼着 CI 红一次。
- * 所以它跟工作流改动一起，放在单独的敏感 PR 中。
- */
+test('工作流：发布步骤按版本号条件带 --prerelease（否则 rc 会被打成 Latest）', () => {
+  const workflow = readFileSync(join(REPO, '.github', 'workflows', 'release.yml'), 'utf8')
+  assert.ok(
+    workflow.includes('--prerelease'),
+    'release.yml 的 gh release create 没有 --prerelease；发预发布版本会被标成 Latest 正式版',
+  )
+
+  // 不能无条件加：正式版必须是正式 Release，不该被标成 Pre-release。
+  // 判据必须是版本号里的后缀，而不是分支名、时间或环境变量。
+  assert.match(workflow, /PRERELEASE_FLAG/, '需要有一个按条件取值的标志变量')
+  assert.match(
+    workflow,
+    /\^\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+-\[0-9A-Za-z\.\]\+\$/,
+    '判定必须基于版本号里的预发布后缀',
+  )
+
+  /**
+   * 最要紧的一条：**标志变量必须真的出现在 `gh release create` 的命令行里**。
+   *
+   * 只断言「文件里有 --prerelease 这个词」是不够的 —— 那段变量算出来却没用上，
+   * 测试照样绿，rc 照样被标成 Latest。这里按命令块检查：`gh release create` 到
+   * 第一个非续行结束之间的文本，必须包含 `$PRERELEASE_FLAG`。
+   */
+  // 注意：`gh release create` 这个词在注释里也出现过两次，所以必须找**真正的命令行**
+  // ——它以 `gh release create "v` 开头（后面接 tag）。第一版找的是第一次出现，
+  // 落在注释上，于是取出来的「命令块」是空的，断言失败但原因完全不对。
+  const commandIndex = workflow.indexOf('gh release create "v')
+  assert.ok(commandIndex !== -1, '找不到 gh release create 的实际命令行')
+  const commandBlock = workflow.slice(commandIndex).split('\n').reduce(
+    (acc: { lines: string[]; done: boolean }, line: string) => {
+      if (acc.done) return acc
+      acc.lines.push(line)
+      if (!line.trimEnd().endsWith('\\')) acc.done = true
+      return acc
+    },
+    { lines: [], done: false },
+  ).lines.join('\n')
+  assert.match(
+    commandBlock,
+    /\$PRERELEASE_FLAG/,
+    'gh release create 的命令行必须带上这个标志，算了不用等于没算',
+  )
+
+  /**
+   * 三态而不是两态：`0.3`、`0.3.0.1` 这类写坏的版本号必须**拒绝发布**，
+   * 不能被归进「正式版」然后以 Latest 的身份发出去。
+   */
+  assert.match(
+    workflow,
+    /elif \[\[ "\$VERSION" =~ \^\[0-9\]\+\\\.\[0-9\]\+\\\.\[0-9\]\+\$ \]\]/,
+    '正式版必须是显式的第二个分支，剩下的才走拒绝',
+  )
+  assert.match(workflow, /拒绝发布/, '非法版本号必须让这一步失败')
+})
