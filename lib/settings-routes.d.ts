@@ -428,6 +428,14 @@ export interface SettingsRouteDeps {
             readonly strategy?: string;
         }): Promise<{
             readonly ok: boolean;
+            /**
+             * 本次生成的结果类型（v0.2.39 §3.1）。
+             *
+             * 页面据此决定说什么：`needs_more_context` 要引导去补材料，
+             * `technical_failure` 要引导重试，`unjustified_refusal` 要提示换模型或换打法。
+             * 三者都不该显示成同一句「生成失败」。
+             */
+            readonly outcome?: string;
             readonly candidateId?: string;
             readonly text?: string;
             readonly reason?: string;

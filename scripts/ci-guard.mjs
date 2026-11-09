@@ -235,6 +235,28 @@ if (existsSync(sourceZipPacker)) {
   } else if (!/BUILD_OUTPUT_DIRS/.test(packer)) {
     fail('source-zip.mjs 把 lib/ 当成普通源码目录整包放行；它应当只发布 .js/.d.ts/.map')
   }
+
+  /**
+   * 正式发布路径必须 fail-closed（v0.2.39 复审 §1）。
+   *
+   * 打包器保留了一个显式的本地模式（`--allow-working-tree`），用于安全测试夹具与
+   * 「从拷贝出来的目录看一眼」。它绝不能被发布流程打开 —— 那会让「打的是哪个提交」
+   * 重新变成一个没人能回答的问题。
+   *
+   * 行为层由 `test/v0239-publish-gate.test.ts` 钉住（无 Git、无效 rev、空 rev 都必须失败）；
+   * 这里检查的是另一半：两个工作流都没有传那个开关，且打包器仍然保有这套判断。
+   */
+  if (!/--allow-working-tree/.test(packer) || !/insideGitWorkTree/.test(packer)) {
+    fail('source-zip.mjs 的发布模式判断被拆掉了：必须区分「没有 Git」与「这个 rev 解析不了」')
+  }
+  for (const workflow of ['ci.yml', 'release.yml']) {
+    const file = join(root, '.github', 'workflows', workflow)
+    if (!existsSync(file)) continue
+    const text = readFileSync(file, 'utf8')
+    if (text.includes('--allow-working-tree')) {
+      fail(`${workflow} 使用了 --allow-working-tree：发布流程不得打工作树`)
+    }
+  }
 }
 
 if (existsSync(pkgPath)) {
@@ -290,15 +312,41 @@ if (existsSync(pkgPath)) {
       fail(`源码包的 lib/ 里有非编译产物：${unexpected.slice(0, 5).join(', ')}`)
     }
 
-    // The archive is public by definition; these must never be inside it.
+    /**
+     * The archive is public by definition; these must never be inside it.
+     *
+     * ## 唯一的两条例外（v0.2.39 §5.2）
+     *
+     * `test/fixtures/fake-weibo-pkg/node_modules/@weibo-ai/weibo-cli/` 里两个文件是**刻意入库**
+     * 的假微博 CLI：`.gitignore` 从 v0.2.33 起为它开了例外，桌面验收靠它解析入口。而打包器
+     * 的 `node_modules` 禁令让它们永远进不了源码包 —— 两条规则互相矛盾，下载者于是跑不了
+     * 依赖它的那条验收。
+     *
+     * 这里放行**两条完整路径**，不是「所有 fixture」也不是「所有 node_modules」。
+     * 出现在这份清单之外的任何 `node_modules` 路径仍然判死 —— 这条断言的价值在于它挡住的
+     * 是「一个真依赖目录被顺手打进去」，而那个场景一个例外都不该有。
+     *
+     * 这份清单故意与 `source-zip.mjs` 的 `TRACKED_FIXTURE_EXCEPTIONS` 分开写：两处都写，
+     * 才有「打包器放进了不该放的」与「守卫拦错了该放的」两个方向的检查。
+     */
+    const FIXTURE_NODE_MODULES = new Set([
+      'test/fixtures/fake-weibo-pkg/node_modules/@weibo-ai/weibo-cli/package.json',
+      'test/fixtures/fake-weibo-pkg/node_modules/@weibo-ai/weibo-cli/dist/index.js',
+    ])
     const leaked = entries.filter(
       (name) =>
-        name.split('/').includes('node_modules') ||
+        (name.split('/').includes('node_modules') && !FIXTURE_NODE_MODULES.has(name)) ||
         /(^|\/)\.env$/.test(name) ||
         /(^|\/)\.dsh(\/|$)/.test(name),
     )
     if (leaked.length > 0) {
       fail(`源码包里有不该发布的路径：${leaked.slice(0, 5).join(', ')}`)
+    }
+    // 反过来也查一次：那两个 fixture 必须在包里。只查「不该有的」会奖励一个空包。
+    for (const required of FIXTURE_NODE_MODULES) {
+      if (!entries.includes(required)) {
+        fail(`源码包缺少必需的 fixture：${required}（下载者跑不了依赖它的桌面验收）`)
+      }
     }
 
     note(`源码包 ${entries.length} 条目，含锁文件与 ${libEntries.length} 个编译产物`)

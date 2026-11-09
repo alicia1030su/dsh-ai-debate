@@ -583,6 +583,10 @@ interface CaseRecord {
   /** 模型主动要求补充信息时为 true（这不是失败，是一种诚实的结果）。 */
   readonly needsInput?: boolean
   readonly needsInputReason?: string
+  /** 五态分类（v0.2.39 §3.1）。缺省视为旧采集，按 ok 推断。 */
+  readonly outcome?: string
+  /** 拒绝或故障时，页面给用户的下一步动作。 */
+  readonly next?: readonly string[]
   readonly expect: string
 }
 
@@ -662,19 +666,32 @@ for (const item of CASES.slice(0, MAX_CASES)) {
   })
   const elapsed = Date.now() - startedAt
 
-  if (generated.ok !== true) {
+  /**
+   * 结果分类（v0.2.39 §3.1）。
+   *
+   * `ok === false` 不再等于「失败」：材料不足时模型拒绝是**正确**结果。采集器必须把它
+   * 记成 `needs_more_context` 而不是 `failureStage: 'generate'`，否则两版的「失败率」
+   * 会因为一版更谨慎而变高 —— 那不是质量指标，是口径错误。
+   */
+  const outcome = generated.outcome === undefined ? (generated.ok === true ? 'valid_draft' : 'technical_failure') : String(generated.outcome)
+  if (outcome !== 'valid_draft' && outcome !== 'invalid_draft') {
     records.push({
       ...base,
-      failureStage: 'generate',
-      reason: String(generated.reason ?? generated.__unparsable ?? '生成失败但没有说明原因'),
+      outcome,
+      ...(generated.reason === undefined ? {} : { reason: String(generated.reason) }),
+      ...(Array.isArray(generated.next) ? { next: generated.next.map((line) => String(line)) } : {}),
+      ...(generated.needsInputReason === undefined
+        ? {}
+        : { needsInputReason: String(generated.needsInputReason) }),
       elapsedMs: elapsed,
     })
-    stage(`生成 ${item.id}`, 'failed', String(generated.reason ?? '').slice(0, 80))
+    stage(`生成 ${item.id}`, 'passed', `${outcome}（${elapsed} ms）`)
     continue
   }
 
   records.push({
     ...base,
+    outcome,
     text: String(generated.text ?? ''),
     ...(generated.needsInput === true ? { needsInput: true } : {}),
     ...(generated.needsInputReason === undefined

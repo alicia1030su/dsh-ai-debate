@@ -73,6 +73,7 @@ import { makeEvent, type SecurityEvent, type SecurityEventKind } from './securit
 import { MANUAL_PLATFORM } from './import/manual.js'
 import { collectedFromStored, localTargetResolver } from './import/session.js'
 import { generationGuardOf } from './generation-guard.js'
+import { classifyOutcome, OUTCOME_LABELS, type GenerationOutcome } from './outcome.js'
 
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
@@ -1007,7 +1008,17 @@ function compressionNotes(record: CompressionRecord): string[] {
 
 export interface GenerateOutput {
   readonly sessionId: string
-  readonly candidateId: string
+  /**
+   * 本次生成属于哪一类结果（v0.2.39 §3.1）。
+   *
+   * 它是**主判断**：`candidateId` 只有在 `valid_draft` / `invalid_draft` 时才存在。
+   * 调用方先看这个字段决定说什么，再看正文 —— 反过来会得到「没有正文所以报错」，
+   * 而「没有正文」本身可能是一个正确的结果。
+   */
+  readonly outcome: GenerationOutcome
+  /** 只有产出草稿时才有。`needs_more_context` 等结果没有候选。 */
+  readonly candidateId?: string
+  /** 空串表示没有正文（拒绝或故障），与 `outcome` 一致。 */
   readonly text: string
   readonly strategy: string
   /** 程序选出的论证打法（v0.2.38）；旧路径可能没有。 */
@@ -1015,6 +1026,12 @@ export interface GenerateOutput {
   readonly confidence: number
   readonly violations: readonly string[]
   readonly notes: readonly string[]
+  /**
+   * 兼容字段：等价于 `outcome === 'needs_more_context'`，保留给旧调用方。
+   *
+   * 新代码请读 `outcome` —— `needsInput` 只有两个值，说不了「材料够却拒绝」和
+   * 「技术故障」这两件事。
+   */
   readonly needsInput: boolean
   readonly needsInputReason?: string
   readonly contextTokens: number
@@ -1730,11 +1747,38 @@ export async function runGeneration(
   // have covered them, because a candidate that reaches READY is publishable.
   const targetConfirmed = !dispute.needsConfirmation && dispute.opponent !== undefined
   const wantsReady = targetConfirmed && candidateViolations.length === 0 && candidateText.length > 0
-  const desiredState: TaskState = result.needsInput
-    ? 'NEEDS_CONFIRMATION'
-    : wantsReady
-      ? 'READY'
-      : 'REVIEWING'
+
+  /**
+   * 这次生成属于哪一类结果（v0.2.39 §3.1）。
+   *
+   * ## 为什么算在这里而不是在调用方
+   *
+   * 判据要读三样东西：模型要不要补材料、草稿有没有违规、**简报里到底有没有可打的论据**。
+   * 前两样在这个函数里，第三样在 `briefBuild.brief` 里 —— 调用方拿不到原始简报，只拿得到
+   * 渲染后的文本。放到调用方去判，就得把简报也传出去，于是「材料够不够」会有第二个
+   * 判定来源。
+   *
+   * 顺序也重要：相对 `desiredState` 先算出来，因为状态机要用它区分「模型说不答」和
+   * 「链路坏了」—— 这两种在 v0.2.38 都落到了 NEEDS_CONFIRMATION，页面上分不开。
+   */
+  const outcome: GenerationOutcome = classifyOutcome({
+    needsInput: result.needsInput,
+    reply: candidateText,
+    violations: result.violations,
+    evidence: {
+      opponentArgumentCount: briefBuild.brief.opponentArguments?.length ?? 0,
+      unansweredByOpponent: briefBuild.brief.unansweredByOpponent?.length ?? 0,
+      targetConfirmed,
+    },
+    ...(result.needsInputReason === undefined ? {} : { needsInputReason: result.needsInputReason }),
+  })
+
+  const desiredState: TaskState =
+    outcome === 'needs_more_context' || outcome === 'unjustified_refusal' || outcome === 'technical_failure'
+      ? 'NEEDS_CONFIRMATION'
+      : wantsReady
+        ? 'READY'
+        : 'REVIEWING'
 
   // The candidate as it was actually written, so the caller reports the id and version
   // that exist on disk rather than the ones this function guessed at.
@@ -1762,7 +1806,18 @@ export async function runGeneration(
         replyId: newCandidateId(entry.id, nextCandidateIndex(entry)),
         candidateVersion: nextCandidateVersion(entry),
       }
-      stored = candidate
+      /**
+       * 没有正文的结果**不落候选**（v0.2.39 §3.1）。
+       *
+       * `needs_more_context` 的 `reply` 是空串。此前这里无条件 append，于是页面上出现一条
+       * 可以点「复制」的空候选 —— 那是把「模型说了话」和「模型没写正文」混成同一件事。
+       * 导入链路在 v0.2.38 修过一次（`workflow.ts`），真实平台链路漏了，这里补上。
+       *
+       * 状态仍然要写：主人需要知道这次发生了什么、下一步做什么。所以不是「什么都不做」，
+       * 而是「只写状态，不写候选」。
+       */
+      const storeCandidate = outcome === 'valid_draft' || outcome === 'invalid_draft'
+      if (storeCandidate) stored = candidate
       // Every transition goes through the machine; an illegal move keeps the
       // previous state and says why instead of silently jumping.
       //
@@ -1773,13 +1828,17 @@ export async function runGeneration(
       const moved = transition(base, desiredState)
       const statusText = !moved.ok
         ? (moved.reason ?? '状态不允许本次变更')
-        : result.needsInput
-          ? `模型要求补充信息：${result.needsInputReason ?? ''}`
-          : !targetConfirmed
-            ? '尚未确认争论对象，不能进入待发表状态'
-            : candidate.violations.length > 0
-              ? `候选回复未通过检查：${candidate.violations.join('；')}`
-              : securitySummaryOf(guarded.assessment) || '候选回复已就绪，等待主人确认'
+        : outcome === 'needs_more_context'
+          ? `${OUTCOME_LABELS.needs_more_context}：${result.needsInputReason ?? '模型没有说明缺什么'}`
+          : outcome === 'unjustified_refusal'
+            ? `${OUTCOME_LABELS.unjustified_refusal}：${result.needsInputReason ?? '模型没有说明理由'}`
+            : outcome === 'technical_failure'
+              ? `${OUTCOME_LABELS.technical_failure}：${candidate.violations.join('；') || '没有产出正文'}`
+              : !targetConfirmed
+                ? '尚未确认争论对象，不能进入待发表状态'
+                : candidate.violations.length > 0
+                  ? `候选回复未通过检查：${candidate.violations.join('；')}`
+                  : securitySummaryOf(guarded.assessment) || '候选回复已就绪，等待主人确认'
       return {
         ...entry,
         state: moved.state,
@@ -1792,10 +1851,14 @@ export async function runGeneration(
          * but a page showing 「已批准」 next to text aimed at somebody else is exactly
          * the kind of two-truths-at-once that a review step exists to prevent.
          */
-        candidates: [
-          ...(reaimed ? entry.candidates.map((row) => ({ ...row, approved: false })) : entry.candidates),
-          candidate,
-        ],
+        candidates: storeCandidate
+          ? [
+              ...(reaimed ? entry.candidates.map((row) => ({ ...row, approved: false })) : entry.candidates),
+              candidate,
+            ]
+          : reaimed
+            ? entry.candidates.map((row) => ({ ...row, approved: false }))
+            : entry.candidates,
         /**
          * The session's idea of the opponent follows a deliberate re-aim (v0.2.28).
          *
@@ -1873,6 +1936,10 @@ export async function runGeneration(
   // v0.2.35: the one case where it can be empty is a stale write, which is a *refusal*
   // rather than an internal error — the two need different messages, so they are separate
   // branches.
+  //
+  // v0.2.39: a refusal that stores no candidate is a third legitimate case. It is not an
+  // internal error and it is not stale — it is "the model said something, and what it said
+  // was not a reply". The caller needs the outcome, so that branch returns rather than throws.
   if (stored === undefined) {
     guard.finish(session.id, claim)
     if (guard.isStale(session.id, claim)) {
@@ -1880,12 +1947,35 @@ export async function runGeneration(
         '这次生成在写入前被更新的目标取代，候选未保存（旧结果不会覆盖当前状态）。',
       )
     }
+    if (outcome === 'needs_more_context' || outcome === 'unjustified_refusal' || outcome === 'technical_failure') {
+      return {
+        sessionId: session.id,
+        outcome,
+        text: '',
+        strategy: result.draft?.strategy ?? 'direct_rebuttal',
+        confidence: result.draft?.confidence ?? 0,
+        violations: result.violations.map((violation) => violation.message),
+        notes: result.notes,
+        needsInput: outcome === 'needs_more_context',
+        ...(result.needsInputReason === undefined ? {} : { needsInputReason: result.needsInputReason }),
+        contextTokens: context.tokens,
+        budget: budget.tokens,
+        fixedCostTokens: fixedCostTotal(),
+        totalBudget: context.totalBudget,
+        omissions: context.omissions,
+        usage: result.usage,
+        model: config.llmModel,
+        protocol: config.llmProtocol,
+        attempts: result.attempts,
+      }
+    }
     throw new Error('内部错误：候选回复未写入会话，无法确认候选 id 与版本号。')
   }
   guard.finish(session.id, claim)
 
   return {
     sessionId: session.id,
+    outcome,
     candidateId: stored.replyId,
     text: stored.text,
     strategy: stored.strategy,

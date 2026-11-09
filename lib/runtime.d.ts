@@ -24,6 +24,7 @@ import { type PublishReport } from './publisher.js';
 import { type InteractionPolicy } from './safety.js';
 import { DebateStore, type StoredArgumentStrategy, type StoredCandidate, type StoredSession } from './store.js';
 import type { ResolvedConfig } from './config.js';
+import { type GenerationOutcome } from './outcome.js';
 /** Everything the pipeline needs from the plugin shell. */
 export interface Runtime {
     /**
@@ -263,7 +264,17 @@ export declare class SessionCapacityError extends Error {
 }
 export interface GenerateOutput {
     readonly sessionId: string;
-    readonly candidateId: string;
+    /**
+     * 本次生成属于哪一类结果（v0.2.39 §3.1）。
+     *
+     * 它是**主判断**：`candidateId` 只有在 `valid_draft` / `invalid_draft` 时才存在。
+     * 调用方先看这个字段决定说什么，再看正文 —— 反过来会得到「没有正文所以报错」，
+     * 而「没有正文」本身可能是一个正确的结果。
+     */
+    readonly outcome: GenerationOutcome;
+    /** 只有产出草稿时才有。`needs_more_context` 等结果没有候选。 */
+    readonly candidateId?: string;
+    /** 空串表示没有正文（拒绝或故障），与 `outcome` 一致。 */
     readonly text: string;
     readonly strategy: string;
     /** 程序选出的论证打法（v0.2.38）；旧路径可能没有。 */
@@ -271,6 +282,12 @@ export interface GenerateOutput {
     readonly confidence: number;
     readonly violations: readonly string[];
     readonly notes: readonly string[];
+    /**
+     * 兼容字段：等价于 `outcome === 'needs_more_context'`，保留给旧调用方。
+     *
+     * 新代码请读 `outcome` —— `needsInput` 只有两个值，说不了「材料够却拒绝」和
+     * 「技术故障」这两件事。
+     */
     readonly needsInput: boolean;
     readonly needsInputReason?: string;
     readonly contextTokens: number;

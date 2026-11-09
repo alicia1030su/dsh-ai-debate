@@ -43,7 +43,7 @@ import {
   type Runtime,
 } from '../lib/runtime.js'
 import { DebateStore } from '../lib/store.js'
-import { FakeAdapter, threePartyThread } from './helpers.ts'
+import { FakeAdapter, threePartyThread , candidateIdOf} from './helpers.ts'
 
 function modelReply(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({
@@ -127,7 +127,7 @@ test('an edit during generation does not steal the new candidate version', async
     // bumps #1 to v2 — this is by design, and it is what used to collide.
     const edited = await editCandidate(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: first.candidateId,
+      candidateId: candidateIdOf(first),
       text: '前面已经把报价贴出来了，你是没看还是不想看？要反驳就拿出同型号的价格。（人工补充）',
     })
     assert.equal(edited.ok, true)

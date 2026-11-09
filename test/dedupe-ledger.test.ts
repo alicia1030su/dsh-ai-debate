@@ -96,6 +96,16 @@ function makeRig(input: { sessionTtlMs?: number; dir?: string; maxPublishesPerTh
 /** Drive a session all the way to a real publish, and return what happened. */
 async function publishOnce(rig: Rig, sessionId: string): Promise<{ ok: boolean; message: string }> {
   const generated = await runGeneration(rig.runtime, { sessionId })
+  /**
+   * v0.2.39：`candidateId` 变成可选 —— 拒绝与故障不再产出候选。
+   *
+   * 这条测试走的是成功路径，所以候选必须存在。断言它存在，比用 `!` 抹掉类型
+   * 更诚实：如果哪一天这里真的没有候选，测试会在这里失败，而不是在更远的地方
+   * 传一个 `undefined` 给 store。
+   */
+  if (generated.candidateId === undefined) {
+    throw new Error(`这条测试要求一次成功生成，实际结果是 ${generated.outcome}`)
+  }
   // v0.2.5: the publisher reads a stored approval, not the caller's boolean. Without
   // this the publish is refused in manual mode and the test would be asserting on a
   // refusal rather than on the dedupe behaviour it is about.

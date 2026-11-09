@@ -160,17 +160,36 @@ test('白名单目录里出现真凭据形状时打包直接失败', () => {
     writeFileSync(join(dir, 'src', 'index.ts'), 'export const name = "fixture"\n', 'utf8')
     mkdirSync(join(dir, 'scripts'), { recursive: true })
     writeFileSync(join(dir, 'scripts', 'source-zip.mjs'), readFileSync(PACKER), 'utf8')
+    // v0.2.39：打包器从 `lib/git-objects.mjs` 读提交内容，从 `lib/fixture-allowlist.mjs` 读
+    // 假数据例外，两份模块都要一起复制。
+    // 临时目录没有 Git 仓库，于是需要显式的 `--allow-working-tree`（复审 §1 之后默认
+    // fail-closed）—— 正是这条测试要验证的场景：白名单目录里的真凭据形状必须被拦住。
+    mkdirSync(join(dir, 'scripts', 'lib'), { recursive: true })
+    writeFileSync(
+      join(dir, 'scripts', 'lib', 'git-objects.mjs'),
+      readFileSync(join(REPO, 'scripts', 'lib', 'git-objects.mjs')),
+      'utf8',
+    )
+    writeFileSync(
+      join(dir, 'scripts', 'lib', 'fixture-allowlist.mjs'),
+      readFileSync(join(REPO, 'scripts', 'lib', 'fixture-allowlist.mjs')),
+      'utf8',
+    )
+    writeFileSync(
+      join(dir, 'scripts', 'lib', 'scan-finding.mjs'),
+      readFileSync(join(REPO, 'scripts', 'lib', 'scan-finding.mjs')),
+      'utf8',
+    )
 
     // 放在 src/ 下面 —— 这个目录是白名单，所以「文件名过滤」救不了它，
     // 只有字节级扫描能拦住。这正是 v0.2.15 加的那一层。
     //
-    // 值里不能出现 example/fixture/fake 之类的字样：扫描器会把那类行当作测试夹具放行，
-    // 而这条测试要证明的正是「不带标记的真凭据形状会被拦住」。第一版用了
-    // `AKIAIOSFODNN7EXAMPLE`，被自己的夹具豁免规则放过去了 —— 断言写错方向时，
-    // 测试会安静地变绿。
+    // 复审 §2 之后，扫描器不再有「行里出现 example/fixture/fake 就放行」的规则，
+    // 也不再按目录放行；例外只剩「某个路径里的某一串确切的假值」。这个值没有被登记，
+    // 所以它必须失败 —— 用来证明「白名单目录不是免检区」。
     writeFileSync(join(dir, 'src', 'leaked.ts'), 'export const key = "AKIAQYLPMN5HHMWUZ7AG"\n', 'utf8')
 
-    const result = runScript(join(dir, 'scripts', 'source-zip.mjs'), [], dir)
+    const result = runScript(join(dir, 'scripts', 'source-zip.mjs'), ['--allow-working-tree'], dir)
     assert.notEqual(result.code, 0, '白名单目录里的真凭据形状必须让打包失败')
     assert.match(result.output, /AWS/, '输出里要指出命中的是哪一类凭据')
   } finally {

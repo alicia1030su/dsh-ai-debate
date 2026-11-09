@@ -23,6 +23,7 @@ import {
   type Runtime,
 } from './runtime.js'
 import { resolvePersona, PERSONAS, PERSONA_STYLES } from './persona.js'
+import { OUTCOME_LABELS } from './outcome.js'
 
 /** Build every tool definition. */
 export function buildTools(runtime: Runtime, ctx: PluginContext): readonly ToolDefinition[] {
@@ -505,8 +506,15 @@ function generateReplyTool(runtime: Runtime, log: Logger): ToolDefinition {
         })
 
         const lines: string[] = []
-        if (generated.needsInput) {
-          lines.push(`模型要求补充信息：${generated.needsInputReason ?? '未说明'}`)
+        /**
+         * 结果类型先说话（v0.2.39 §3.1）。
+         *
+         * 原先只有「要求补充信息」这一句，其余情况靠「有没有正文」让读者自己猜。现在把
+         * 五态里的名字直接写在第一行，于是「模型拒绝」和「接口超时」不会长得一样。
+         */
+        lines.push(`结果：${OUTCOME_LABELS[generated.outcome]}`)
+        if (generated.outcome === 'needs_more_context' || generated.outcome === 'unjustified_refusal') {
+          lines.push(`模型给的理由：${generated.needsInputReason ?? '未说明'}`)
         }
         if (generated.text) {
           lines.push(
@@ -529,12 +537,14 @@ function generateReplyTool(runtime: Runtime, log: Logger): ToolDefinition {
             (generated.omissions.length > 0 ? `，省略了 ${generated.omissions.length} 项` : ''),
         )
         lines.push(`tokens：入 ${generated.usage.inputTokens} / 出 ${generated.usage.outputTokens}`)
-        lines.push(`候选 ID：${generated.candidateId}`)
+        // 没有候选时不打印一个空 ID：那会让调用方以为有一条可以引用的候选。
+        if (generated.candidateId !== undefined) lines.push(`候选 ID：${generated.candidateId}`)
 
         return {
-          ok: generated.violations.length === 0 && !generated.needsInput,
+          ok: generated.outcome === 'valid_draft',
+          outcome: generated.outcome,
           sessionId: generated.sessionId,
-          candidateId: generated.candidateId,
+          ...(generated.candidateId === undefined ? {} : { candidateId: generated.candidateId }),
           text: generated.text,
           strategy: generated.strategy,
           confidence: generated.confidence,

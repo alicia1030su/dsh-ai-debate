@@ -56,7 +56,7 @@ import type {
   ThreadRef,
   UserProfile,
 } from '../lib/types.js'
-import { grantApproval } from './helpers.ts'
+import { candidateIdOf, grantApproval } from './helpers.ts'
 
 // ---------------------------------------------------------------------------
 // A fake platform that records what it was actually asked to do
@@ -727,10 +727,10 @@ test('只读平台在真实发表路径上被拒绝，且平台适配器一次�
     const generated = await runGeneration(runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
 
@@ -777,10 +777,10 @@ test('发表能力未验证的平台同样被拒绝（unverified 不等于 suppo
     const generated = await runGeneration(runtime, { sessionId: analysis.sessionId })
     // v0.2.5: a stored approval authorises the send; `humanApproved` is
     // ignored by the publisher now, so create the record the old flag stood for.
-    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: generated.candidateId, config: runtime.config })
+    await grantApproval(runtime.store, { sessionId: analysis.sessionId, candidateId: candidateIdOf(generated), config: runtime.config })
     const report = await runPublish(runtime, {
       sessionId: analysis.sessionId,
-      candidateId: generated.candidateId,
+      candidateId: candidateIdOf(generated),
       approvedText: generated.text,
     })
     assert.equal(report.ok, false)

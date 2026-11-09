@@ -29,6 +29,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import type { VerificationAuthorization } from './verification.js'
 import { resolveConfig, type ResolvedConfig } from './config.js'
+import { guideForError } from './guide.js'
 import type { CredentialPhase } from './credential-mirror.js'
 import {
   clearSecret,
@@ -473,6 +474,14 @@ export interface SettingsRouteDeps {
       readonly strategy?: string
     }): Promise<{
       readonly ok: boolean
+      /**
+       * 本次生成的结果类型（v0.2.39 §3.1）。
+       *
+       * 页面据此决定说什么：`needs_more_context` 要引导去补材料，
+       * `technical_failure` 要引导重试，`unjustified_refusal` 要提示换模型或换打法。
+       * 三者都不该显示成同一句「生成失败」。
+       */
+      readonly outcome?: string
       readonly candidateId?: string
       readonly text?: string
       readonly reason?: string
@@ -2058,11 +2067,17 @@ export function makeSettingsRoutes(deps: SettingsRouteDeps): readonly WebRoute[]
         )
         return
       } catch (error) {
-        // 抛错也必须是一个可读的答复：页面拿到 500 只会显示「操作失败」，
-        // 而这里的每一条错都带着用户能做的事。
+        /**
+         * 抛错也必须是一个可读的答复（v0.2.39 §4.2）。
+         *
+         * 页面拿到 500 只会显示「操作失败」。这里的每一条错都带着用户能做的事 ——
+         * 而「能做什么」取决于错误种类，不是取决于消息文本。所以先分类，再给下一步。
+         */
+        const guide = guideForError(error)
         writeJson(response, 200, {
           ok: false,
           reason: `离线工作流内部错误：${error instanceof Error ? error.message : String(error)}`,
+          ...(guide === undefined ? {} : { guide: guide.id, next: guide.next }),
         })
         return
       }

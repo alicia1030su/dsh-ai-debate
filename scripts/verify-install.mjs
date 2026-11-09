@@ -17,12 +17,13 @@
  *   node scripts/verify-install.mjs [path/to.tgz]
  */
 import { spawnSync } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
 import { copyWithDependencies } from './deps.mjs'
+import { bareImportsIn } from './lib/import-scan.mjs'
 import { listTar } from './tar.mjs'
 
 const root = join(import.meta.dirname, '..')
@@ -63,24 +64,6 @@ function unpack() {
     offset = body + Math.ceil(size / 512) * 512
   }
   return entries
-}
-
-/** List every bare import (package specifier) in a JS tree. */
-function bareImportsIn(dir) {
-  const found = new Set()
-  if (!existsSync(dir)) return found
-  for (const name of readdirSync(dir)) {
-    const abs = join(dir, name)
-    if (statSync(abs).isDirectory()) {
-      for (const spec of bareImportsIn(abs)) found.add(spec)
-      continue
-    }
-    if (!name.endsWith('.js')) continue
-    const text = readFileSync(abs, 'utf8')
-    for (const match of text.matchAll(/from\s+'([^.'][^']*)'/g)) found.add(match[1])
-    for (const match of text.matchAll(/require\('([^.'][^']*)'\)/g)) found.add(match[1])
-  }
-  return found
 }
 
 try {

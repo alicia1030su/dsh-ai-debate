@@ -35,6 +35,7 @@ import { generateReply } from '../generator.js'
 import { PERSONAS, resolvePersona, type PersonaConfig, type PersonaStyle } from '../persona.js'
 import { selectStrategy, type ArgumentStrategyId } from '../strategy.js'
 import { recordCompression } from '../compression-record.js'
+import { classifyOutcome, reasonNamesGap, type GenerationOutcome } from '../outcome.js'
 import { guardOutput, toStorageRecord, type ConversationPost } from '../security/output-guard.js'
 import { contentHash, resolveTarget, type TargetExpectation } from '../target.js'
 import { detectInjection, transition } from '../safety.js'
@@ -100,10 +101,22 @@ export interface StepResult<T> {
   readonly reason?: string
   /** 用户能做的事，按顺序。失败时通常非空。 */
   readonly next?: readonly string[]
+  /**
+   * 生成步骤的结果分类（v0.2.39 §3.1）。只有 `generate` 会填。
+   *
+   * 失败也要带：`needs_more_context` 与 `technical_failure` 都是 `ok: false`，但一个
+   * 该引导用户补材料，一个该引导重试。没有这个字段，页面只能二选一地猜。
+   */
+  readonly outcome?: GenerationOutcome
 }
 
-function failed(step: ManualStep, reason: string, next: readonly string[] = []): StepResult<never> {
-  return { ok: false, step, reason, next }
+function failed(
+  step: ManualStep,
+  reason: string,
+  next: readonly string[] = [],
+  outcome?: GenerationOutcome,
+): StepResult<never> {
+  return { ok: false, step, reason, next, ...(outcome === undefined ? {} : { outcome }) }
 }
 
 function succeeded<T>(step: ManualStep, value: T): StepResult<T> {
@@ -594,6 +607,13 @@ export interface ManualGenerateInput {
   readonly llm: () => LlmClient
   readonly signal?: AbortSignal
   readonly progress?: (message: string) => void
+  /**
+   * 用户是否明确点了「生成」。
+   *
+   * 为真时，模型说「材料不足」不会被评为 `unjustified_refusal` —— 详见 `outcome.ts`。
+   * 页面走的就是这条路径；后台批处理不传。
+   */
+  readonly forceAttempt?: boolean
 }
 
 /** 与 `runtime.ts` 同一规则：只在压缩丢了材料时开口。 */
@@ -609,6 +629,8 @@ function compressionNotes(record: ReturnType<typeof recordCompression>): string[
 }
 
 export interface ManualGenerateOutput {
+  /** 本次生成属于哪一类结果（v0.2.39 §3.1）。 */
+  readonly outcome: GenerationOutcome
   /** 程序选出的论证打法，连同依据（v0.2.38）。 */
   readonly argumentStrategy?: {
     readonly id: string
@@ -632,6 +654,20 @@ export interface ManualGenerateOutput {
 
 /**
  * 为导入的会话生成候选。
+ *
+ * ## v0.2.39：`input.forceAttempt` 把「材料够不够」的判断交回给模型
+ *
+ * `classifyOutcome` 用「简报里有没有可打的论据」判「该不该拒绝」。这个判据是**保守的**，
+ * 它只看数量，不看内容 —— 于是「对方说了一句『方案我贴了』」也算一条论据，而模型完全
+ * 可以合理地答「这句话支撑不了任何具体主张」。第一次真实采集里，q06 与 q19 就是这样被
+ * 判成了缺陷（`unjustified_refusal`），而模型的理由其实站得住。
+ *
+ * 用户从页面点「生成候选回复」时，他**明确表达了意图**：先试着写一条。这时把「材料够不够」
+ * 的最终判断交给模型，比由计数规则替他决定更合适 —— 模型拒绝时会给出具体缺口，而那个
+ * 缺口会原样回到页面上。
+ *
+ * 这条开关不改变安全边界：拒绝仍然不落候选，违规仍然拦下，目标仍然校验。它只改变
+ * 「模型说材料不够」这一条被判成什么。
  *
  * ## 与 `runGeneration` 的关系
  *
@@ -775,6 +811,25 @@ export async function generateForImport(
   }
 
   /**
+   * 这次生成属于哪一类结果（v0.2.39 §3.1）。
+   *
+   * 与真实平台链路用**同一个函数**、同一套判据。两条链路各自判一次会让同一份材料在两处
+   * 得到不同的分类 —— 而「这条该不该拒」不该取决于用户是从哪个入口点进来的。
+   */
+  const outcome = classifyOutcome({
+    needsInput: result.needsInput,
+    reply: result.draft.reply,
+    violations: result.violations,
+    evidence: {
+      opponentArgumentCount: briefBuild.brief.opponentArguments?.length ?? 0,
+      unansweredByOpponent: briefBuild.brief.unansweredByOpponent?.length ?? 0,
+      targetConfirmed: dispute.opponent !== undefined && !dispute.needsConfirmation,
+    },
+    forceAttempt: input.forceAttempt === true,
+    ...(result.needsInputReason === undefined ? {} : { needsInputReason: result.needsInputReason }),
+  })
+
+  /**
    * 模型自己说「材料不够，我不答」时，不能落一条空候选（v0.2.38）。
    *
    * ## 这是真实跑出来的坑
@@ -784,15 +839,37 @@ export async function generateForImport(
    * 而这条链路只判断「draft 存不存在」—— 存在就落库。于是页面上出现一条可以点
    * 「复制」的空候选，采集器也只能记下一条空正文，分不清是模型拒绝还是链路坏了。
    *
-   * 正确做法是把它当成一次**有内容的拒绝**：不落候选，把模型说的缺口带回给人。
-   * 这与「解析失败」和「安全拦截」都不同，所以文案也不同。
+   * v0.2.39 起改成按 `outcome` 分流：`valid_draft` / `invalid_draft` 之外的三种结果
+   * 都不落候选，但**都要把原因和下一步带回去**。合理拒绝不是故障，所以文案也不同。
    */
-  if (result.needsInput || result.draft.reply.trim() === '') {
+  if (outcome === 'needs_more_context' || outcome === 'unjustified_refusal') {
+    const gap = result.needsInputReason ?? '模型没有说明缺什么'
+    const concrete = reasonNamesGap(result.needsInputReason)
     return failed(
       'generate',
-      `模型认为材料不够，没有给出回复：${result.needsInputReason ?? '回复正文为空'}。` +
-        '请补上它指出的那一部分，或换一个更完整的导入。',
-      ['补读缺失的内容后重新生成', '在「评论列表」里换一条更有依据的目标'],
+      outcome === 'needs_more_context'
+        ? `模型认为材料不够，没有给出回复：${gap}`
+        : `材料里有可打的论据，模型仍然拒绝回应：${gap}`,
+      outcome === 'needs_more_context'
+        ? concrete
+          ? ['补上它点出的那一部分后重新生成', '在「评论列表」里换一条更有依据的目标']
+          : ['它只说「信息不足」，没说是哪里 —— 换一条评论更多的目标试试', '补读原帖后再导入']
+        : ['再点一次生成（同一个模型偶尔会误判）', '换一个更强的模型', '把「论证打法」改成「追问关键依据」再试'],
+      outcome,
+    )
+  }
+
+  if (outcome === 'technical_failure') {
+    const detail = result.violations.map((violation) => violation.message).join('；')
+    return failed(
+      'generate',
+      `技术故障，没有生成结果：${detail || '模型没有返回正文'}`,
+      [
+        '再点一次生成',
+        '如果连续两次如此，检查模型服务是否可用',
+        '输出总是被截断时，把「最大输出 token」调高',
+      ],
+      outcome,
     )
   }
 
@@ -890,6 +967,7 @@ export async function generateForImport(
 
   return succeeded('generate', {
     sessionId: session.id,
+    outcome,
     candidateId: stored.replyId,
     text: stored.text,
     version: stored.candidateVersion,
