@@ -101,10 +101,16 @@ interface ZipEntry {
   readonly declaredCrc?: number
   /** 声明一个与真实 payload 不同的压缩长度。 */
   readonly declaredCompressedSize?: number
+  /** 通用标志位；bit 0 = 加密。用来测「目录条目带加密标记」。 */
+  readonly flags?: number
 }
 
-/** 构造一个 ZIP；只实现扫描器需要读的那几个字段。 */
-function buildZip(entries: readonly ZipEntry[]): Buffer {
+/** 构造一个 ZIP；只实现扫描器需要读的那几个字段。
+ *
+ * `eocdEntries` 同时改写「本盘条目数」与「总条目数」，用来构造一个**自洽地少报**的索引；
+ * 两者互相不一致的情形由另一条测试单独覆盖。
+ */
+function buildZip(entries: readonly ZipEntry[], eocdEntries?: number): Buffer {
   const local: Buffer[] = []
   const central: Buffer[] = []
   let offset = 0
@@ -121,7 +127,7 @@ function buildZip(entries: readonly ZipEntry[]): Buffer {
     const header = Buffer.alloc(30)
     header.writeUInt32LE(0x04034b50, 0)
     header.writeUInt16LE(20, 4)
-    header.writeUInt16LE(0, 6)
+    header.writeUInt16LE(entry.flags ?? 0, 6)
     header.writeUInt16LE(method, 8)
     header.writeUInt16LE(0, 10)
     header.writeUInt16LE(0, 12)
@@ -136,7 +142,7 @@ function buildZip(entries: readonly ZipEntry[]): Buffer {
     entryHeader.writeUInt32LE(0x02014b50, 0)
     entryHeader.writeUInt16LE(entry.madeBy ?? 0x0300, 4)
     entryHeader.writeUInt16LE(20, 6)
-    entryHeader.writeUInt16LE(0, 8)
+    entryHeader.writeUInt16LE(entry.flags ?? 0, 8)
     entryHeader.writeUInt16LE(method, 10)
     entryHeader.writeUInt16LE(0, 12)
     entryHeader.writeUInt16LE(0, 14)
@@ -160,13 +166,23 @@ function buildZip(entries: readonly ZipEntry[]): Buffer {
   end.writeUInt32LE(0x06054b50, 0)
   end.writeUInt16LE(0, 4)
   end.writeUInt16LE(0, 6)
-  end.writeUInt16LE(entries.length, 8)
-  end.writeUInt16LE(entries.length, 10)
+  end.writeUInt16LE(eocdEntries ?? entries.length, 8)
+  end.writeUInt16LE(eocdEntries ?? entries.length, 10)
   end.writeUInt32LE(centralBuffer.length, 12)
   end.writeUInt32LE(offset, 16)
   end.writeUInt16LE(0, 20)
 
   return Buffer.concat([...local, centralBuffer, end])
+}
+
+/** 取一个单条目 ZIP 的中央目录记录本身，用来缝进别的归档。 */
+function centralRecordOf(zip: Buffer): Buffer {
+  const start = zip.length - 22 - 46
+  const nameLength = zip.readUInt16LE(start + 28)
+  const extraLength = zip.readUInt16LE(start + 30)
+  const commentLength = zip.readUInt16LE(start + 32)
+  const size = 46 + nameLength + extraLength + commentLength
+  return zip.subarray(zip.length - 22 - size, zip.length - 22)
 }
 
 /** Unix 目录的 mode。 */
@@ -512,6 +528,195 @@ test('归档：损坏的 gzip 必须整轮失败', () => {
     const result = run(SCANNER, [archive.path], REPO)
     assert.equal(result.code, 3, 'gzip 校验失败必须让整轮扫描失败')
     assert.match(result.stderr, /gzip 解压失败|truncated|corrupt/, '必须说明是哪一类问题')
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+// --- 二之二、索引少报自己：漏扫比扫到更危险 -------------------------------
+
+test('归档：EOCD 少报条目数必须整轮失败，不能漏扫后返回 clean', () => {
+  // 物理上有两条中央目录记录，结尾记录只声明一条。遍历以「声明的条数」为上界，
+  // 于是第二条从未被打开——而它正是一条真凭据。扫描器必须拒绝这个自相矛盾的索引，
+  // 而不是把读到的前缀当成整个归档。
+  const credential = testCredential()
+  const archive = writeArchive(
+    'undercounted.zip',
+    buildZip(
+      [
+        { name: 'package/src/index.ts', data: Buffer.from('export const a = 1\n', 'utf8'), method: 8 },
+        { name: 'package/src/leak.ts', data: Buffer.from(`const key = ${credential}\n`, 'utf8'), method: 8 },
+      ],
+      1,
+    ),
+  )
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.equal(result.code, 3, `少报条目数必须让整轮失败，实际 ${result.code}：${result.stdout}${result.stderr}`)
+    assert.match(result.stderr, /中央目录长度与条目数不符/, '必须说出是索引对不上')
+    assert.match(result.stderr, /\[corrupt\]/, '要带分类')
+    assert.equal(
+      /未发现敏感文件或凭据/.test(result.stdout + result.stderr),
+      false,
+      '不能声称干净',
+    )
+    assert.equal(
+      (result.stdout + result.stderr).includes(credential),
+      false,
+      '读不到的那一条也不是把它打印出来的理由',
+    )
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+test('归档：本盘条目数与总条目数不一致必须整轮失败', () => {
+  const full = buildZip([
+    { name: 'package/src/index.ts', data: Buffer.from('export const a = 1\n', 'utf8'), method: 8 },
+    { name: 'package/src/b.ts', data: Buffer.from('export const b = 2\n', 'utf8'), method: 8 },
+  ])
+  const patched = Buffer.from(full)
+  patched.writeUInt16LE(1, patched.length - 22 + 8) // 本盘条目数改小
+  const archive = writeArchive('disk-count.zip', patched)
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.equal(result.code, 3, `两个条目数不一致必须失败，实际 ${result.code}`)
+    assert.match(result.stderr, /本盘 1 条、共 2 条/)
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+test('归档：中央目录与结尾记录之间藏一条记录，必须整轮失败', () => {
+  // 两个条目数一起改小，被藏的那条就落在「声明的目录长度」之外、结尾记录之前。
+  // 只有要求「目录必须紧邻结尾记录」才能发现它。
+  const base = buildZip([{ name: 'package/src/index.ts', data: Buffer.from('export const a = 1\n', 'utf8'), method: 8 }])
+  const hidden = buildZip([{ name: 'package/src/leak.ts', data: Buffer.from('const key = "x"\n', 'utf8'), method: 8 }])
+  const patched = Buffer.from(base)
+  patched.writeUInt16LE(0, patched.length - 22 + 8) // 本盘条目数
+  patched.writeUInt16LE(0, patched.length - 22 + 10) // 总条目数；目录长度保持不变
+  const stitched = Buffer.concat([
+    patched.subarray(0, patched.length - 22),
+    centralRecordOf(hidden),
+    patched.subarray(patched.length - 22),
+  ])
+  const archive = writeArchive('stitched.zip', stitched)
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.equal(result.code, 3, `目录与结尾记录之间的数据必须失败，实际 ${result.code}`)
+    assert.match(result.stderr, /未说明的数据/)
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+test('归档：EOCD 注释仍然合法（严格化不误伤合法形态）', () => {
+  // 注释是 ZIP 的合法形态，扫描器本来就靠「注释长度刚好吃掉文件剩余部分」定位结尾记录。
+  // 这一条保证新增的「目录必须紧邻结尾记录」没有把它一起禁掉。
+  const zip = buildZip([{ name: 'package/src/index.ts', data: Buffer.from('export const a = 1\n', 'utf8'), method: 8 }])
+  const patched = Buffer.from(zip)
+  patched.writeUInt16LE(3, patched.length - 22 + 20)
+  const archive = writeArchive('commented.zip', Buffer.concat([patched, Buffer.from('abc', 'utf8')]))
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.equal(result.code, 0, `带注释的合法归档必须放行，实际 ${result.code}：${result.stderr}`)
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+// --- 二之三、目录不是免检区 -----------------------------------------------
+
+test('归档：目录条目带负载必须整轮失败（stored 与 deflate 都不行）', () => {
+  for (const method of [0, 8] as const) {
+    const archive = writeArchive(
+      `dir-payload-${method}.zip`,
+      buildZip([
+        {
+          name: 'package/src/hidden/',
+          data: Buffer.from(`const key = ${testCredential()}\n`, 'utf8'),
+          method,
+          external: (MODE_DIR << 16) >>> 0,
+        },
+      ]),
+    )
+    try {
+      const result = run(SCANNER, [archive.path], REPO)
+      assert.equal(result.code, 3, `目录带负载（method ${method}）必须失败，实际 ${result.code}：${result.stdout}`)
+      assert.match(result.stderr, /目录不应有负载/, '必须说明目录不该有内容')
+    } finally {
+      rmSync(archive.dir, { recursive: true, force: true })
+    }
+  }
+})
+
+test('归档：MS-DOS 目录位配上负载同样必须整轮失败', () => {
+  // 目录判定有两条路：名字以 `/` 结尾，或 DOS 属性位 0x10。只堵一条没有意义。
+  const archive = writeArchive(
+    'dos-dir-payload.zip',
+    buildZip([
+      {
+        name: 'package/src/hidden',
+        data: Buffer.from('const key = "x"\n', 'utf8'),
+        external: 0x10,
+      },
+    ]),
+  )
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.equal(result.code, 3, `DOS 目录位 + 负载必须失败，实际 ${result.code}`)
+    assert.match(result.stderr, /目录不应有负载/)
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+test('归档：目录条目带加密标记必须整轮失败', () => {
+  const archive = writeArchive(
+    'dir-encrypted.zip',
+    buildZip([{ name: 'package/src/hidden/', flags: 0x1, external: (MODE_DIR << 16) >>> 0 }]),
+  )
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.equal(result.code, 3, `目录带加密标记必须失败，实际 ${result.code}`)
+    assert.match(result.stderr, /已加密/, '必须说明读不了的原因')
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+test('归档：目录条目带不支持的压缩方式必须整轮失败', () => {
+  const archive = writeArchive(
+    'dir-method.zip',
+    buildZip([
+      {
+        name: 'package/src/hidden/',
+        method: 12,
+        declaredCompressedSize: 0,
+        declaredSize: 0,
+        external: (MODE_DIR << 16) >>> 0,
+      },
+    ]),
+  )
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.equal(result.code, 3, `目录带异常压缩方式必须失败，实际 ${result.code}`)
+    assert.match(result.stderr, /不支持的压缩方式 12/)
+  } finally {
+    rmSync(archive.dir, { recursive: true, force: true })
+  }
+})
+
+test('归档：名字像目录但带符号链接 mode，仍按非普通条目报出', () => {
+  // 类型由 mode 决定，不由名字决定。名字以 `/` 结尾的符号链接过去会被当成目录跳过。
+  const archive = writeArchive(
+    'dir-named-symlink.zip',
+    buildZip([{ name: 'package/src/hidden/', external: (MODE_SYMLINK << 16) >>> 0, madeBy: 0x0300 }]),
+  )
+  try {
+    const result = run(SCANNER, [archive.path], REPO)
+    assert.notEqual(result.code, 0, '符号链接必须让扫描失败，即使它叫目录名')
+    assert.match(result.stdout + result.stderr, /非普通文件条目/)
   } finally {
     rmSync(archive.dir, { recursive: true, force: true })
   }

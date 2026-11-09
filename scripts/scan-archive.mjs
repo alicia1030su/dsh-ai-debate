@@ -43,6 +43,20 @@
  * - corrupt compressed data / unsupported compression / length or offset anomaly / truncated
  *   archive → `ArchiveError`, exit 3, nothing skipped.
  *
+ * ## What must not be mis-declared (v0.2.39 复审 §3)
+ *
+ * Two more ways to make the reader skip bytes without it noticing:
+ *
+ * - **An index that under-reports itself.** The walk is bounded by the entry count in the
+ *   end record, so `count = 1` over an archive that physically holds two entries reads the
+ *   first and returns "clean". The count on this disk, the total count, the declared
+ *   directory length and the position the walk actually stopped at must all agree, and the
+ *   directory must end exactly at the end record — otherwise there is an index nobody read.
+ * - **A directory entry with content.** A name ending in `/` (or the DOS directory bit)
+ *   used to end the entry's validation before the encryption, compression-method and
+ *   length checks. A "directory" with a payload is a file wearing a directory's name, and
+ *   skipping it is the same failure as skipping an unreadable file.
+ *
  * Usage:
  *   node scripts/scan-archive.mjs <archive.zip|archive.tgz> [--json]
  */
@@ -200,13 +214,37 @@ function readZip(buffer) {
   }
 
   const count = buffer.readUInt16LE(eocd + 10)
+  const entriesOnDisk = buffer.readUInt16LE(eocd + 8)
   const centralSize = buffer.readUInt32LE(eocd + 12)
   const centralOffset = buffer.readUInt32LE(eocd + 16)
-  if (count === 0xffff || centralSize === 0xffffffff || centralOffset === 0xffffffff) {
+  if (
+    count === 0xffff ||
+    entriesOnDisk === 0xffff ||
+    centralSize === 0xffffffff ||
+    centralOffset === 0xffffffff
+  ) {
     throw new ArchiveError('unsupported', '不支持 ZIP64')
   }
-  if (centralOffset + centralSize > eocd) {
+  // Two counts that disagree mean the index does not describe itself. A reader that
+  // trusts the smaller one walks a prefix of the archive and reports it as the whole.
+  if (entriesOnDisk !== count) {
+    throw new ArchiveError(
+      'corrupt',
+      `中央目录声称本盘 ${entriesOnDisk} 条、共 ${count} 条，两者不一致`,
+    )
+  }
+  const centralEnd = centralOffset + centralSize
+  if (centralEnd > eocd) {
     throw new ArchiveError('bounds', '中央目录的偏移与长度越过了结尾记录')
+  }
+  // The central directory is the last thing before the end record. Anything between
+  // them is an index the record did not declare — which is exactly how a hidden
+  // entry survives a reader that only walks the declared length.
+  if (centralEnd !== eocd) {
+    throw new ArchiveError(
+      'corrupt',
+      '中央目录与结尾记录之间有未说明的数据：条目数或目录长度被少报',
+    )
   }
 
   const entries = []
@@ -242,16 +280,36 @@ function readZip(buffer) {
     const mode = (external >>> 16) & 0xffff
     const isDirectory = name.endsWith('/') || (external & 0x10) !== 0
     const isUnixNonRegular = host === 3 && mode !== 0 && (mode & 0xf000) !== 0x8000 && (mode & 0xf000) !== 0x4000
-    if (isDirectory) {
-      entries.push({ name, kind: 'directory' })
-      continue
-    }
+    // Non-regular is decided **before** the directory branch, and by the mode rather
+    // than by the name: an entry can be named `x/` and still carry a symlink's mode,
+    // and a name is not a type. Checking the name first let exactly that through.
     if (isUnixNonRegular) {
       entries.push({
         name,
         kind: 'nonregular',
         typeflag: `mode ${(mode & 0xf000).toString(8)}`,
       })
+      continue
+    }
+    if (isDirectory) {
+      // A directory has no content, so it must declare none. A "directory" carrying a
+      // payload, an encryption bit, or a compression method this reader does not
+      // implement is a file wearing a directory's name — and skipping it is the one
+      // failure mode a security scan cannot have: the bytes nobody read are the bytes
+      // nobody can vouch for.
+      if (compressedSize !== 0 || uncompressedSize !== 0) {
+        throw new ArchiveError(
+          'corrupt',
+          `目录条目 ${name} 声明了 ${compressedSize}/${uncompressedSize} 字节的内容，目录不应有负载`,
+        )
+      }
+      if ((flags & 0x1) !== 0) {
+        throw new ArchiveError('unsupported', `目录条目 ${name} 已加密，无法扫描`)
+      }
+      if (method !== 0 && method !== 8) {
+        throw new ArchiveError('unsupported', `目录条目 ${name} 使用不支持的压缩方式 ${method}`)
+      }
+      entries.push({ name, kind: 'directory' })
       continue
     }
 
@@ -299,6 +357,21 @@ function readZip(buffer) {
       throw new ArchiveError('corrupt', `条目 ${name} 的 CRC 与内容不符`)
     }
     entries.push({ name, kind: 'file', data })
+  }
+
+  // The walk must consume exactly the declared central directory.
+  //
+  // The loop bound is `count`, so an under-reported count walks a *prefix* and
+  // returns it as the whole archive — with every entry past the prefix never opened.
+  // The opposite direction already fails on its own (the walk runs off the end of the
+  // directory and the next signature check rejects it), which is why this check is the
+  // one that was missing: it is only reachable when the record lies downwards.
+  if (cursor !== centralEnd) {
+    throw new ArchiveError(
+      'corrupt',
+      `中央目录长度与条目数不符：声称 ${count} 条 / ${centralSize} 字节，` +
+        `实际遍历到 ${cursor - centralOffset} 字节`,
+    )
   }
 
   return entries
