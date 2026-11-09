@@ -67,6 +67,7 @@ import { gunzipSync, inflateRawSync } from 'node:zlib'
 
 import { isRegisteredFakeLiteral } from './lib/fixture-allowlist.mjs'
 import { contentFinding, formatFinding, pathFinding } from './lib/scan-finding.mjs'
+import { DEFAULT_ZIP_LIMITS, isUnsafePath } from './lib/zip-index.mjs'
 
 const path = process.argv[2]
 const asJson = process.argv.includes('--json')
@@ -430,8 +431,14 @@ function readTgz(buffer) {
 
   let tar
   try {
-    tar = gunzipSync(buffer)
-  } catch {
+    // 上限按解压后的 tar 计算：压缩炸弹不需要真的解开就能耗尽内存，
+    // 而解压这一步是唯一能在分配之前叫停的位置。
+    tar = gunzipSync(buffer, { maxOutputLength: DEFAULT_ZIP_LIMITS.maxTotalBytes })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (/maxOutputLength|buffer/i.test(message)) {
+      throw new ArchiveError('bounds', `gzip 解压后超过资源上限 ${DEFAULT_ZIP_LIMITS.maxTotalBytes} 字节`)
+    }
     throw new ArchiveError('corrupt', 'gzip 解压失败：数据损坏或归档被截断')
   }
 
@@ -523,12 +530,26 @@ try {
 
 const findings = []
 const stats = { files: 0, directories: 0, nonregular: 0, binary: 0 }
+const seenNames = new Set()
 
 for (const entry of entries) {
   // Archives wrap everything in `package/`; strip it so the exemption list can use repo paths.
   const normalised = entry.name.replace(/^package\//, '').replace(/^\.\//, '')
   const segments = normalised.split('/')
   const name = segments[segments.length - 1]
+
+  // 重复名与路径穿越：前者会让后一条覆盖前一条的判定，后者会让解压落到归档目录之外。
+  // 两者都不依赖文件内容，属于「名字本身就有问题」，在读取内容之前报出。
+  if (normalised !== '' && seenNames.has(normalised)) {
+    findings.push(pathFinding({ path: normalised, rule: '重复的条目名', kind: 'type' }))
+  }
+  seenNames.add(normalised)
+  // 目录条目的名字以 `/` 结尾；去掉尾斜杠再判穿越，否则 `package/src/` 归一后
+  // 变成 `src/`，会被当成「空路径」。空路径只可能是归档根目录本身，不算穿越。
+  const safetyPath = normalised.replace(/\/+$/, '')
+  if (safetyPath !== '' && isUnsafePath(safetyPath)) {
+    findings.push(pathFinding({ path: normalised, rule: '路径穿越或绝对路径', kind: 'type' }))
+  }
 
   for (const segment of segments) {
     if (FORBIDDEN_DIRS.includes(segment)) {
