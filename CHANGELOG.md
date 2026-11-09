@@ -2,6 +2,17 @@
 
 本项目遵循[语义化版本](https://semver.org/lang/zh-CN/)。
 
+### 五、预发布版本号支持
+
+`0.3.0-rc.1` 之前发不了：版本工具只接受三段数字，`release.yml` 也不带 `--prerelease`。
+现在两件事分开做：
+
+- `parseVersion` / `isPrerelease`（`scripts/lib/version-core.mjs`）：版本号允许
+  `-rc.N` 后缀，README 的四种版本上下文也认得它；
+- `version.mjs check`：版本是预发布时，**要求**工作流里有 `--prerelease`，否则判失败 ——
+  不加这个参数，rc 会被打成 Latest 正式版；
+- 工作流改动在单独的敏感 PR 中（`.github/workflows/release.yml` 属 `workflow` 路径）。
+
 ## [0.3.0] — 2026-11-09
 
 主题：**第一个面向普通用户的公开 Beta。** 不新增平台、不新增人格；把「装得上、看得懂、

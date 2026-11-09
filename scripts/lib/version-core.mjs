@@ -18,8 +18,19 @@
  * 其它位置的版本号（「v0.2.12 起 CLI 才真正被调用」之类）是历史叙述，改了就是造假。
  */
 export function readmeVersions(text) {
+  /**
+   * 版本号里允许一个预发布后缀（`-rc.1`）。
+   *
+   * 加这个后缀是必要的：v0.3.0 的候选版就叫 `0.3.0-rc.1`，如果正则只认三段数字，
+   * README 里写 `#v0.3.0-rc.1` 会被**整段不匹配** —— 于是 `checkReadme` 报「找不到
+   * 任何版本上下文」，而真正的原因是它根本没看见。那种失败看起来像文档没写，
+   * 实际是规则读不懂。
+   *
+   * 后缀只放行 `-<字母数字.>` 这一段，不接受任意字符：`0.2.17-rc.1.2` 可以，
+   * `0.2.17-beta+meta` 不行（构建元数据不该出现在安装命令里）。
+   */
   const pattern =
-    /#v(\d+\.\d+\.\d+)|releases\/tag\/v(\d+\.\d+\.\d+)|dsh-ai-debate-(\d+\.\d+\.\d+)\.tgz|dsh-ai-debate-source-(\d+\.\d+\.\d+)\.zip/g
+    /#v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)|releases\/tag\/v(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)|dsh-ai-debate-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\.tgz|dsh-ai-debate-source-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)\.zip/g
   const found = new Map()
   for (const match of text.matchAll(pattern)) {
     const version = match[1] ?? match[2] ?? match[3] ?? match[4]
@@ -65,12 +76,43 @@ export function checkReadme(text, expected) {
  * 从 0.2.1 升到 0.2.2 时 `v0.2.16` 会被改写成 `v0.2.26`。
  */
 export function rewriteReadme(text, from, to) {
-  const escaped = from.replace(/\./g, '\\.')
+  // 预发布后缀里也有点（`0.3.0-rc.1`），必须一起转义，否则 `rc.1` 会被当通配符。
+  const escaped = from.replace(/[.+*?^$()[\]{}|\\]/g, '\\$&')
   return text
     .replace(new RegExp(`#v${escaped}(?![\\d.])`, 'g'), `#v${to}`)
     .replace(new RegExp(`releases/tag/v${escaped}(?![\\d.])`, 'g'), `releases/tag/v${to}`)
     .replace(new RegExp(`dsh-ai-debate-${escaped}\\.tgz`, 'g'), `dsh-ai-debate-${to}.tgz`)
     .replace(new RegExp(`dsh-ai-debate-source-${escaped}\\.zip`, 'g'), `dsh-ai-debate-source-${to}.zip`)
+}
+
+/**
+ * 拆版本号：主版本三段 + 可选预发布后缀。
+ *
+ * 返回 `null` 表示不是合法版本号。**「合法」与「可发布」是两件事**：
+ * 这里只回答形状对不对，是否允许发 Release 由调用方判断。
+ */
+export function parseVersion(version) {
+  const text = String(version ?? '')
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?$/.exec(text)
+  if (match === null) return null
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ?? null,
+    raw: text,
+  }
+}
+
+/**
+ * 是不是预发布版本。
+ *
+ * 判定只有一个依据：版本号里有没有 `-后缀`。不看时间、不看分支名 —— 那些都会让
+ * 「这个版本会不会被标成 Latest」变成一件需要推断的事，而它应该是查表。
+ */
+export function isPrerelease(version) {
+  const parsed = parseVersion(version)
+  return parsed !== null && parsed.prerelease !== null
 }
 
 /** CHANGELOG 里有没有这个版本的段落。发布说明就是从这里截的，没有段落等于没有说明。 */

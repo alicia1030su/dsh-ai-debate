@@ -31,7 +31,14 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { changelogHasVersion, checkReadme, rewriteReadme, staleVersionMentions } from './lib/version-core.mjs'
+import {
+  changelogHasVersion,
+  checkReadme,
+  isPrerelease,
+  parseVersion,
+  rewriteReadme,
+  staleVersionMentions,
+} from './lib/version-core.mjs'
 
 const root = process.cwd()
 const pkgPath = join(root, 'package.json')
@@ -43,8 +50,28 @@ function check(args) {
   const expected = pkg.version
   const problems = []
 
-  if (!/^\d+\.\d+\.\d+$/.test(expected)) {
-    problems.push(`package.json 的 version 不是三段数字：${expected}`)
+  if (parseVersion(expected) === null) {
+    problems.push(`package.json 的 version 不是合法版本号（x.y.z 或 x.y.z-rc.N）：${expected}`)
+  }
+
+  /**
+   * ## 预发布版本必须先确认发布工作流会把它标成 Pre-release
+   *
+   * 这是 v0.3.0 撞到的真实坑：`gh release create` 不带 `--prerelease` 时，一个
+   * `0.3.0-rc.1` 的标签会被打成 **Latest 正式版** —— 页面看起来是一次正式发布，
+   * 而用户下到的其实是候选。版本工具如果只校验「版本号写得对不对」，就会放行这一步。
+   *
+   * 所以这里反过来查：版本是预发布，但 release.yml 里没有 `--prerelease`，
+   * 就直接判失败。规矩是「要么两件事都做，要么别发」。
+   */
+  if (isPrerelease(expected)) {
+    const workflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8')
+    if (!workflow.includes('--prerelease')) {
+      problems.push(
+        `版本 ${expected} 是预发布，但 .github/workflows/release.yml 的 gh release create 没有 --prerelease，` +
+          '这样会被打成 Latest 正式版。先补工作流，或改用正式版本号。',
+      )
+    }
   }
 
   const readme = readFileSync(readmePath, 'utf8')
@@ -80,8 +107,8 @@ function check(args) {
 
 function set(args) {
   const target = args[0]
-  if (!/^\d+\.\d+\.\d+$/.test(String(target ?? ''))) {
-    console.error(`版本号必须形如 0.2.17，收到的是 ${JSON.stringify(target)}`)
+  if (parseVersion(String(target ?? '')) === null) {
+    console.error(`版本号必须形如 0.2.17 或 0.3.0-rc.1，收到的是 ${JSON.stringify(target)}`)
     process.exit(1)
   }
 
