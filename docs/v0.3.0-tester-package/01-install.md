@@ -5,7 +5,9 @@
 
 ## 1. 安装
 
-安装包：`dsh-ai-debate-0.3.0.tgz`（SHA-256 见交付说明）。
+安装包：`dsh-ai-debate-<版本>.tgz` —— 文件名里的版本必须与本批交付说明一致。
+候选版是 `dsh-ai-debate-0.3.0-rc.1.tgz`，正式版是 `dsh-ai-debate-0.3.0.tgz`；
+SHA-256 见交付说明。**不要**用旧版本或本地自行构建的包。
 
 如果你已经在用 DSH Desktop：
 

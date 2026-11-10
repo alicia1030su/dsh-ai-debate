@@ -3,7 +3,8 @@
 ## 发放前
 
 - [ ] 确认候选包 SHA-256 与交付说明一致
-- [ ] 确认测试者拿到的是 `dsh-ai-debate-0.3.0.tgz`，不是旧版本
+- [ ] 确认测试者拿到的是本批的那个 tgz（`dsh-ai-debate-0.3.0-rc.1.tgz` 或 `dsh-ai-debate-0.3.0.tgz`），不是旧版本
+- [ ] 候选版与正式版的告警措辞一致：标清是预发布（Pre-release），不要转述成正式版
 - [ ] 给每位测试者一份 `01-install.md`、`02-cases.md`、`03-scoring-sheet.csv`、`04-feedback-form.md`
 - [ ] 说明：不提供 API Key / Cookie / 真实账号
 
