@@ -20,6 +20,8 @@
  * 第 3 条是 v0.2.16 的教训：用户拿到的哈希必须能对上他刚下载的文件。
  */
 
+import { parseVersion } from './version-core.mjs'
+
 /** 从 CHANGELOG 里截出 `## [version]` 段落（不含标题行本身）。段落不存在时返回空数组。 */
 export function extractChangelogSection(changelog, version) {
   const lines = String(changelog ?? '').split(/\r?\n/)
@@ -50,8 +52,10 @@ export function fallbackDescription(version) {
 
 /** 安装段落。所有数字都来自调用方现取的事实。 */
 export function installSection({ repo, version, tarball, tarballSha256, sourceZip, sourceZipSha256 }) {
-  if (!/^\d+\.\d+\.\d+$/.test(String(version ?? ''))) {
-    throw new Error(`版本号必须是三段数字，收到 ${JSON.stringify(version)}`)
+  // 预发布版本同样要能生成安装段：`#v0.3.0-rc.1` 是合法引用，附件名也带着同一个后缀。
+  // 形状判定与版本工具共用一套，避免这边接受、那边拒绝。
+  if (parseVersion(String(version ?? '')) === null) {
+    throw new Error(`版本号必须是 x.y.z 或 x.y.z-预发布后缀，收到 ${JSON.stringify(version)}`)
   }
   if (!/^[0-9a-f]{64}$/i.test(String(tarballSha256 ?? ''))) {
     throw new Error(`${tarball} 的 SHA-256 不是 64 位十六进制`)
