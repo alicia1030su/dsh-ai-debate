@@ -36,6 +36,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { buildReleaseNotes, checkReleaseNotes } from './lib/release-notes.mjs'
+import { parseVersion } from './lib/version-core.mjs'
 
 const root = process.cwd()
 const args = process.argv.slice(2)
@@ -56,7 +57,10 @@ function fail(message) {
 
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const version = pkg.version
-if (!/^\d+\.\d+\.\d+$/.test(version)) fail(`package.json 的 version 不是三段数字：${version}`)
+// v0.3.0：预发布版本（0.3.0-rc.1）也要能走完整条无发布模拟，否则 rc 会在
+// `gh release create` 之前就被这一步拦下 —— 而工作流那半边已经支持 --prerelease 了。
+// 形状判定只此一处：`parseVersion` 同时接受 x.y.z 与 x.y.z-后缀，其它一律 null。
+if (parseVersion(version) === null) fail(`package.json 的 version 不是合法版本号：${version}`)
 
 const tarball = `dsh-ai-debate-${version}.tgz`
 const sourceZip = `dsh-ai-debate-source-${version}.zip`

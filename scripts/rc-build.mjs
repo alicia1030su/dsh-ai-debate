@@ -39,8 +39,14 @@ if (typeof label !== 'string' || !/^v\d+\.\d+\.\d+-rc\.\d+$/.test(label)) {
 }
 
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
-if (!/^\d+\.\d+\.\d+$/.test(pkg.version)) {
-  console.error(`package.json 版本不是三段数字：${pkg.version}`)
+// 候选构建既服务于「正式号 + rc 标签」的旧场景，也服务于 package.json 已经是 rc 的新场景。
+// 后者要求标签与包版本完全一致，避免目录名写 rc.1、包却是另一个版本。
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(pkg.version)) {
+  console.error(`package.json 版本不是合法版本号：${pkg.version}`)
+  process.exit(2)
+}
+if (/-/.test(pkg.version) && label !== `v${pkg.version}`) {
+  console.error(`package.json 已是预发布版本 ${pkg.version}，候选标签必须是 v${pkg.version}，收到 ${label}`)
   process.exit(2)
 }
 

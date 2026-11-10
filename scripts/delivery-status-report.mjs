@@ -80,7 +80,7 @@ report.status = status
 report.stage = stage
 report.github.repo = repo
 report.github.commitSha = sha
-report.github.tag = refName !== null && /^v\d+\.\d+\.\d+$/.test(refName) ? refName : null
+report.github.tag = refName !== null && /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(refName) ? refName : null
 report.github.runs.release =
   runId === null ? null : { id: runId, url: `${serverUrl}/${repo}/actions/runs/${runId}` }
 report.github.runs.ci =

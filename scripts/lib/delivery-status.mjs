@@ -21,6 +21,8 @@
  * 读者应当把 `null` 当作未知处理，而不是当作零。
  */
 
+import { parseVersion } from './version-core.mjs'
+
 /**
  * 按 BOM 把测试日志的字节解成文本。
  *
@@ -138,8 +140,8 @@ export function assertReportConsistent(report) {
   const problems = []
   if (report?.schema !== STATUS_SCHEMA) problems.push(`schema 不是 ${STATUS_SCHEMA}`)
   if (!STATUS_VALUES.includes(report?.status)) problems.push(`status 不合法：${report?.status}`)
-  if (typeof report?.version !== 'string' || !/^\d+\.\d+\.\d+$/.test(report.version)) {
-    problems.push('version 不是三段数字')
+  if (typeof report?.version !== 'string' || parseVersion(report.version) === null) {
+    problems.push('version 不是合法版本号（x.y.z 或 x.y.z-预发布后缀）')
   }
 
   if (report?.status === 'success') {

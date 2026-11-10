@@ -399,10 +399,20 @@ export function classifySensitive(changes) {
   return { sensitive: reasons.length > 0, reasons }
 }
 
-/** 版本号必须是三段纯数字。`v` 前缀在这一层不接受，避免 `vv0.2.17` 这种拼出来的标签。 */
+/**
+ * 版本号必须是 `x.y.z` 或 `x.y.z-<预发布后缀>`。
+ *
+ * `v` 前缀在这一层不接受，避免 `vv0.2.17` 这种拼出来的标签。
+ *
+ * v0.3.0 之前这里只认三段数字，于是 `ship.mjs` 根本发不出 `0.3.0-rc.1`：
+ * preflight 直接拒绝，标签和分支名也没法生成。结果是「预发布」只能靠手工打标签，
+ * 而那恰好绕开了整条审核链。现在形状判定与 `version-core.parseVersion` 是同一套，
+ * 但仍然只接受「数字.数字.数字」开头，`0.3`、`0.3.0.1`、`v0.3.0` 一律拒绝。
+ */
 export function assertSemver(version) {
-  if (!/^\d+\.\d+\.\d+$/.test(String(version ?? ''))) {
-    throw new Error(`版本号必须形如 0.2.17，收到的是 ${JSON.stringify(version)}`)
+  const text = String(version ?? '')
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(text)) {
+    throw new Error(`版本号必须形如 0.2.17 或 0.3.0-rc.1，收到的是 ${JSON.stringify(version)}`)
   }
   return version
 }

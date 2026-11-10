@@ -47,6 +47,7 @@ import {
   STAGE_LABELS,
   RECOVERY,
   advanceState,
+  assertSemver,
   branchForVersion,
   classifySensitive,
   createShipState,
@@ -231,8 +232,10 @@ function preflight() {
 
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
   const version = OVERRIDE_VERSION ?? pkg.version
-  if (!/^\d+\.\d+\.\d+$/.test(version)) {
-    fail('preflight', `package.json 的 version 不是三段数字：${version}`)
+  try {
+    assertSemver(version)
+  } catch (error) {
+    fail('preflight', `package.json 的 version 不是合法版本号：${error instanceof Error ? error.message : String(error)}`)
   }
 
   const gitVersion = run('git', ['--version'])
