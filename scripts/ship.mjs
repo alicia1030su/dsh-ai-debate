@@ -49,13 +49,20 @@ import {
   advanceState,
   branchForVersion,
   classifySensitive,
+  compareReviewedContent,
   createShipState,
   decideRelease,
   decideTag,
+  judgeMergeGate,
   nextStep,
   restoreState,
   tagForVersion,
 } from './lib/ship-core.mjs'
+import {
+  findMaintainerApproval,
+  readBlobsAt,
+  readChangedEntries,
+} from './lib/ship-review.mjs'
 import {
   artifactOf,
   assertReportConsistent,
@@ -606,21 +613,43 @@ function ensurePullRequest(version, branch, defaultBranch) {
   const open = parseJsonArray(existing.stdout)
   if (open.length > 0) {
     log(`已有 PR #${open[0].number}，复用`)
-    return { number: open[0].number, url: open[0].url, state: 'OPEN', created: false }
+    const detail = readPullRequestFacts(open[0].number)
+    return {
+      number: open[0].number,
+      url: open[0].url,
+      state: 'OPEN',
+      headRefOid: detail.headRefOid,
+      mergedAt: null,
+      created: false,
+    }
   }
 
   // 续跑时会碰到 PR 已经被人工合并的情况。只看 `--state open` 会以为「没有 PR」，
-  // 于是要么重建一个（对已合并的分支重建 PR 会失败），要么再拦一次人工授权 ——
-  // 而人工合并本身就已经是那次授权，再要求一次等于让人永远卡在这一步。
-  const merged = run('gh', ['pr', 'list', '--head', branch, '--state', 'merged', '--json', 'number,url,mergeCommit'])
+  // 于是要么重建一个（对已合并的分支重建 PR 会失败），要么再拦一次人工授权。
+  //
+  // **但「已被合并」只是事实，不是授权**（v0.3.0 issue #32）。这里仍然返回 MERGED，
+  // 因为流程需要知道 PR 已合并；是否允许继续发版由 `judgeMergeGate` 判定，
+  // 它要求状态文件里的审核锚点 + 维护者 review + 内容比对三者同时成立。
+  const merged = run('gh', [
+    'pr',
+    'list',
+    '--head',
+    branch,
+    '--state',
+    'merged',
+    '--json',
+    'number,url,mergeCommit,headRefOid,mergedAt',
+  ])
   if (merged.code === 0) {
     const closed = parseJsonArray(merged.stdout)
     if (closed.length > 0) {
-      log(`PR #${closed[0].number} 已被合并，跳过创建`)
+      log(`PR #${closed[0].number} 已被合并，跳过创建（是否可发布由授权检查决定）`)
       return {
         number: closed[0].number,
         url: closed[0].url,
         state: 'MERGED',
+        headRefOid: closed[0].headRefOid ?? null,
+        mergedAt: closed[0].mergedAt ?? null,
         mergeCommit: closed[0].mergeCommit?.oid ?? null,
         created: false,
       }
@@ -642,11 +671,129 @@ function ensurePullRequest(version, branch, defaultBranch) {
   ])
   if (create.code !== 0) fail('pull_request', `创建 PR 失败：${create.stdout}${create.stderr}`)
 
-  const view = run('gh', ['pr', 'view', branch, '--json', 'number,url'])
+  const view = run('gh', ['pr', 'view', branch, '--json', 'number,url,headRefOid,mergedAt'])
   if (view.code !== 0) fail('pull_request', `PR 已创建但读不回编号：${view.stderr.trim()}`)
   const info = parseJson(view.stdout)
   log(`已创建 PR #${info.number}`)
-  return { number: info.number, url: info.url, created: true }
+  return {
+    number: info.number,
+    url: info.url,
+    state: 'OPEN',
+    headRefOid: info.headRefOid ?? null,
+    mergedAt: null,
+    created: true,
+  }
+}
+
+/**
+ * 读一个 PR 的最终事实：head、合并时间、敏感路径与审核锚点。
+ *
+ * 「head」必须是**现在**的 head，不是创建 PR 时的那个。授权要绑定最终代码，
+ * 而最终代码就是这里读到的值。
+ */
+function readPullRequestFacts(prNumber) {
+  const view = run('gh', [
+    'pr',
+    'view',
+    String(prNumber),
+    '--json',
+    'number,url,state,headRefOid,mergedAt,baseRefName,mergeCommit,isCrossRepository',
+  ])
+  if (view.code !== 0) fail('pull_request', `读不到 PR #${prNumber} 的最终状态：${view.stderr.trim()}`)
+  return parseJson(view.stdout)
+}
+
+/**
+ * 记下「停下来时被审阅的是哪一份代码」（v0.3.0 issue #32 的审核锚点）。
+ *
+ * 只记事实，不记判断：head、tree、以及每个改动路径在这个 head 上的 blob。
+ * 恢复时拿它对比合并结果 —— 没有它，任何合并都无法与「被批准的那份代码」对上。
+ */
+function captureReviewAnchor(prNumber, head, reasons) {
+  const paths = [...new Set((reasons ?? []).map((reason) => reason.path))].sort()
+  const changed = readChangedEntries(runGit, `origin/main...${head}`, head)
+  if (!changed.ok) {
+    fail('pull_request', `停在审核点前读不出 ${head.slice(0, 12)} 的改动清单：${changed.problems.join('；')}`)
+  }
+  // 审核锚点记「相对基线的全部改动」，不只是敏感路径：合并后要能证明整份交付内容没变，
+  // 而敏感路径清单只用来核对授权范围。
+  const blobs = readBlobsAt(runGit, head, changed.entries.map((entry) => entry.path))
+  const tree = runGit(['rev-parse', `${head}^{tree}`])
+  if (tree.code !== 0) fail('pull_request', `读不到 ${head.slice(0, 12)} 的 tree`)
+
+  return {
+    pr: prNumber,
+    head,
+    tree: tree.stdout.trim(),
+    paths,
+    allPaths: blobs,
+    reasons: (reasons ?? []).map((reason) => ({ id: reason.id, path: reason.path })),
+    capturedAt: new Date().toISOString(),
+  }
+}
+
+/** git 包装：与 `run` 同形，供 ship-review 的读取函数复用。 */
+function runGit(gitArgs) {
+  return run('git', gitArgs)
+}
+
+/**
+ * 把 `gh pr diff` 的 unified diff 还原成 `classifySensitive` 的输入。
+ *
+ * 只取路径与新增/删除行。路径取自 `diff --git a/x b/x` 的右侧，删除文件时右侧是
+ * `/dev/null`，那种情况用左侧 —— 删掉一个敏感文件同样需要人看一眼。
+ */
+function parseUnifiedDiff(text) {
+  const changes = []
+  let current = null
+  for (const line of String(text).split(/\r?\n/)) {
+    if (line.startsWith('diff --git ')) {
+      const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line)
+      const path = match === null ? '' : match[2] === '/dev/null' ? match[1] : match[2]
+      current = { path, addedLines: [], removedLines: [] }
+      changes.push(current)
+      continue
+    }
+    if (current === null) continue
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('@@')) continue
+    if (line.startsWith('+')) current.addedLines.push(line)
+    else if (line.startsWith('-')) current.removedLines.push(line)
+  }
+  return changes.filter((change) => change.path !== '')
+}
+
+/**
+ * 按 PR 自己的 diff 判敏感。
+ *
+ * 已合并的 PR 在工作区里已经看不到改动；只按工作区判会漏掉整类敏感变更。
+ */
+function sensitiveOfPullRequest(prNumber) {
+  const diff = run('gh', ['pr', 'diff', String(prNumber), '--repo', report.github.repo])
+  if (diff.code !== 0) {
+    fail('pull_request', `读不到 PR #${prNumber} 的 diff，无法判断它改了什么：${diff.stderr.trim()}`)
+  }
+  return classifySensitive(parseUnifiedDiff(diff.stdout))
+}
+
+/** 参数里是否有 `--maintainer`（逗号分隔的维护者登录名）。 */
+const MAINTAINER_OVERRIDE = valueOf('--maintainer')
+
+/**
+ * 当前仓库的维护者登录名。授权必须来自这些人，AI 自己的账号不算。
+ *
+ * 默认取仓库 owner：本仓库只有一个维护者，这个默认值与 AGENTS.md 的约定一致。
+ * 允许 `--maintainer a,b` 覆盖，是为了将来加第二个人时不用改代码 —— 但覆盖值来自
+ * 命令行，它只影响「谁的意见算数」，不影响「必须有 opinion」这件事本身。
+ */
+function maintainersOf(repo) {
+  if (MAINTAINER_OVERRIDE !== null && MAINTAINER_OVERRIDE.trim() !== '') {
+    return MAINTAINER_OVERRIDE
+      .split(',')
+      .map((name) => name.trim().toLowerCase())
+      .filter(Boolean)
+  }
+  const owner = String(repo).split('/')[0]
+  return owner === '' ? [] : [owner.toLowerCase()]
 }
 
 function buildPullRequestBody(version) {
@@ -662,7 +809,26 @@ function buildPullRequestBody(version) {
   const riskLines =
     sensitive.reasons.length === 0
       ? ['本次变更不涉及权限策略、凭据规则或真实平台发表路径。']
-      : ['本次变更触及以下需要人工确认的部分，因此不会自动合并：', ...sensitive.reasons.map((r) => `- \`${r.path}\`：${r.reason}`)]
+      : [
+          '本次变更触及以下需要人工确认的部分，因此不会自动合并：',
+          ...sensitive.reasons.map((r) => `- \`${r.path}\`：${r.reason}`),
+          '',
+          '### 维护者如何授权（v0.3.0 issue #32）',
+          '',
+          '合并事实本身**不是**授权。请在 PR 的 Review 里提交一条正文如下的 review，',
+          '`head` 填**当前 PR 最终提交**的完整 40 位 SHA：',
+          '',
+          '```text',
+          'ship-approval: v1',
+          `pr: <本 PR 编号>`,
+          'head: <当前 PR 最终提交的 40 位 SHA>',
+          'scope: <上面列出的敏感路径，逗号分隔>',
+          'note: <写明批准的是哪一个 PR、哪一个提交、哪些路径>',
+          '```',
+          '',
+          '提交后再点 squash 合并，并重跑 `node scripts/ship.mjs --resume`。',
+          '若 review 之后又推了新提交，旧授权自动失效，必须重新审核。',
+        ]
 
   return [
     `## v${version}`,
@@ -1004,6 +1170,29 @@ async function main() {
     return result
   }
 
+  /**
+   * 敏感判定不能只看工作区。
+   *
+   * PR 已被合并时，`origin/main` 里已经包含那些改动，`collectChanges` 得到的是空集 ——
+   * 如果直接拿它判敏感，一个含 workflow/扫描规则改动的已合并 PR 会被判成「不敏感」，
+   * 绕过授权检查。所以合并态必须额外按 **PR 自己的 diff** 判一次，两者取并集。
+   */
+  const sensitiveFor = (pullRequest) => {
+    const working = sensitiveCheck()
+    if (pullRequest?.state !== 'MERGED') return working
+    const merged = sensitiveOfPullRequest(pullRequest.number)
+    if (!merged.sensitive) return working
+    const seen = new Set(working.reasons.map((reason) => `${reason.id}:${reason.path}`))
+    const reasons = [...working.reasons]
+    for (const reason of merged.reasons) {
+      const key = `${reason.id}:${reason.path}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      reasons.push(reason)
+    }
+    return { sensitive: reasons.length > 0, reasons }
+  }
+
   let branch = null
   let pr = null
   let tag = null
@@ -1092,24 +1281,149 @@ async function main() {
       saveState()
     }
 
-    const sensitive = sensitiveCheck()
+    const sensitive = sensitiveFor(pr)
     if (pr.state === 'MERGED') {
-      // 走到这里说明上一轮停在了 PR，而人是手动合并的 —— 那次合并就是授权。
-      log(`PR #${pr.number} 已被合并（人工授权完成），跳过自动合并与等待检查`)
-      report.github.mergedCommitSha = pr.mergeCommit ?? null
-      advanceState(state, { to: 'tag', detail: { github: { mergedCommitSha: report.github.mergedCommitSha } } })
+      /**
+       * ## 已合并 ≠ 已授权（v0.3.0 issue #32）
+       *
+       * 旧代码在这里直接写「人工授权完成」然后去打标签。判据只有 `pr.state`，
+       * 于是「审核 A → 推 B → 合并 B → --resume」会把对 A 的批准用来发布 B。
+       *
+       * 现在必须同时成立四件事，缺一件就停：
+       * 1. 状态文件里有审核锚点（说明这次交付确实停过审核点）；
+       * 2. GitHub 上有一条来自维护者、`commit_id` 等于锚点 head 的授权 review；
+       * 3. 授权范围覆盖被审核的全部敏感路径；
+       * 4. PR 的最终 head 仍等于锚点，合并后的每个文件与审核时逐 blob 相同。
+       *
+       * 第 4 条不要求「合并 SHA 等于审核 head」：squash 必然生成新提交，要求相等
+       * 会把这条路彻底堵死。比的是内容，不是提交号。
+       */
+      const facts = readPullRequestFacts(pr.number)
+      const review = state.github?.review ?? null
+      const approval = findMaintainerApproval({
+        prNumber: pr.number,
+        reviewedHead: review?.head ?? null,
+        reviews: (() => {
+          const list = run('gh', ['api', `repos/${repo}/pulls/${pr.number}/reviews`, '--paginate'])
+          if (list.code !== 0) {
+            fail('pull_request', `读不到 PR #${pr.number} 的 review 记录：${list.stderr.trim()}`)
+          }
+          return parseJsonArray(list.stdout)
+        })(),
+        maintainers: maintainersOf(repo),
+        treeOfHead: (head) => {
+          const tree = runGit(['rev-parse', `${head}^{tree}`])
+          return tree.code === 0 ? tree.stdout.trim() : null
+        },
+      })
+
+      /**
+       * 内容比对：合并进去的每个文件，必须与被审核的那一份逐 blob 相同。
+       *
+       * 这里拿合并提交的**第一个父**做基线。squash 合并后 main 上可能还有别的 PR，
+       * 那些不属于这次授权，所以只比审核锚点记下的路径，并要求合并提交里
+       * 没有多带**未审核的敏感路径**。
+       */
+      const mergeSha = facts.mergeCommit?.oid ?? pr.mergeCommit ?? null
+      if (mergeSha === null || mergeSha === '') {
+        fail('pull_request', `PR #${pr.number} 状态是 MERGED，但读不到合并提交，无法核对内容`)
+      }
+      const parent = runGit(['rev-parse', `${mergeSha}^1`])
+      if (parent.code !== 0) fail('pull_request', `读不到合并提交 ${mergeSha.slice(0, 12)} 的父提交`)
+
+      const mergedEntries = readChangedEntries(runGit, `${parent.stdout.trim()}..${mergeSha}`, mergeSha)
+      if (!mergedEntries.ok) {
+        fail('pull_request', `读不出合并提交 ${mergeSha.slice(0, 12)} 的改动：${mergedEntries.problems.join('；')}`)
+      }
+      const extraSensitive = mergedEntries.entries
+        .map((entry) => entry.path)
+        .filter((path) => {
+          const hit = classifySensitive([{ path, addedLines: [], removedLines: [] }])
+          return hit.sensitive && !(review?.allPaths ?? []).some((item) => item.path === path)
+        })
+
+      const verdict = judgeMergeGate({
+        sensitive: sensitive.sensitive,
+        pr: {
+          number: pr.number,
+          state: facts.state,
+          headRefOid: facts.headRefOid ?? null,
+          mergedAt: facts.mergedAt ?? null,
+        },
+        review,
+        approval: approval.approval,
+        approvalProblems: approval.problems,
+        mergedEntries: sensitive.sensitive ? mergedEntries.entries : [],
+        extraSensitive: sensitive.sensitive ? extraSensitive : [],
+      })
+
+      if (!verdict.allowed) {
+        report.status = 'blocked'
+        report.stage = 'pull_request'
+        report.failure = {
+          stage: 'pull_request',
+          reason: verdict.reason,
+          recovery: [
+            '在 PR 页面确认最终 head 与敏感路径',
+            '以 maintainer 身份提交一条 ship-approval review（绑定当前 head）',
+            '若 head 在批准后又变了，重新审核新提交，不要复用旧批准',
+          ],
+        }
+        advanceState(state, {
+          to: 'auto_merge',
+          status: 'blocked',
+          detail: { note: verdict.reason, blocks: sensitive.reasons },
+        })
+        saveState()
+        console.log(`\n[ship] 停在授权/内容检查：${verdict.reason}`)
+        for (const problem of verdict.problems ?? []) console.log(`  · ${problem}`)
+        console.log(`[ship] PR：${pr.url}`)
+        process.exitCode = 2
+        return
+      }
+
+      if (sensitive.sensitive) {
+        log(
+          `PR #${pr.number} 已合并，授权 ${approval.approval.head.slice(0, 12)} ` +
+            `（${approval.approval.approver}）与审核锚点、合并内容一致`,
+        )
+        report.notes.push(
+          `敏感变更授权：PR #${pr.number} head ${approval.approval.head}，` +
+            `tree ${approval.approval.tree}，范围 ${approval.approval.scope.join('、')}`,
+        )
+      } else {
+        log(`PR #${pr.number} 已合并（非敏感变更），继续打标签`)
+      }
+      report.github.mergedCommitSha = mergeSha
+      advanceState(state, { to: 'tag', detail: { github: { mergedCommitSha: mergeSha } } })
       saveState()
     } else {
       const decision = nextStep({ stage: 'pull_request', sensitive: sensitive.sensitive })
       if (decision.blocked) {
+        /**
+         * 停在审核点之前，先把「被审阅的是哪一份代码」记下来。
+         *
+         * 没有这条记录，`--resume` 时就没有任何东西能把「批准」与「合并」对上 ——
+         * 那正是 issue #32 的成因。锚点落盘后，恢复流程才有得比。
+         */
+        const head = pr.headRefOid ?? report.github.commitSha ?? null
+        if (head === null) fail('pull_request', '读不到 PR 的 head，无法记录审核锚点')
+        const anchor = captureReviewAnchor(pr.number, head, sensitive.reasons)
+        state.github.review = anchor
         report.status = 'blocked'
         report.stage = 'pull_request'
         report.failure = { stage: 'pull_request', reason: decision.reason, recovery: decision.recovery }
-        advanceState(state, { to: 'auto_merge', status: 'blocked', detail: { note: decision.reason, blocks: sensitive.reasons } })
+        advanceState(state, {
+          to: 'auto_merge',
+          status: 'blocked',
+          detail: { note: decision.reason, blocks: sensitive.reasons, github: { review: anchor } },
+        })
         saveState()
         console.log(`\n[ship] 已停在人工审核：${decision.reason}`)
         console.log(`[ship] PR：${pr.url}`)
-        console.log('[ship] 确认无误后手动 squash 合并，再跑 node scripts/ship.mjs --resume')
+        console.log(`[ship] 审核锚点：head ${head}`)
+        console.log(`[ship] 敏感路径：${anchor.paths.join('、')}`)
+        console.log('[ship] 维护者审阅后提交 ship-approval review，squash 合并，再跑 --resume')
         process.exitCode = 2
         return
       }
@@ -1143,6 +1457,52 @@ async function main() {
     const mainSha = mainShaResult.stdout.trim()
     if (mainSha === '') fail('tag', `origin/${defaultBranch} 的提交是空字符串，无法判断标签该指向哪里`)
     report.github.commitSha = mainSha
+
+    /**
+     * ## 标签必须指向被审核的内容（issue #32 第 6 条）
+     *
+     * 合并提交可能已经被后来的 PR 推着往前走了。此时标签会指向一个包含未审核改动的
+     * main —— 对一个发布来说，那等于把「审核过」这句话扩大到了没审过的代码上。
+     *
+     * 所以打标签前再核对一次：审核锚点里的每个路径，在 main 上的 blob 必须与审核时
+     * 相同；合并提交必须仍然是 main 的祖先（没有被改写历史）。任一不成立就停。
+     */
+    const reviewAnchor = state.github?.review ?? null
+    if (reviewAnchor !== null) {
+      const atMain = readBlobsAt(
+        runGit,
+        mainSha,
+        (reviewAnchor.allPaths ?? []).map((entry) => entry.path),
+      )
+      const check = compareReviewedContent({ reviewed: reviewAnchor.allPaths ?? [], merged: atMain })
+      if (!check.ok) {
+        const reason = `标签目标 ${mainSha.slice(0, 12)} 上的内容与被审核内容不一致：${check.problems.join('；')}`
+        report.status = 'blocked'
+        report.stage = 'tag'
+        report.failure = { stage: 'tag', reason, recovery: ['重新审核 main 上的最终内容', '不要移动已存在的标签'] }
+        advanceState(state, { to: 'tag', status: 'blocked', detail: { note: reason } })
+        saveState()
+        console.log(`\n[ship] 停：${reason}`)
+        process.exitCode = 2
+        return
+      }
+
+      const mergedSha = state.github?.mergedCommitSha
+      if (mergedSha) {
+        const ancestor = runGit(['merge-base', '--is-ancestor', mergedSha, mainSha])
+        if (ancestor.code !== 0) {
+          const reason = `合并提交 ${mergedSha.slice(0, 12)} 不是 ${mainSha.slice(0, 12)} 的祖先：main 的历史被改写了`
+          report.status = 'blocked'
+          report.stage = 'tag'
+          report.failure = { stage: 'tag', reason, recovery: ['确认 main 没有被强推改写', '重新走审核与合并'] }
+          advanceState(state, { to: 'tag', status: 'blocked', detail: { note: reason } })
+          saveState()
+          console.log(`\n[ship] 停：${reason}`)
+          process.exitCode = 2
+          return
+        }
+      }
+    }
 
     const remoteTag = run('git', ['ls-remote', '--tags', 'origin', tagForVersion(version)])
     let tagExists = false

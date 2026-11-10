@@ -72,6 +72,55 @@ export const STAGE_LABELS = {
  *
  * 命中任何一条，PR 照建、CI 照跑，但**不开 auto-merge**，停下来等人。
  */
+
+/**
+ * 凭据扫描与归档完整性判定的全部来源（含 v0.3.0 搬进 `scripts/lib/` 的模块）。
+ *
+ * 这些文件合起来回答两个问题：「这段字节算不算泄漏」、「这个归档的索引可不可信」。
+ * 改其中任何一个都可能放宽判定，所以必须有人看过。
+ */
+export const SCAN_RULE_FILES = [
+  'scripts/audit-leaks.mjs',
+  'scripts/scan-archive.mjs',
+  'scripts/lib/zip-index.mjs',
+  'scripts/lib/scan-finding.mjs',
+  'scripts/lib/fixture-allowlist.mjs',
+]
+
+/** 决定「什么会进公开归档」的文件。`git-objects.mjs` 决定从哪个提交读哪些 blob。 */
+export const PACK_RULE_FILES = [
+  'scripts/source-zip.mjs',
+  'scripts/pack.mjs',
+  'scripts/tar.mjs',
+  'scripts/lib/git-objects.mjs',
+]
+
+/** 交付流水线自己的决策代码。让流水线有权改自己的判断，等于没有判断。 */
+export const SHIP_LOGIC_FILES = [
+  'scripts/ship.mjs',
+  'scripts/lib/ship-core.mjs',
+  'scripts/lib/delivery-status.mjs',
+  'scripts/lib/ship-review.mjs',
+]
+
+/** 版本号与预发布判定：决定一个 rc 会不会被当成 Latest 正式版发出去。 */
+export const RELEASE_VERSIONING_FILES = ['scripts/version.mjs', 'scripts/lib/version-core.mjs']
+
+/** 核验发布物与提交内容是否一致的那些判定。 */
+export const VERIFICATION_RULE_FILES = [
+  'scripts/lib/archive-verify.mjs',
+  'scripts/verify-source-archive.mjs',
+  'scripts/verify-install.mjs',
+  // `deps.mjs` 决定「隔离安装时装进去的是什么」。让它把不该进的东西也拷进去，
+  // 安装核验就会变成自证 —— 与放宽扫描判定是同一类风险。
+  'scripts/deps.mjs',
+  'scripts/lib/import-scan.mjs',
+  'scripts/ci-guard.mjs',
+]
+
+/** 发布说明的生成：附件哈希与安装命令的唯一来源。 */
+export const RELEASE_NOTES_FILES = ['scripts/release-dry-run.mjs', 'scripts/lib/release-notes.mjs']
+
 export const SENSITIVE_RULES = [
   {
     id: 'workflow',
@@ -86,19 +135,49 @@ export const SENSITIVE_RULES = [
   },
   {
     id: 'scan-rules',
-    test: (path) => ['scripts/audit-leaks.mjs', 'scripts/scan-archive.mjs'].includes(path),
-    reason: '改动了凭据扫描规则（唯一的泄漏判定来源）',
+    // ## 判定逻辑搬家之后，入口文件不再是全部（v0.3.0 issue #31）
+    //
+    // 这一条原来只认两个入口脚本。v0.3.0 把「什么算违规」抽进了 `scripts/lib/`：
+    // `zip-index.mjs` 判索引自洽与路径穿越，`scan-finding.mjs` 决定命中记录的形状
+    // （能不能带出内容），`fixture-allowlist.mjs` 决定哪些假值可以被放过。
+    // 只盯着入口，等于允许改判定而不用人看 —— 门禁挡的是文件名，不是风险。
+    //
+    // 这里仍然用**显式清单**而不是 `scripts/lib/*` 通配：通配会把交付状态、版本工具
+    // 这些与扫描无关的模块一起拦下来，而那些改动每次都要人守着，守卫会被绕过。
+    // 清单是否漏项由测试里的「导入闭包」断言兜底：从敏感入口出发能走到的本地模块，
+    // 必须全部被某条规则命中，新增模块忘了登记会直接变红。
+    test: (path) => SCAN_RULE_FILES.includes(path),
+    reason: '改动了凭据扫描或归档完整性判定（唯一的泄漏判定来源）',
   },
   {
     id: 'pack-rules',
-    test: (path) => ['scripts/source-zip.mjs', 'scripts/pack.mjs', 'scripts/tar.mjs'].includes(path),
+    test: (path) => PACK_RULE_FILES.includes(path),
     reason: '改动了归档打包规则（决定什么会公开发布）',
   },
   {
     id: 'ship-logic',
-    test: (path) =>
-      ['scripts/ship.mjs', 'scripts/lib/ship-core.mjs', 'scripts/lib/delivery-status.mjs'].includes(path),
+    test: (path) => SHIP_LOGIC_FILES.includes(path),
     reason: '改动了交付流水线自身的决策代码',
+  },
+  {
+    id: 'release-versioning',
+    // 版本号的「是不是预发布」判定决定 Release 会不会被标成 Latest。
+    // 改坏它不会让任何一步变红：版本对、标签对、CI 全绿，只有那一个布尔值错了。
+    test: (path) => RELEASE_VERSIONING_FILES.includes(path),
+    reason: '改动了版本与预发布判定（决定 Release 会不会被标成 Latest）',
+  },
+  {
+    id: 'verification-rules',
+    // 归档/安装核验与 CI 守卫是「发布物是否等于提交内容」的判据。
+    // 放宽它们不会让发布失败，只会让错误的东西通过核验。
+    test: (path) => VERIFICATION_RULE_FILES.includes(path),
+    reason: '改动了归档、安装或 CI 守卫的核验判定（决定错误产物能否通过检查）',
+  },
+  {
+    id: 'release-notes',
+    // 发布说明里的 SHA-256 与安装命令是用户核对自己下载物的唯一依据。
+    test: (path) => RELEASE_NOTES_FILES.includes(path),
+    reason: '改动了发布说明的生成（用户据此核对附件哈希与安装命令）',
   },
   {
     id: 'security-boundary',
@@ -467,6 +546,299 @@ export function decideTag({ tagExists, tagCommit, expectedCommit }) {
       `${String(expectedCommit).slice(0, 12)}。移动标签会让已下载旧产物的人无法复现，` +
       '请改用新版本号，或先确认旧发布应当保留。',
   }
+}
+
+/**
+ * ## 维护者授权：必须绑定到具体代码（v0.3.0 issue #32）
+ *
+ * 旧实现只有一个判据：`pr.state === 'MERGED'`。它把「合并发生了」当成「审核发生了」，
+ * 于是下面这条路径会发布未经审阅的代码：
+ *
+ * 1. ship 在敏感变更上停在 PR，维护者看到 head 是 A 并批准 A；
+ * 2. 批准之后又推了 B 到同一分支；
+ * 3. 合并的是 B；
+ * 4. `--resume` 看到 MERGED，直接打标签发布 B —— 对 A 的批准被用来发 B。
+ *
+ * 修法不是「再问一次」，而是把授权变成一条**可核对、且绑定到 A 的记录**：
+ * 记录里同时写 PR 编号、head、tree 与敏感路径；恢复时逐项比对锁文件里记下的审核锚点
+ * （`state.github.review`）、GitHub 上 PR 的最终 head、以及合并后的内容。
+ *
+ * ## 为什么还要比 tree
+ *
+ * squash 合并会生成一个新提交：合并 SHA 与被审核的 head 永远不会相等。要求「SHA 相等」
+ * 会让这条路永远走不通，于是人会用「跳过检查」来解决 —— 那是更坏的结果。正确的判据是
+ * **内容相同**：先比 tree（基线没动时的充分条件），tree 不同再逐路径比 blob
+ * （基线前进过、但每个被改文件的内容仍与审核时一致）。两条都不成立就停。
+ */
+
+/** 授权记录的结构版本。改字段含义就加一，旧记录会被当成不可解析而不是被误读。 */
+export const APPROVAL_SCHEMA = 1
+
+/** 授权记录里必须出现的字段。缺一个都不能算「可核对」。 */
+const APPROVAL_FIELDS = ['pr', 'head', 'tree', 'scope', 'approver', 'statement', 'approvedAt']
+
+/**
+ * 解析一份维护者授权记录。
+ *
+ * 这里只回答「这份记录本身是否完整、可解析」，不回答「它是否真的对应这次合并」——
+ * 后者由 `judgeResumeAuthorization` 对着 PR 与审核锚点比对。
+ *
+ * @param {unknown} raw
+ * @returns {{ok: boolean, approval: object|null, problems: string[]}}
+ */
+export function parseApproval(raw) {
+  const problems = []
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, approval: null, problems: ['授权记录不是一个对象'] }
+  }
+  const record = /** @type {Record<string, unknown>} */ (raw)
+
+  if (record.schema !== APPROVAL_SCHEMA) {
+    problems.push(`授权记录的 schema 是 ${String(record.schema)}，本版本只接受 ${APPROVAL_SCHEMA}`)
+  }
+  if (record.kind !== 'maintainer-authorization') {
+    problems.push('授权记录的 kind 不是 maintainer-authorization')
+  }
+  for (const field of APPROVAL_FIELDS) {
+    if (record[field] === undefined || record[field] === null || record[field] === '') {
+      problems.push(`授权记录缺少 ${field}`)
+    }
+  }
+
+  if (typeof record.pr !== 'number' || !Number.isInteger(record.pr) || record.pr <= 0) {
+    problems.push('pr 必须是正整数')
+  }
+  for (const field of ['head', 'tree']) {
+    if (typeof record[field] !== 'string' || !/^[0-9a-f]{40}$/.test(record[field])) {
+      problems.push(`${field} 必须是 40 位十六进制提交/树对象号`)
+    }
+  }
+  if (!Array.isArray(record.scope) || record.scope.length === 0 || record.scope.some((item) => typeof item !== 'string')) {
+    // 空范围等于「批准了什么都可以」，那不是一份可核对的授权。
+    problems.push('scope 必须是非空的路径字符串数组')
+  }
+  if (typeof record.statement !== 'string' || record.statement.trim().length < 20) {
+    // 一句话的「同意」无法核对批准的是哪一份差异。要求写出范围，是为了让记录本身可审计。
+    problems.push('statement 太短：至少写明批准的是哪个 PR、哪个提交、哪些路径')
+  }
+  if (typeof record.approvedAt !== 'string' || Number.isNaN(Date.parse(record.approvedAt))) {
+    problems.push('approvedAt 必须是可解析的时间')
+  }
+
+  if (problems.length > 0) return { ok: false, approval: null, problems }
+
+  return {
+    ok: true,
+    approval: {
+      schema: APPROVAL_SCHEMA,
+      kind: 'maintainer-authorization',
+      pr: record.pr,
+      head: record.head,
+      tree: record.tree,
+      scope: [...record.scope].sort(),
+      approver: String(record.approver),
+      statement: String(record.statement),
+      approvedAt: String(record.approvedAt),
+    },
+    problems: [],
+  }
+}
+
+/**
+ * 恢复敏感交付时，判定「这次合并是否有绑定到最终代码的授权」。
+ *
+ * @param {object} input
+ * @param {boolean} input.sensitive 这次变更是否命中敏感路径
+ * @param {{number: number, state: string, headRefOid: string|null, mergedAt: string|null}} input.pr
+ * @param {{pr: number, head: string, tree: string, paths: string[], reasons: Array<{id: string, path: string}>}|null} input.review
+ *   停在 PR 时记下的审核锚点：被审阅的提交、树、路径
+ * @param {object|null} input.approval 已解析的授权记录
+ * @param {string[]} [input.approvalProblems] 授权记录的解析问题
+ * @returns {{allowed: boolean, blocked: boolean, reason: string}}
+ */
+export function judgeResumeAuthorization({ sensitive, pr, review, approval, approvalProblems = [] }) {
+  if (!sensitive) {
+    // 非敏感变更不需要维护者授权；自动合并走的是另一条路径。
+    return { allowed: true, blocked: false, reason: '非敏感变更，不需要维护者授权' }
+  }
+
+  if (pr?.state !== 'MERGED') {
+    return {
+      allowed: false,
+      blocked: true,
+      reason: `敏感变更不能自动发布：PR 当前状态是 ${String(pr?.state)}，还没有经过人工合并`,
+    }
+  }
+
+  if (review === null || review === undefined) {
+    // 没有审核锚点就没有「批准的是哪一份代码」这个事实。此时任何合并都不能被当成授权。
+    return {
+      allowed: false,
+      blocked: true,
+      reason:
+        '状态文件里没有审核锚点（review），无法把授权绑定到具体提交。' +
+        '不能仅凭「PR 已合并」推断审核完成；需要重新走一遍敏感审核并留下记录。',
+    }
+  }
+
+  if (approval === null || approval === undefined) {
+    const detail = approvalProblems.length > 0 ? `：${approvalProblems.join('；')}` : ''
+    return {
+      allowed: false,
+      blocked: true,
+      reason:
+        `没有找到可核对的维护者授权记录${detail}。` +
+        '敏感变更必须在合并前留下绑定 PR、head 与敏感路径的授权记录；合并事实本身不是授权。',
+    }
+  }
+
+  if (approvalProblems.length > 0) {
+    return { allowed: false, blocked: true, reason: `授权记录不可用：${approvalProblems.join('；')}` }
+  }
+
+  if (approval.pr !== pr.number) {
+    return {
+      allowed: false,
+      blocked: true,
+      reason: `授权记录属于 PR #${approval.pr}，而当前 PR 是 #${pr.number}`,
+    }
+  }
+
+  if (approval.head !== review.head) {
+    return {
+      allowed: false,
+      blocked: true,
+      reason:
+        `授权绑定的是 ${approval.head.slice(0, 12)}，而停下时记录的审核提交是 ` +
+        `${review.head.slice(0, 12)}：授权与审核锚点不一致`,
+    }
+  }
+
+  if (approval.tree !== review.tree) {
+    return {
+      allowed: false,
+      blocked: true,
+      reason:
+        `授权记录的 tree 是 ${approval.tree.slice(0, 12)}，审核锚点的 tree 是 ` +
+        `${review.tree.slice(0, 12)}：授权与审核内容不一致`,
+    }
+  }
+
+  const missing = [...(review.paths ?? [])].sort().filter((path) => !approval.scope.includes(path))
+  if (missing.length > 0) {
+    return {
+      allowed: false,
+      blocked: true,
+      reason: `授权范围没有覆盖被审核的敏感路径：${missing.join('、')}`,
+    }
+  }
+
+  if (pr.headRefOid !== review.head) {
+    return {
+      allowed: false,
+      blocked: true,
+      reason:
+        `审核后 PR 头变成了 ${String(pr.headRefOid).slice(0, 12)}（审核的是 ` +
+        `${review.head.slice(0, 12)}）：旧授权已失效，必须重新审核新提交`,
+    }
+  }
+
+  // 授权必须发生在合并之前。合并之后再补一条记录，不是审阅，是追认。
+  const mergedAt = pr.mergedAt === null || pr.mergedAt === undefined ? null : Date.parse(pr.mergedAt)
+  const approvedAt = Date.parse(approval.approvedAt)
+  if (mergedAt !== null && Number.isFinite(mergedAt) && approvedAt > mergedAt) {
+    return {
+      allowed: false,
+      blocked: true,
+      reason:
+        `授权时间 ${approval.approvedAt} 晚于合并时间 ${pr.mergedAt}：` +
+        '事后补的批准不能作为这次合并的审核记录',
+    }
+  }
+
+  return { allowed: true, blocked: false, reason: `授权 ${approval.head.slice(0, 12)} 与合并内容一致` }
+}
+
+/**
+ * 恢复合并态时要过的完整闸门：授权 + 内容。
+ *
+ * 拆成单独一个函数，是为了让「审核 A → 推 B → 合并 B」这条行为能被整体测试，
+ * 而不是只测其中一半。任何一半单独通过都不能放行。
+ *
+ * @param {object} input
+ * @param {boolean} input.sensitive
+ * @param {object} input.pr
+ * @param {object|null} input.review
+ * @param {object|null} input.approval
+ * @param {string[]} [input.approvalProblems]
+ * @param {Array<{path: string, blob: string|null}>} [input.mergedEntries]
+ * @param {string[]} [input.extraSensitive]
+ * @returns {{allowed: boolean, blocked: boolean, reason: string, problems: string[]}}
+ */
+export function judgeMergeGate({
+  sensitive,
+  pr,
+  review,
+  approval,
+  approvalProblems = [],
+  mergedEntries = [],
+  extraSensitive = [],
+}) {
+  const authorization = judgeResumeAuthorization({ sensitive, pr, review, approval, approvalProblems })
+  if (!authorization.allowed) {
+    return { ...authorization, problems: [authorization.reason] }
+  }
+  if (!sensitive) return { ...authorization, problems: [] }
+
+  const content = compareReviewedContent({
+    reviewed: review?.allPaths ?? [],
+    merged: mergedEntries,
+    extraSensitive,
+  })
+  if (!content.ok) {
+    return {
+      allowed: false,
+      blocked: true,
+      reason: `合并内容与被审核内容不一致：${content.problems.join('；')}`,
+      problems: content.problems,
+    }
+  }
+  return { ...authorization, problems: [] }
+}
+
+/**
+ * 合并后的内容是否就是被审核的那一份。
+ *
+ * 只比**被审核过的那些路径**，不比整个合并提交：squash 的基线在审核之后可能前进过，
+ * 那时合并提交相对父提交还会带上别的 PR 的文件 —— 那是正常的历史，不是这次授权的问题。
+ * 但反过来，如果合并把**新的敏感路径**带了进来（没在授权范围里），那就必须停。
+ *
+ * @param {object} input
+ * @param {Array<{path: string, blob: string|null}>} input.reviewed 审核时每个改动路径的 blob
+ * @param {Array<{path: string, blob: string|null}>} input.merged 合并提交上同样路径的 blob
+ * @param {string[]} [input.extraSensitive] 合并带入、但不在授权范围内的敏感路径
+ * @returns {{ok: boolean, problems: string[]}}
+ */
+export function compareReviewedContent({ reviewed, merged, extraSensitive = [] }) {
+  const problems = []
+  const expected = new Map((reviewed ?? []).map((item) => [item.path, item.blob]))
+  const observed = new Map((merged ?? []).map((item) => [item.path, item.blob]))
+
+  for (const [path, blob] of expected) {
+    if (!observed.has(path)) {
+      problems.push(`合并结果里没有审核过的路径 ${path}`)
+      continue
+    }
+    if (observed.get(path) !== blob) {
+      problems.push(`${path} 的内容与审核时不同`)
+    }
+  }
+
+  for (const path of extraSensitive ?? []) {
+    if (!expected.has(path)) problems.push(`合并结果带入了未审核的敏感路径 ${path}`)
+  }
+
+  return { ok: problems.length === 0, problems }
 }
 
 /**
