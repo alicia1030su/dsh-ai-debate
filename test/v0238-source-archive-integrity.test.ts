@@ -112,7 +112,7 @@ test('一致的条目判 identical，不计入任何问题类', () => {
   const result = verifyArchive(zip, new Map([['a.txt', data]]), 1)
   assert.equal(result.identical, 1)
   assert.equal(result.verdicts.length, 0)
-  assert.deepEqual(result.totals, { content: 0, lineEndingsOnly: 0, notInRepository: 0 })
+  assert.deepEqual(result.totals, { content: 0, lineEndingsOnly: 0, notInRepository: 0, nonRegular: 0 })
 })
 
 test('只有行尾不同单独成一类：这不是源码被改', () => {
