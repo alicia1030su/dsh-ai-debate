@@ -408,6 +408,74 @@ describe('#32：授权记录解析与维护者 review 读取', () => {
     assert.match(drifted.problems.join('；'), /GitHub 记录的 review 提交/)
   })
 
+  it('单维护者模式：作者本人提交的 Comment review 也算授权（无需 GitHub 不支持的自我 Approve）', () => {
+    /**
+     * 本仓库只有一个维护者，而四个敏感 PR 的作者也是他。
+     * GitHub 明确禁止「批准自己的 PR」，所以要求 APPROVED 会形成一个永远解不开的死结。
+     *
+     * 可行的替代是**同一账号提交一条正文为 ship-approval 的 Comment review**：
+     * GitHub 仍然会记录 commit_id、作者与提交时间，三者都可核对；它只是不叫 Approve。
+     * 本测试钉住「COMMENTED 被接受」，防止以后有人把判据收窄回只认 APPROVED。
+     */
+    const body = [
+      'ship-approval: v1',
+      'pr: 35',
+      `head: ${HEAD_A}`,
+      'scope: scripts/lib/zip-index.mjs',
+      'note: 我审阅了归档完整性修复，确认只收紧检查、没有新增豁免。',
+    ].join('\n')
+
+    const result = findMaintainerApproval({
+      prNumber: 35,
+      reviewedHead: HEAD_A,
+      reviews: [
+        {
+          id: 9,
+          state: 'COMMENTED',
+          commit_id: HEAD_A,
+          user: { login: 'alicia1030su' },
+          body,
+          submitted_at: '2026-11-09T15:00:00Z',
+        },
+      ],
+      maintainers: ['alicia1030su'],
+      treeOfHead: () => TREE_A,
+    })
+
+    assert.equal(result.ok, true, result.problems.join('；'))
+    assert.equal((result.approval as { approver: string }).approver, 'alicia1030su')
+  })
+
+  it('Request changes / dismissed 不算授权', () => {
+    const body = [
+      'ship-approval: v1',
+      'pr: 35',
+      `head: ${HEAD_A}`,
+      'scope: scripts/lib/zip-index.mjs',
+      'note: 我审阅了归档完整性修复，确认只收紧检查、没有新增豁免。',
+    ].join('\n')
+
+    for (const state of ['CHANGES_REQUESTED', 'DISMISSED', 'PENDING']) {
+      const result = findMaintainerApproval({
+        prNumber: 35,
+        reviewedHead: HEAD_A,
+        reviews: [
+          {
+            id: 10,
+            state,
+            commit_id: HEAD_A,
+            user: { login: 'alicia1030su' },
+            body,
+            submitted_at: '2026-11-09T15:00:00Z',
+          },
+        ],
+        maintainers: ['alicia1030su'],
+        treeOfHead: () => TREE_A,
+      })
+      assert.equal(result.ok, false, `${state} 不该被当成授权`)
+    }
+  })
+
   it('非维护者写的同一段文本不算授权', () => {
     const result = findMaintainerApproval({
       prNumber: 35,
