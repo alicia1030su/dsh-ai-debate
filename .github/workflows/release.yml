@@ -258,10 +258,42 @@ jobs:
           # 走一遍（含哈希校验），到这一步只是把同样的结果写进 Release。
           node scripts/release-dry-run.mjs --emit /tmp/notes.md
 
+          # ## 预发布版本必须是 GitHub Pre-release（v0.3.0）
+          #
+          # `gh release create` 不带 `--prerelease` 时，一个 `0.3.0-rc.1` 的标签会被打成
+          # **Latest 正式版**：页面看起来是一次正式发布，用户下到的其实是候选。这个错误
+          # 不会让任何步骤变红 —— 版本号对、标签对、CI 全绿，只有「这是不是 Pre-release」
+          # 那一个布尔值错了。
+          #
+          # 判据只有版本号里有没有 `-后缀`，不看分支名也不看时间：那两样都会让这件事
+          # 变成需要推断的东西，而它应该是查表。`scripts/lib/version-core.mjs` 的
+          # `isPrerelease` 是同一套判定，`version.mjs check` 也已经要求本文件里有
+          # `--prerelease`，两头对齐。
+          # 用 bash 内建的模式匹配，不用 `printf | grep`：管道需要 `pipefail` 才能让
+          # 左侧失败可见，而这一步的其它判断都是纯 bash —— 为了一个正则引入管道，
+          # 等于给一个本来不会错的判断加上一种静默失败的可能（ci-guard 会拦这一条）。
+          # 三态，不是两态：正式 / 预发布 / **不合法**。
+          #
+          # 两态（`if 预发布 else 正式`）会把 `0.3`、`0.3.0.1` 这类写坏的版本号
+          # 归进「正式版」，然后它就以 Latest 的身份发出去了 —— 一个拼错的版本号
+          # 变成一次公开的正式发布，是最不该静默发生的一种。
+          PRERELEASE_FLAG=""
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-[0-9A-Za-z.]+$ ]]; then
+            PRERELEASE_FLAG="--prerelease"
+            echo "版本 $VERSION 带预发布后缀：将标记为 Pre-release（不会成为 Latest 正式版）"
+          elif [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "版本 $VERSION 是正式版本：按正式 Release 发布"
+          else
+            echo "::error::版本号 $VERSION 既不是 x.y.z 也不是 x.y.z-预发布后缀，拒绝发布"
+            exit 1
+          fi
+
+          # shellcheck disable=SC2086
           gh release create "v${VERSION}" "$TARBALL" "$SOURCE_ZIP" \
             --title "AI代吵架 v${VERSION}" \
             --notes-file /tmp/notes.md \
-            --verify-tag
+            --verify-tag \
+            $PRERELEASE_FLAG
 
       # ## 交付状态报告（v0.2.17 §二）
       #
