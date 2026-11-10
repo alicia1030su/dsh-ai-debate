@@ -104,11 +104,48 @@ node scripts/ship.mjs --version 0.2.18 --slug "本次要做什么"
 - `.github/workflows/*`（Actions 写权限、触发条件、发布路径）
 - `.github/CODEOWNERS`、`.github/dependabot.yml`
 - `scripts/audit-leaks.mjs`、`scripts/scan-archive.mjs`（安全扫描规则本身）
-- `scripts/source-zip.mjs`、`scripts/pack.mjs`、`scripts/tar.mjs`（打包与白名单）
-- `scripts/ship.mjs`、`scripts/lib/ship-core.mjs`、`scripts/lib/delivery-status.mjs`（发布逻辑）
+- `scripts/lib/zip-index.mjs`、`scripts/lib/scan-finding.mjs`、`scripts/lib/fixture-allowlist.mjs`
+  （v0.3.0 把「什么算违规」搬进辅助模块，只认入口等于允许改判定不用人看 —— issue #31）
+- `scripts/source-zip.mjs`、`scripts/pack.mjs`、`scripts/tar.mjs`、`scripts/lib/git-objects.mjs`（打包与白名单）
+- `scripts/ship.mjs`、`scripts/lib/ship-core.mjs`、`scripts/lib/delivery-status.mjs`、
+  `scripts/lib/ship-review.mjs`（发布逻辑）
+- `scripts/version.mjs`、`scripts/lib/version-core.mjs`（预发布判定：决定 rc 会不会被标成 Latest）
+- `scripts/lib/archive-verify.mjs`、`scripts/verify-source-archive.mjs`、`scripts/verify-install.mjs`、
+  `scripts/deps.mjs`、`scripts/lib/import-scan.mjs`、`scripts/ci-guard.mjs`（核验判定）
+- `scripts/release-dry-run.mjs`、`scripts/lib/release-notes.mjs`（发布说明里的哈希与安装命令）
 - `src/security/**`（安全边界）
 - `src/platforms/<平台>/(publish|reply|comment)*.ts`（真实平台发表）
 - `cordis.patch.yml`（插件加载配置）
+
+### 敏感 PR 的授权长什么样（v0.3.0 issue #32）
+
+**合并事实不是授权。** `ship.mjs` 不再把 `pr.state === 'MERGED'` 当作审核完成；
+它要求状态文件里有一份「审核锚点」（停下时被审阅的 head / tree / 每个改动路径的 blob），
+并且 GitHub 上有一条来自维护者、`commit_id` 等于该锚点的 review：
+
+```text
+ship-approval: v1
+pr: <PR 编号>
+head: <当前 PR 最终提交的 40 位 SHA>
+scope: <敏感路径，逗号分隔>
+note: <写明批准的是哪个 PR、哪个提交、哪些路径>
+```
+
+`--resume` 会逐项核对：PR 编号、head、tree、授权范围、review 的 `commit_id`、
+合并后的逐文件 blob，以及授权时间必须早于合并时间。任一项不成立就停在发布之前。
+**审核之后又推新提交，旧授权失效** —— 对 A 的批准不能被用来发 B。
+
+授权 review 只能由维护者提交；流水线里没有任何创建 review 的代码，AI 也不能代写。
+
+**单维护者模式（本仓库的实际情况）**：四个敏感 PR 的作者也是唯一的维护者，而 GitHub
+不允许批准自己的 PR。所以**不要求 Approve** —— 同一账号提交一条正文为 `ship-approval: v1`
+的 **Comment review** 即可。GitHub 仍然记录 `commit_id`、作者与提交时间，三者都能核对；
+`ship` 接受 `APPROVED` 或 `COMMENTED`，`CHANGES_REQUESTED` / `DISMISSED` / `PENDING` 不算。
+
+**必须说清的局限**：同一账号的 Comment review 是「可审计」，不是「独立」。它能证明
+「这个账号在某个时刻、针对某个提交写了这段授权」，不能证明操作者一定是人而不是拿到
+同一账号的自动化。真正的独立性需要第二名有写权限的维护者提交 Approve；在此之前，
+不要把 owner 的 Comment review 写成「独立审核」或「外部批准」。
 
 v0.2.21 补上的是「其余真实发表与授权路径」。它们在修复前**完全不触发**任何规则 ——
 也就是说一个 agent 可以改「发表要不要人点确认」的代码并自动合并：
