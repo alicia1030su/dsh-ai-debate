@@ -84,15 +84,60 @@ test('只改了安装命令、漏了附件名，要分别指出是哪一处', ()
   assert.match(problems[0], /0\.2\.17/)
 })
 
-test('同类上下文里出现两个不同版本也要报，而不是取随便一个', () => {
+/**
+ * 两个版本被**有意**放行了（v0.3.0）。
+ *
+ * 文档要同时说清「稳定版」与「候选版」两条渠道，所以候选版存在期间，README 里必然
+ * 同时出现 `0.2.39` 与 `0.3.0-rc.1`。要求「只能有一个」只有两个下场：文档写瘸，
+ * 或者校验被关掉。这里断言放宽的**边界**，而不是笼统地「少报一条」：
+ *
+ * - 两个版本、其中一个是当前版本 → 放过；
+ * - 两个版本、当前版本不在里面 → 仍然报错（发版忘改文档就是这种形状）；
+ * - 三个版本 → 仍然报错（历史没清干净）。
+ */
+test('同类上下文出现两个版本，只要包含当前版本就放过', () => {
   const text = [
-    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.16',
-    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.17',
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.39',
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.3.0-rc.1',
   ].join('\n')
 
-  const problems = checkReadme(text, '0.2.17')
+  assert.deepEqual(checkReadme(text, '0.3.0-rc.1'), [])
+})
+
+test('两个版本里没有当前版本，仍然报错并指名是哪一类', () => {
+  const text = [
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.38',
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.39',
+  ].join('\n')
+
+  const problems = checkReadme(text, '0.3.0-rc.1')
   assert.equal(problems.length, 1)
-  assert.match(problems[0], /多个版本/)
+  assert.match(problems[0], /没有指向当前版本/)
+  assert.match(problems[0], /安装命令/)
+})
+
+test('三个版本一律报错，不给「再多一个也无所谓」开口子', () => {
+  const text = [
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.38',
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.39',
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.3.0-rc.1',
+  ].join('\n')
+
+  const problems = checkReadme(text, '0.3.0-rc.1')
+  assert.equal(problems.length, 1)
+  assert.match(problems[0], /三个以上版本/)
+})
+
+test('发正式版时，只有候选版写进文档会被抓出来', () => {
+  // 把候选版升成正式版（0.3.0-rc.1 → 0.3.0）却漏改 README，是这个放宽点最可能被误用的方向。
+  const text = [
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.2.39',
+    'dsh plugin add github:alicia1030su/dsh-ai-debate#v0.3.0-rc.1',
+  ].join('\n')
+
+  const problems = checkReadme(text, '0.3.0')
+  assert.ok(problems.length > 0, '当前版本必须出现在文档里')
+  assert.match(problems[0], /没有指向当前版本 0\.3\.0/)
 })
 
 // --- 精确改写 -------------------------------------------------------------
