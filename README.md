@@ -329,31 +329,70 @@ POST https://open.weibo.com/cli/api/oauth/token
 
 ## 安装
 
-### 方式一：GitHub 直接安装（推荐）
+> **先确认要装哪一条渠道。** 本项目的稳定版与候选版是两条线：
+>
+> | 渠道 | 版本 | GitHub 标记 | 给谁 |
+> | --- | --- | --- | --- |
+> | **稳定版** | `v0.2.39` | Latest 正式版 | 普通用户、日常使用 |
+> | 候选版 | `v0.3.0-rc.1` | **Pre-release**（不是 Latest） | 只给参与本轮验收的测试者 |
+>
+> 候选版包含归档完整性、预发布工作流、授权绑定等改动，但**人工语义评分与真实用户试用
+> 仍是 0 人**。除非你就是这一轮的测试者，否则请装稳定版。
+
+### 方式一：GitHub 直接安装稳定版（推荐）
+
+```bash
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.39
+```
+
+仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
+
+稳定版发布页：<https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.39>
+
+### 方式二：稳定版 .tgz
+
+从[稳定版发布页](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.39)下载
+`dsh-ai-debate-0.2.39.tgz`：
+
+```bash
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.39.tgz
+```
+
+### 方式三：候选版 `v0.3.0-rc.1`（仅测试者）
+
+**这不是稳定版。** 它被标记为 GitHub Pre-release，不会取代 Latest，也没有经过人工质量验收。
 
 ```bash
 dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.3.0-rc.1
 ```
 
-仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
+也可以从[候选版发布页](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.3.0-rc.1)
+下载 `dsh-ai-debate-0.3.0-rc.1.tgz`。
 
-### 方式二：本地 .tgz 安装包
+试用反馈请按 `docs/v0.3.0-tester-package/` 里的反馈表填写；那里也写清了这一批
+**还没有**任何人工评分。
 
-从 [Releases](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.3.0-rc.1) 下载
-`dsh-ai-debate-0.3.0-rc.1.tgz`，或在仓库根目录自行构建：
+### 方式四：从源码自行构建
+
+在仓库根目录：
+
+```bash
+node scripts/pack.mjs
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-<版本>.tgz
+```
 
 ```bash
 node scripts/pack.mjs
 dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.3.0-rc.1.tgz
 ```
 
-发布页同时附上 `dsh-ai-debate-source-0.3.0-rc.1.zip`（含 `pnpm-lock.yaml` 与编译好的
+候选版发布页同时附上 `dsh-ai-debate-source-0.3.0-rc.1.zip`（含 `pnpm-lock.yaml` 与编译好的
 `lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
 文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
 Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
 头里仍带时间戳字段，这一点本版没有处理。核对时请比内容，不要只比哈希。
 
-### 方式三：本地目录安装（开发者）
+### 方式五：本地目录安装（开发者）
 
 ```bash
 git clone https://github.com/<owner>/dsh-ai-debate

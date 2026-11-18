@@ -42,7 +42,30 @@ export function readmeVersions(text) {
 }
 
 /**
- * README 里所有版本上下文都必须指向同一个版本。
+ * README 的渠道上限：每一类上下文最多同时出现两个版本。
+ *
+ * ## 为什么从「只能一个」改成「最多两个」（v0.3.0）
+ *
+ * 规则原本是「四处上下文全指向当前版本」。那条规则的用处是抓「发了版忘了改文档」——
+ * v0.2.16 就是这么翻车的：安装命令是新的、附件名还是旧的，用户装到上一个版本还以为是新的。
+ *
+ * 但现在文档必须同时说清两条渠道：**稳定版**（Latest，给普通用户）与**候选版**
+ * （Pre-release，给测试者）。候选版存在期间，README 里必然同时出现 `0.2.39` 与
+ * `0.3.0-rc.1`。继续要求「只能一个」只有两个下场：要么把文档写瘸（只提一个渠道），
+ * 要么把校验关掉。前者害用户，后者害自己。
+ *
+ * ## 放宽的边界：只放宽数量，不放宽「当前版本必须出现」
+ *
+ * 每一类上下文里**必须**包含 `expected`（本次要发布的那个版本）。这一条把老规则的
+ * 主要作用原样保留：
+ *
+ * - 忘了改文档 → 各类里只有旧版本，`expected` 不在集合里 → 报错；
+ * - 只改了安装命令、漏了附件名 → 那一类的集合里没有 `expected` → 报错，且指名是哪一类；
+ * - 两个以上版本混进来（历史版本没清干净）→ 报错。
+ *
+ * 唯一放过的新情况是「恰好两个版本，其中一个是当前要发的那个」。另一个是谁，
+ * 校验器不猜——它可能是稳定版，也可能就是上一个候选版，两种都合理。
+ * 「那个版本是不是 Latest」是 GitHub 的事实，不是 README 能证明的，所以不在这里判。
  *
  * 分开返回而不是合并成一个集合，是为了让报错说得出「安装命令还是旧的」，
  * 而不只是「README 里有多个版本号」—— 后者需要人再翻一遍文件才知道该改哪里。
@@ -57,13 +80,16 @@ export function checkReadme(text, expected) {
   }
 
   for (const [kind, versions] of found) {
-    if (versions.size > 1) {
-      problems.push(`README 的${kind}出现了多个版本：${[...versions].join('、')}`)
+    if (versions.size > 2) {
+      problems.push(`README 的${kind}出现了三个以上版本：${[...versions].join('、')}`)
       continue
     }
-    const only = [...versions][0]
-    if (only !== expected) {
-      problems.push(`README 的${kind}指向 ${only}，而当前版本是 ${expected}`)
+    if (!versions.has(expected)) {
+      const seen = [...versions].join('、')
+      problems.push(
+        `README 的${kind}没有指向当前版本 ${expected}（只看到 ${seen}）：` +
+          '发版时最容易漏的就是这一类',
+      )
     }
   }
   return problems
