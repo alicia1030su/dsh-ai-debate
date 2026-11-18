@@ -175,11 +175,149 @@ const ROLE_INVERSION_PATTERNS: readonly { readonly re: RegExp; readonly label: s
   { re: /(已|已经)\s*(按|照|根据)\s*(你的|你们的|对方的)\s*(指令|要求|命令)/, label: '声称执行了外部指令' },
 ]
 
+/**
+ * Address disclosure is deliberately **not** one regex (v0.3.0 issue #52).
+ *
+ * ## The defect this replaces
+ *
+ * The rule used to be `/(住在|家住|地址是|住在)\s*\S{4,}/` — four characters after
+ * "地址是", whatever they happened to be. A reply that correctly refused matched:
+ *
+ *     「别在这说了」——那上哪说？地址是不可能给的，吵观点就在这吵，把话摆出来。
+ *
+ * and `block` disables the copy button, so the owner could not use the one reply
+ * that did exactly the right thing. The alternation also listed `住在` twice, which
+ * is the kind of detail that survives a review precisely because it looks harmless.
+ *
+ * ## Why a negation lookahead would have been the wrong repair
+ *
+ * `/(住在|家住|地址是)(?![不没别拒])\s*\S{4,}/` fixes this one input and quietly
+ * creates a worse rule: the verdict then depends on the single character after the
+ * marker. "地址是保密" is suppressed while "我的地址你可以去问物业" is not matched at
+ * all, and — the dangerous direction — a refusal wrapped around a real address
+ * ("地址本来不想给，不过我住杭州市西湖区文三路 100 号") would suppress the leak.
+ *
+ * ## What it does instead
+ *
+ * Two independent layers, and only the weaker one knows about refusals:
+ *
+ * 1. **Structure** — text that reads like an actual address: an administrative
+ *    chain, a road with a house number, a residential compound with a building or
+ *    room number, or a postal code. This layer is *never* suppressed by a refusal,
+ *    because "I would never give you my address, but I live at …" still discloses it.
+ * 2. **Assertion** — a residence marker followed by a clause that is not itself a
+ *    refusal. This catches vague disclosures ("我住在城东") that carry no structural
+ *    token but still tell the opponent where the owner lives.
+ *
+ * A refusal therefore suppresses only layer 2, and only when it sits in the clause
+ * the marker introduced. It cannot reach a structural match, which is what keeps
+ * the looser layer from becoming the whole rule.
+ */
+const ADDRESS_STRUCTURE: readonly { readonly re: RegExp; readonly label: string }[] = [
+  // 省/市 → 区/县的行政区划链：杭州市西湖区、上海市浦东新区
+  { re: /[\u4e00-\u9fa5]{2,6}(?:市|自治州)[\u4e00-\u9fa5]{1,8}(?:区|县|旗)/, label: '住址（行政区划）' },
+  // 行政区 + 路名：西湖区文三路、朝阳区建国路 88 号
+  {
+    re: /(?:区|县|镇|乡)[\u4e00-\u9fa5]{1,10}(?:路|街|大道|胡同|巷|弄)\s*\d{0,4}\s*(?:号|弄)?/,
+    label: '住址（道路门牌）',
+  },
+  // 行政区划缺省时的路名 + 门牌：文三路 100 号、建国路 88 号
+  { re: /[\u4e00-\u9fa5]{2,10}(?:路|街|大道|胡同)\s*\d{1,4}\s*(?:号|弄)/, label: '住址（道路门牌）' },
+  // 小区/大厦 + 楼栋单元室：阳光花园 3 栋 2 单元 501 室
+  {
+    re: /(?:小区|花园|大厦|公寓|广场|家园|新村|里弄)[\u4e00-\u9fa5\d]{0,10}?\d+\s*(?:栋|幢|号楼|单元|室|层)/,
+    label: '住址（楼栋门牌）',
+  },
+  // 只有楼栋时必须落到房间号：`3 栋` 本身太常见（"这 3 栋楼"），
+  // 但 `3 栋 2 单元 501 室` 已经足够定位到一个住处。
+  {
+    re: /\d{1,3}\s*(?:栋|幢)\s*(?:\d{1,3}\s*单元\s*)?\d{1,4}\s*(?:室|号)/,
+    label: '住址（楼栋门牌）',
+  },
+  { re: /(?:邮编|邮政编码)\s*[:：]?\s*\d{6}/, label: '住址（邮政编码）' },
+]
+
+/** Markers that assert *where the owner lives*. Not "下载地址", not "接口地址". */
+const ADDRESS_MARKERS = /(住在|家住|住址是|地址是|地址在|我家在|我家住|门牌号|具体位置)/
+
+/**
+ * Words that make an "地址是…" clause refer to something other than a residence.
+ *
+ * Without this, "下载地址是 https://…" would be read as a home address. The window
+ * is the 8 characters *before* the marker, so a qualifier must touch it: "源地址在
+ * 仓库 README 里" has 仓库 after the marker, not before, and is caught by
+ * {@link NON_RESIDENCE_TAIL} instead of being waved through here.
+ */
+const NON_RESIDENCE_ADDRESS =
+  /(下载|链接|网址|页面|接口|仓库|服务|服务器|模型|端口|IP|URL|url|网络|邮箱|邮件|安装|文件|资源|图片|视频|文档|直播|回放|博客|主页|回调|上报|订阅|播放|公司|单位|门店|店铺|学校|医院|机构|组织|快递|收件|源|回调|镜像|代码|脚本|依赖)/
+
+/**
+ * The same idea, for qualifiers that sit *after* the marker.
+ *
+ * "源地址在仓库 README 里" names a git remote; "地址在杭州市西湖区" names a home.
+ * Both are `<marker> 在 <noun>`; the qualifier noun is what separates them.
+ */
+const NON_RESIDENCE_TAIL =
+  /^(?:在|是|于)?\s*(?:仓库|README|readme|代码|脚本|配置文件|接口|文档|页面|链接|网址|服务器|镜像|源|依赖|变量|环境|设置|公司|单位|门店|店铺|学校|医院|机构)/
+
+/** A clause that refuses to disclose, rather than disclosing. */
+const ADDRESS_REFUSAL =
+  /(不可能|不会|不能|不给|不说|不告诉|不透露|不方便|不提供|不公开|不发|不想|不是要|免谈|没门|别想|休想|做梦|凭什么|关你什么事|保密|隐私|私事|私密|不重要|无所谓|无关|拒绝|无可奉告|想都别想|用不着|没必要)/
+
+/** Clause terminators. A refusal has to be in the clause the marker opened. */
+const CLAUSE_END = /[。！？；，,、\n]/
+
+/**
+ * Look for a residence disclosure in `reply`.
+ *
+ * Structural matches win and are returned before any refusal is considered; that
+ * ordering is the whole point (see the comment above `ADDRESS_STRUCTURE`).
+ *
+ * @param reply the candidate text
+ * @returns the finding, or `null` when nothing reads as a home address
+ */
+function findAddressDisclosure(reply: string): { readonly label: string; readonly index: number; readonly length: number } | null {
+  // 全角数字按半角处理：`文三路１００号` 与 `文三路100号` 是同一个地址。
+  // 只做这一种 1:1 替换，所以下面所有 index 仍然可以直接用回原串取摘录；
+  // 整体 NFKC 会改变某些字符的长度（`℃` → `°C`），那会让摘录切错位置。
+  const text = reply.replace(/[\uFF10-\uFF19]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
+
+  for (const pattern of ADDRESS_STRUCTURE) {
+    const match = pattern.re.exec(text)
+    if (match !== null) {
+      return { label: pattern.label, index: match.index, length: match[0].length }
+    }
+  }
+
+  for (const marker of text.matchAll(new RegExp(ADDRESS_MARKERS.source, 'g'))) {
+    const index = marker.index ?? 0
+    const before = text.slice(Math.max(0, index - 8), index)
+    // "下载地址是…" / "接口地址是…" are not the owner's home.
+    if (NON_RESIDENCE_ADDRESS.test(before)) continue
+
+    const rest = text.slice(index + marker[0].length)
+    const end = rest.search(CLAUSE_END)
+    const clause = (end === -1 ? rest : rest.slice(0, end)).trim().slice(0, 24)
+
+    // "地址是" with nothing after it is an incomplete sentence, not a disclosure.
+    if (clause === '') continue
+    if (ADDRESS_REFUSAL.test(clause)) continue
+    // "地址在仓库 README 里" points at a file, not a home.
+    if (NON_RESIDENCE_TAIL.test(clause)) continue
+
+    // A clause made only of question words ("地址是哪？") asserts no location.
+    if (/^[哪什么啥谁怎为]+[？?]?$/.test(clause)) continue
+
+    return { label: '住址', index, length: marker[0].length + clause.length }
+  }
+
+  return null
+}
+
 /** Privacy patterns that must never appear in a reply. */
 const PRIVACY_PATTERNS: readonly { readonly re: RegExp; readonly label: string }[] = [
   { re: /1[3-9]\d{9}/, label: '手机号' },
   { re: /\d{17}[\dXx]/, label: '身份证号' },
-  { re: /(住在|家住|地址是|住在)\s*\S{4,}/, label: '住址' },
   { re: /[\w.+-]+@[\w-]+\.[\w.]+/, label: '邮箱' },
   {
     // A reply that *says* it handed over the owner's details, even without
@@ -192,11 +330,17 @@ const PRIVACY_PATTERNS: readonly { readonly re: RegExp; readonly label: string }
 ]
 
 function excerptOf(text: string, match: RegExpExecArray): string {
-  const start = Math.max(0, match.index - 10)
-  const end = Math.min(text.length, match.index + match[0].length + 10)
+  return excerptAt(text, match.index, match[0].length)
+}
+
+/** Same window as {@link excerptOf}, for findings that are not one regex match. */
+function excerptAt(text: string, index: number, length: number): string {
+  const start = Math.max(0, index - 10)
+  const end = Math.min(text.length, index + length + 10)
   const fragment = text.slice(start, end).replace(/\s+/g, ' ').trim()
   return fragment.length > 60 ? `${fragment.slice(0, 60)}…` : fragment
 }
+
 
 /**
  * Check whether paraphrased statements carry an injected imperative.
@@ -307,6 +451,17 @@ export function checkStance(input: StanceInput): {
         excerpt: excerptOf(reply, match),
       })
     }
+  }
+
+  // Address is decided by structure first and assertion second (issue #52); a
+  // single regex cannot tell "地址是不可能给的" from "地址是建国路 88 号".
+  const address = findAddressDisclosure(reply)
+  if (address !== null) {
+    problems.push({
+      kind: 'leaks_owner_privacy',
+      message: `回复里出现了${address.label}，发表会把主人隐私公开`,
+      excerpt: excerptAt(reply, address.index, address.length),
+    })
   }
 
   const followed = followsInjectedInstruction(reply, input.inputAssessment)
