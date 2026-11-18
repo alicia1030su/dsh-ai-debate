@@ -58,6 +58,14 @@ function collected(
       nestedComplete: true,
     })),
     complete: true,
+    completeness: {
+      sourceComplete: true,
+      retainedComplete: true,
+      analysisComplete: true,
+      nestedComplete: true,
+      reasons: [],
+    },
+    stopReason: 'confirmed_end',
     issues: [],
   } as CollectedThread
 }
