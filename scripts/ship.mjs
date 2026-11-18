@@ -94,6 +94,14 @@ const WAIT_TIMEOUT_MS = Number(process.env.SHIP_WAIT_MS ?? 45 * 60 * 1000)
 const stateDir = join(root, '.ship')
 const statePath = join(stateDir, 'state.json')
 
+/**
+ * 打包时用的那棵树（工作区快照的 tree）。提交后要拿它比对，见 `commitAll`。
+ *
+ * 声明在模块作用域而不是往函数间传：`verify` 与 `commit` 是两个阶段，
+ * `--resume` 时后者可能单独跑（此时它是 `null`，比对按「没有证据」跳过）。
+ */
+let packagedTree = null
+
 // --- 小工具 ---------------------------------------------------------------
 
 /**
@@ -198,6 +206,83 @@ function writeJsonAtomic(path, data) {
 
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
+}
+
+/**
+ * 把工作区（含未跟踪但未被忽略的文件）拍成一个临时提交，只为给打包脚本一个可解析的 rev。
+ *
+ * ## 为什么需要这个（v0.3.0 发布中断的真因）
+ *
+ * `source-zip.mjs` 按 v0.2.39 的约定**只从提交读字节**，默认 `--rev HEAD`；版本号也是
+ * 从那个提交的 `package.json` 里读的。而 `verify` 阶段跑在 `commit` 阶段**之前** ——
+ * 工作区里刚被 `version.mjs set` 改过的 `package.json` 还没提交，于是：
+ *
+ *     pack.mjs          读磁盘 → dsh-ai-debate-0.3.0-rc.1.tgz        ✅
+ *     source-zip.mjs    读 HEAD → dsh-ai-debate-source-0.3.0.zip    ✗ 名字对不上
+ *     computeArtifacts  找 -0.3.0-rc.1.zip → 找不到 → 整个发布停下
+ *
+ * 真机发布时就是这样断的。改打包脚本去读工作区会**削弱** v0.2.39 那条保证
+ * （「发布物必须对应一个提交」），所以不动它；正确做法是在打包前把工作区的字节
+ * 变成一个**真实提交对象**，再把它的 SHA 传给 `--rev`。
+ *
+ * 用 `git write-tree` + `commit-tree` 而不是 `git stash create`：后者对未跟踪文件
+ * 不做任何事，而版本改动可能出现在任何文件上。两者都只写对象库，**不动 HEAD、
+ * 不动 index 的最终状态、不产生提交历史**。索引先备份、用完还原，所以调用前后
+ * `git status` 看到的是同一份东西。
+ *
+ * @returns `{rev, kind}`，`kind` 说明用的是工作区快照还是 HEAD
+ */
+function snapshotForPackaging(version) {
+  // 用一个**独立的临时索引**，不碰仓库真正的 `.git/index`：拍快照这件事不应该让
+  // `git status` 在调用前后看起来不一样，也不该把一个还没验证完的工作区提前暂存。
+  const indexFile = join(stateDir, 'preview-index')
+  const env = { GIT_INDEX_FILE: indexFile }
+
+  const reset = run('git', ['read-tree', 'HEAD'], { env })
+  if (reset.code !== 0) fail('verify', `初始化临时索引失败：${reset.stderr.trim()}`)
+
+  const staged = run('git', ['add', '-A'], { env })
+  if (staged.code !== 0) fail('verify', `暂存工作区失败：${staged.stderr.trim()}`)
+
+  const tree = run('git', ['write-tree'], { env })
+  if (tree.code !== 0) fail('verify', `写树对象失败：${tree.stderr.trim()}`)
+
+  const commit = run(
+    'git',
+    [
+      '-c',
+      'user.name=dsh-ship',
+      '-c',
+      'user.email=ship@local',
+      'commit-tree',
+      tree.stdout.trim(),
+      '-p',
+      'HEAD',
+      '-m',
+      `preview ${version}`,
+    ],
+    { env },
+  )
+  if (commit.code !== 0) fail('verify', `构造预览提交失败：${commit.stderr.trim()}`)
+
+  // 用完即弃：对象留在对象库里（无害，之后会被 gc 收走），索引文件删掉。
+  rmSync(indexFile, { force: true })
+
+  const sha = commit.stdout.trim()
+  // 提交里必须真的是这个版本，否则后面的产物名还会对不上 —— 那正是要修的东西。
+  const inCommit = run('git', ['show', `${sha}:package.json`])
+  if (inCommit.code !== 0) fail('verify', `预览提交里读不到 package.json：${inCommit.stderr.trim()}`)
+  const committedVersion = parseJson(inCommit.stdout, {}).version
+  if (committedVersion !== version) {
+    fail(
+      'verify',
+      `工作区快照里的版本是 ${String(committedVersion)}，而要发布的是 ${version}：` +
+        '打包前必须先改好 package.json',
+    )
+  }
+
+  log(`打包用工作区快照 ${sha.slice(0, 12)}（版本 ${version}），HEAD 与 index 未动`)
+  return sha
 }
 
 // --- 状态与报告 -----------------------------------------------------------
@@ -320,7 +405,14 @@ function verify(version) {
 
   const pack = run(process.execPath, ['scripts/pack.mjs'])
   if (pack.code !== 0) fail('verify', `打包失败：\n${pack.stdout}${pack.stderr}`)
-  const zip = run(process.execPath, ['scripts/source-zip.mjs', '--out', '.'])
+
+  // 源码包必须从「本次要发布的那棵树」打包。版本改动此刻还没提交（verify 在 commit
+  // 之前），所以 HEAD 里是旧版本号 —— 直接把 HEAD 交出去会得到一个名字对不上的产物。
+  // `snapshotForPackaging` 把工作区拍成提交对象并返回 SHA，产物的内容与名字都来自它。
+  const snapshot = snapshotForPackaging(version)
+  const snapshotTree = run('git', ['rev-parse', `${snapshot}^{tree}`])
+  if (snapshotTree.code === 0) packagedTree = snapshotTree.stdout.trim()
+  const zip = run(process.execPath, ['scripts/source-zip.mjs', '--out', '.', '--rev', snapshot])
   if (zip.code !== 0) fail('verify', `生成源码包失败：\n${zip.stdout}${zip.stderr}`)
 
   // 凭据扫描必须在打包之后：`audit-leaks.mjs` 检查的是**磁盘上的 tgz 与工作树**。
@@ -548,7 +640,7 @@ function ensureBranch(version, defaultBranch) {
   return { branch }
 }
 
-function commitAll(version, branch) {
+function commitAll(version, branch, packagedTree = null) {
   step('commit', '提交本地改动')
 
   const status = run('git', ['status', '--porcelain'])
@@ -578,6 +670,27 @@ function commitAll(version, branch) {
   const sha = run('git', ['rev-parse', 'HEAD'])
   const head = sha.stdout.trim()
   log(`已提交 ${head.slice(0, 12)}（${changed.length} 个文件）`)
+
+  // ## 提交的树必须就是打包时用的那棵树（v0.3.0）
+  //
+  // 源码包按 `snapshotForPackaging` 拍出来的快照打包。如果 `git commit` 之后 HEAD 的
+  // 树和那个快照不一致，说明「验证/打包的内容」与「真正推上去的内容」不是同一份 ——
+  // 那正是 v0.2.39 修过一次的老问题（字节来自提交、另一半来自磁盘）。
+  // 这里不假设两者相等，而是比一次；不等就停，并说清差在哪。
+  if (packagedTree !== null) {
+    const committed = run('git', ['rev-parse', 'HEAD^{tree}'])
+    if (committed.code !== 0) fail('commit', `读不出提交的树：${committed.stderr.trim()}`)
+    const committedTree = committed.stdout.trim()
+    if (committedTree !== packagedTree) {
+      fail(
+        'commit',
+        `提交的树 ${committedTree.slice(0, 12)} 与打包用的树 ${packagedTree.slice(0, 12)} 不一致：` +
+          '源码包不是从这次要发布的内容打的。提交后在工作区又改过文件？',
+      )
+    }
+    log('提交的树与打包快照一致')
+  }
+
   return { committed: true, head }
 }
 
@@ -937,14 +1050,36 @@ async function waitForMerge(prNumber) {
   const deadline = Date.now() + WAIT_TIMEOUT_MS
   let lastState = ''
 
+  /**
+   * ## `mergeQueueEntry` 不是所有 gh 都认识（v0.3.0）
+   *
+   * `gh pr view --json` 只接受**这个二进制自己**支持的字段名，遇到不认识的字段直接以
+   * `Unknown JSON field: "mergeQueueEntry"` 退出、**不返回任何 JSON**。本机 gh 2.103.3
+   * 就是这样：v0.3.0-rc.1 的发布在这一步中断，日志上是「查询 PR 状态失败」，而 PR 其实
+   * 已经建好、auto-merge 也已经开着 —— 看起来像发布失败，实际只是读状态的方式不兼容。
+   *
+   * 队列状态只用于打印一行进度，没有它照样能判断合没合。所以这里把它降级为**可选字段**：
+   * 先带上它跑一次，失败就退回不带它的字段集，并把「不支持」这件事记进报告，
+   * 不让人以为队列信息被检查过。
+   */
+  let prViewFields = 'state,mergeStateStatus,mergeable,mergeQueueEntry,statusCheckRollup,url'
+  let queueFieldSupported = true
+
   while (Date.now() < deadline) {
-    const view = run('gh', [
-      'pr',
-      'view',
-      String(prNumber),
-      '--json',
-      'state,mergeStateStatus,mergeable,mergeQueueEntry,statusCheckRollup,url',
-    ])
+    const view = run('gh', ['pr', 'view', String(prNumber), '--json', prViewFields])
+    if (view.code !== 0 && queueFieldSupported && /Unknown JSON field/i.test(view.stderr)) {
+      queueFieldSupported = false
+      prViewFields = 'state,mergeStateStatus,mergeable,statusCheckRollup,url'
+      report.notes.push(
+        '本地 gh 不支持 --json mergeQueueEntry，已退回不带该字段的查询；' +
+          '队列状态不作判断依据（本仓库 ruleset 里也没有 merge queue）',
+      )
+      if (hasMergeQueue) {
+        report.unverified.push('merge queue 状态（本地 gh 不支持查询该字段）')
+      }
+      log('本地 gh 不认识 mergeQueueEntry：改用不带该字段的查询（只影响进度显示）')
+      continue
+    }
     if (view.code !== 0) fail('wait_checks', `查询 PR 状态失败：${view.stderr.trim()}`)
 
     const info = parseJson(view.stdout)
@@ -953,7 +1088,7 @@ async function waitForMerge(prNumber) {
       (check) => check.conclusion === 'FAILURE' || check.conclusion === 'CANCELLED',
     )
     const done = rollup.filter((check) => check.status === 'COMPLETED').length
-    const queueState = info.mergeQueueEntry?.state ?? '（不在队列里）'
+    const queueState = queueFieldSupported ? (info.mergeQueueEntry?.state ?? '（不在队列里）') : '（未知）'
     const summary = `${info.state} 检查 ${done}/${rollup.length} 队列 ${queueState}`
 
     if (summary !== lastState) {
@@ -1245,7 +1380,7 @@ async function main() {
       branch = branchInfo.branch
       report.github.branch = branch
 
-      const commitInfo = commitAll(version, branch)
+      const commitInfo = commitAll(version, branch, packagedTree)
       const head = commitInfo.head ?? run('git', ['rev-parse', 'HEAD']).stdout.trim()
       report.github.commitSha = head
 
