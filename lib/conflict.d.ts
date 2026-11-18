@@ -51,6 +51,20 @@ export type PositionRelation =
 'contradiction'
 /** Both affirm the same thing about the same object. */
  | 'agreement'
+/**
+ * The same topic, measured on different bases — both numbers can be true.
+ *
+ * Added for v0.3.0 issue #53. "含新店的同比 8%" and "同店 2%" are not rivals: they
+ * answer different questions, and a reader who is told "双方一致" is being misled just
+ * as much as one who is told "两人在吵同一个数字". The honest output is neither
+ * `agreement` nor `contradiction` — it is "两个口径不同，真正要争的是该看哪个口径".
+ *
+ * This relation is deliberately narrow: it fires only when both sides carry an
+ * explicit basis qualifier from the same family (`同店` / `含新店`, `同比` / `环比`,
+ * …) and the qualifiers differ. A shared number with no qualifiers stays `agreement`,
+ * and a qualifier that differs only in wording stays whatever the number checks say.
+ */
+ | 'different_measures'
 /** Same domain, both statements of preference — these coexist. */
  | 'different_preference'
 /** No shared subject: two people talking past each other. */

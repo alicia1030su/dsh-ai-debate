@@ -55,6 +55,20 @@ export type PositionRelation =
   | 'contradiction'
   /** Both affirm the same thing about the same object. */
   | 'agreement'
+  /**
+   * The same topic, measured on different bases — both numbers can be true.
+   *
+   * Added for v0.3.0 issue #53. "含新店的同比 8%" and "同店 2%" are not rivals: they
+   * answer different questions, and a reader who is told "双方一致" is being misled just
+   * as much as one who is told "两人在吵同一个数字". The honest output is neither
+   * `agreement` nor `contradiction` — it is "两个口径不同，真正要争的是该看哪个口径".
+   *
+   * This relation is deliberately narrow: it fires only when both sides carry an
+   * explicit basis qualifier from the same family (`同店` / `含新店`, `同比` / `环比`,
+   * …) and the qualifiers differ. A shared number with no qualifiers stays `agreement`,
+   * and a qualifier that differs only in wording stays whatever the number checks say.
+   */
+  | 'different_measures'
   /** Same domain, both statements of preference — these coexist. */
   | 'different_preference'
   /** No shared subject: two people talking past each other. */
@@ -194,6 +208,99 @@ function numbersOf(text: string): string[] {
 }
 
 /**
+ * Measurement bases that are routinely mistaken for each other (v0.3.0 issue #53).
+ *
+ * ## What belongs here and what does not
+ *
+ * A family is a set of **alternatives to the same question**, not a set of different
+ * questions. `同店` and `含新店` both answer "how fast did we grow" — one over comparable
+ * stores, one over the whole estate — so two different answers are both true and the
+ * quarrel is about which lens to use. That is the case this models.
+ *
+ * `营收` and `利润` are **not** in one family: they answer different questions entirely,
+ * and "revenue rose while profit fell" is a normal state of affairs, not a measurement
+ * disagreement. Putting them together would manufacture a relation that isn't there.
+ *
+ * The first alternative is the family's display name, used in the reason text.
+ */
+const MEASURE_FAMILIES: readonly (readonly { readonly label: string; readonly re: RegExp }[])[] = [
+  [
+    { label: '同店口径', re: /(同店|可比店|老店|存量店)/ },
+    { label: '含新店口径', re: /(含新店|含开店|含新开|新店|开店|新开门店)/ },
+    { label: '全部门店口径', re: /(全部门店|全部门店|所有门店|全店|总门店)/ },
+  ],
+  [
+    { label: '同比', re: /(同比|年同比|YoY)/ },
+    { label: '环比', re: /(环比|月环比|季环比|QoQ|MoM)/ },
+  ],
+  [
+    { label: '可比口径', re: /(可比口径|可比)/ },
+    { label: '全口径', re: /(全口径|合并口径)/ },
+  ],
+]
+
+/**
+ * Whether a statement is talking about a quantity at all.
+ *
+ * Without this, two replies that merely mention 同店 and 全店 while discussing something
+ * else would be labelled a measurement disagreement. A basis qualifies a *number*.
+ */
+const MEASURE_QUANTITY = /(\d+(?:\.\d+)?%|\d+\s*(?:倍|万|亿)|增速|增长|下降|提升|占比|比例|幅度|率)/
+
+/**
+ * Do these two statements measure the same thing on different bases?
+ *
+ * ## Why "first match per text" and not "any match"
+ *
+ * The opponent's sentence in the case that prompted this was:
+ *
+ *     可同店增速只有 2%，你那 8% 是开店堆出来的。
+ *
+ * It names **both** bases — their own (`同店`) and the owner's (`开店`). Taking the first
+ * mention is what makes that sentence read as "I am measuring on a same-store basis
+ * while you are measuring including new stores", which is exactly what it says. Scanning
+ * for any match and requiring a mismatch would find a mismatch in almost every sentence
+ * that mentions two bases, including ones where both sides agree.
+ *
+ * @returns the differing pair, or `null` when the two are not on different bases
+ */
+function compareMeasurementBasis(
+  owner: string,
+  opponent: string,
+): { readonly family: string; readonly owner: string; readonly opponent: string } | null {
+  if (!MEASURE_QUANTITY.test(owner) || !MEASURE_QUANTITY.test(opponent)) return null
+
+  for (const family of MEASURE_FAMILIES) {
+    let ownerBasis: { label: string; index: number } | undefined
+    let opponentBasis: { label: string; index: number } | undefined
+
+    for (const alternative of family) {
+      const ownerMatch = alternative.re.exec(owner)
+      if (ownerMatch !== null && (ownerBasis === undefined || ownerMatch.index < ownerBasis.index)) {
+        ownerBasis = { label: alternative.label, index: ownerMatch.index }
+      }
+      const opponentMatch = alternative.re.exec(opponent)
+      if (
+        opponentMatch !== null &&
+        (opponentBasis === undefined || opponentMatch.index < opponentBasis.index)
+      ) {
+        opponentBasis = { label: alternative.label, index: opponentMatch.index }
+      }
+    }
+
+    // Both sides must name a basis, and they must name *different* ones. One side
+    // unqualified means it is not making a scope claim, so nothing here is evidence of
+    // a basis clash.
+    if (ownerBasis === undefined || opponentBasis === undefined) continue
+    if (ownerBasis.label === opponentBasis.label) continue
+
+    return { family: family[0]!.label, owner: ownerBasis.label, opponent: opponentBasis.label }
+  }
+
+  return null
+}
+
+/**
  * Judge how two statements relate.
  *
  * The order of the checks is the logic — each earlier category is more specific than the ones
@@ -275,6 +382,33 @@ export function judgeRelation(input: {
       reason:
         objects.reason +
         '如果这个指代确实指向同一个对象，那么这就是明确的分歧；请人工确认后再决定回应方向。',
+      requiresReview: true,
+      confidence: 'weak',
+    }
+  }
+
+  // --- 0.5 Same topic, different measurement basis (v0.3.0 issue #53) -------
+  //
+  //     owner:    "今年同比增速是 8%，这是含新店的。"      ← 含新店口径
+  //     opponent: "可同店增速只有 2%，你那 8% 是开店堆出来的。" ← 同店口径
+  //
+  // Both numbers are true; they answer different questions. Calling this `agreement`
+  // (which is what the shared-number branch below used to do) tells the reviewer the two
+  // sides are on the same page, when the whole quarrel is about which measure counts.
+  // Calling it `contradiction` would be worse: it would invite a reply that "refutes" a
+  // figure that is arithmetically correct.
+  //
+  // The check runs before the number branch because the shared number is exactly what
+  // makes the wrong answer tempting.
+  const basis = compareMeasurementBasis(owner, opponent)
+  if (basis !== null) {
+    return {
+      relation: 'different_measures',
+      isContradiction: false,
+      reason:
+        `双方用的是不同口径：一边是「${basis.owner}」，另一边是「${basis.opponent}」。` +
+        '两个数字可以同时成立，真正的分歧在于该看哪个口径，而不是谁算错了。',
+      subject: basis.family,
       requiresReview: true,
       confidence: 'weak',
     }
@@ -421,6 +555,8 @@ export function describeRelation(verdict: ConflictVerdict): string {
       return `存在实际分歧：${verdict.reason}`
     case 'agreement':
       return `双方在这一意见上一致：${verdict.reason}`
+    case 'different_measures':
+      return `双方的数字口径不同，两个数可以同时成立：${verdict.reason}`
     case 'different_preference':
       return `双方喜好不同，但可以同时成立：${verdict.reason}`
     case 'different_topics':
