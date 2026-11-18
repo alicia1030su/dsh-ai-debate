@@ -31,7 +31,7 @@ const ROOT = join(import.meta.dirname, '..')
 const SOURCE_ZIP = join(ROOT, 'scripts', 'source-zip.mjs')
 
 /** Run git in `cwd`, returning stdout. Throws with stderr on failure. */
-function git(cwd, args, env = {}) {
+function git(cwd: string, args: string[], env: Record<string, string> = {}): string {
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
