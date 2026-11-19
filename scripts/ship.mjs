@@ -1266,7 +1266,15 @@ async function main() {
     return
   }
 
-  const { version, defaultBranch } = preflight()
+  /**
+   * `repo` 必须一起解构出来（v0.3.0 正式发布时踩到）。
+   *
+   * `preflight()` 一直返回 `{ version, repo, defaultBranch }`，这里却只取了两个。
+   * 平时走不到，因为 `repo` 只在「PR 已合并、需要读 reviews」那条分支里用；而那条分支
+   * 只有「人工合并后 `--resume`」才会进入。正式版发布正好走的是这条路，于是
+   * `ReferenceError: repo is not defined` —— 一个每轮都能复现、但之前从没跑到的死路。
+   */
+  const { version, repo, defaultBranch } = preflight()
 
   // 断点续跑：状态文件说有进度就从那里接，但只接受同一版本、同一 schema。
   if (RESUME) {
