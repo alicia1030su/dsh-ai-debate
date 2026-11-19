@@ -1238,8 +1238,43 @@ try {
   stage('编辑正文', editedOk ? 'passed' : 'failed', editedOk ? '已改写到正文框' : '找不到正文输入框')
 
   const saveClicked = await clickByLabel('保存并重新评估')
-  await sleep(3500)
-  stage('保存并重新评估', saveClicked ? 'passed' : 'failed', saveClicked ? '已点击真实按钮' : '按钮不存在')
+
+  /**
+   * 等**重新评估真的结束**，而不是固定睡 3.5 秒（v0.3.0 issue #63）。
+   *
+   * 原来这里睡 3500ms 就去点「人工确认」。宿主模型一次重新评估可能超过这个数，
+   * 而 `running` 期间确认按钮是 disabled 的 —— 点击落在一个禁用按钮上，什么都不发生，
+   * 25 秒后只能报「没有变化」。同样一份 RC 跑 5 次挂 1 次，就是这么来的。
+   *
+   * 判据用界面自己的状态：确认按钮存在且可用，并且不再显示「正在重新评估」。
+   */
+  const approveReady = async (): Promise<{ exists: boolean; disabled: boolean; busy: boolean }> =>
+    evaluate<{ exists: boolean; disabled: boolean; busy: boolean }>(`(() => {
+      const buttons = [...document.querySelectorAll('button')]
+      const approve = buttons.find((n) => /^(人工确认|已确认)$/.test((n.textContent || '').trim()))
+      const busy = document.body.innerText.includes('正在重新评估')
+      return { exists: approve !== undefined, disabled: approve ? approve.disabled : true, busy }
+    })()`)
+
+  let saved = false
+  const saveDeadline = Date.now() + 120_000
+  while (Date.now() < saveDeadline) {
+    const state = await approveReady()
+    if (state.exists && state.disabled === false && state.busy === false) {
+      saved = true
+      break
+    }
+    await sleep(600)
+  }
+  stage(
+    '保存并重新评估',
+    saveClicked && saved ? 'passed' : 'failed',
+    saveClicked === false
+      ? '按钮不存在'
+      : saved
+        ? '已点击，重新评估结束，确认按钮可用'
+        : '120 秒内没有等到重新评估结束（确认按钮仍不可用或仍显示正在评估）',
+  )
 
   const afterSave = await manualSectionText()
   stage(
@@ -1256,7 +1291,14 @@ try {
    * 安全阻止 / 快照缺失），而那句话就渲染在分区里，截尾部永远看不到。
    */
   const approveFailureDetail = async (): Promise<string> => {
-    const text = await manualSectionText()
+    /**
+     * 全页搜索，而不是只看「离线讨论导入」那一段。
+     *
+     * 确认失败的提示渲染在**候选区**，与导入区是两个 `.dsd-sect`。原来只取导入区的
+     * innerText，于是永远搜不到那句红字，报告里只剩一段与本问题无关的说明 ——
+     * 那正是 #63 第一次失败时看不到原因的直接原因。
+     */
+    const text = await evaluate<string>('document.body.innerText')
     const line = text
       .split('\n')
       .find((row) => /不一致|不能|失败|阻止|错误|刷新页面|没有候选/.test(row))

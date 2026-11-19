@@ -5464,11 +5464,37 @@ window.__ModuleLoader__.load({
                         candidateId: latest.replyId,
                         text,
                       })
-                      if (answer && answer.ok === true) await store.loadWorkbench(sessionId)
+                      if (answer && answer.ok === true) {
+                        /**
+                         * 保存成功后**清掉本地草稿**（v0.3.0 issue #63）。
+                         *
+                         * 不清的话，`draft` 会一直压着「用户刚才手打的那一版」，而服务端存的是
+                         * `trim()` 之后的版本。两者只要差一个尾随空格，点「人工确认」就会被
+                         * 服务端以「正文与保存的不一致」拒绝 —— 而那正是偶发失败的表现之一：
+                         * 看起来点了没反应，实际是被拒绝。
+                         *
+                         * 清掉之后，确认按钮提交的一定是 `latest.text`，也就是服务端刚存下的那一版。
+                         */
+                        setDraft('')
+                        await store.loadWorkbench(sessionId)
+                      }
                     },
                   },
                   t('manualSave'),
                 ),
+                /**
+                 * 正在重新评估时，别让「人工确认」看起来可以点（issue #63）。
+                 *
+                 * 按钮在 `running` 期间本来就是 disabled 的，但禁用按钮被点一下不会有任何
+                 * 反馈 —— 用户会以为按钮坏了。这里在按钮上方说清楚为什么不能点。
+                 */
+                running
+                  ? h(
+                      'p',
+                      { className: 'dsd-hint' },
+                      '正在重新评估，完成之前不能确认；等这一步结束再点「人工确认」。',
+                    )
+                  : null,
                 h(
                   'button',
                   {
@@ -5477,12 +5503,26 @@ window.__ModuleLoader__.load({
                     disabled: running || latest.approved === true,
                     onClick: async () => {
                       const text = draft === '' ? latest.text : draft
+                      /**
+                       * 正文改了但没保存时，不把旧候选当成新正文提交（issue #63）。
+                       *
+                       * 服务端本来就有一道「正文与保存的不一致就拒绝」的校验，但那条校验的
+                       * 报错要到请求回来之后才显示。在界面上先拦一步，用户能立刻看懂
+                       * 「要先保存」，而不是点了确认等几秒才看到一句红字。
+                       */
+                      if (draft !== '' && draft !== latest.text) {
+                        setError('正文改动还没保存：先点「保存并重新评估」，再点「人工确认」。')
+                        return
+                      }
                       const answer = await run('manual-approve', {
                         sessionId,
                         candidateId: latest.replyId,
                         approvedText: text,
                       })
-                      if (answer && answer.ok === true) await store.loadWorkbench(sessionId)
+                      if (answer && answer.ok === true) {
+                        setDraft('')
+                        await store.loadWorkbench(sessionId)
+                      }
                     },
                   },
                   latest.approved === true ? '已确认' : t('manualApprove'),
