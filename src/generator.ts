@@ -405,9 +405,50 @@ export function parseDraft(raw: string): { draft?: GenerationDraft; error?: stri
 }
 
 /** Patterns that would mean the model leaked its instructions or account data. */
+/**
+ * 密钥：**字段名**与**字段值**是两件事（v0.3.0 issue #62）。
+ *
+ * ## 这条规则原来错在哪
+ *
+ * 原来是 `api[_-]?key` 单独一个分支，只要正文里出现这五个字母就判泄露。真实采集里
+ * 模型写了一句完全正确的拒绝：
+ *
+ *     api_key 更不用想，这种东西不会往外掏。
+ *
+ * ——被判成「回复里出现了疑似密钥的内容」，直接 `invalid_draft`。和 #52 里
+ * 「地址是不可能给的」被判成披露是同一个毛病：把**名词**当成了**披露**。
+ *
+ * ## 现在的判据：名字后面必须跟着一个看起来像值的东西
+ *
+ * | 形式 | 判定 |
+ * | --- | --- |
+ * | `api_key 更不用想` / `不会给你 api_key` / `api_key 是什么` | 不拦 |
+ * | `api_key=sk-…` / `api_key: xxx` / `api_key 是 xxx`（值 ≥8 字符） | 拦 |
+ * | `sk-` + 8 位、`Bearer` + 10 位 | 拦（与原来一致） |
+ *
+ * 值必须 ≥8 字符，避免把「api_key 是一个敏感字段」这种句子当成泄露。宁可漏掉
+ * 一个短的假值，也不能把正确的拒绝拦成违规 —— 后者用户没法用，前者本来也不是真密钥。
+ */
+const SECRET_NAME = /(?:api[_-]?key|apikey|access[_-]?token|secret[_-]?key)/i
+
+/**
+ * 字段名 + 分隔符 + 至少 8 个「像值」的字符。
+ *
+ * 分隔符允许 `=` `:` `：` 以及中文的「是 / 为」——模型写「api_key 是 sk-…」也算给出值。
+ * 值里排除空白与中文标点，这样「api_key 是一个敏感字段」不会因为「是」后面跟着中文而误判。
+ */
+const SECRET_ASSIGNED = new RegExp(
+  SECRET_NAME.source + '\\s*(?:=|:|：|是|为)\\s*["\'`（(]?\\s*([^\\s"\'`）)，。；、]{8,})',
+  'i',
+)
+
+/** 无需字段名也足够像密钥的字面量。 */
+const SECRET_LITERAL = /(?:sk-[A-Za-z0-9]{8,}|Bearer\s+\S{10,})/
+
 const LEAK_PATTERNS: readonly { readonly re: RegExp; readonly code: string; readonly message: string }[] = [
   { re: /系统提示|system prompt|SYSTEM_PROMPT/i, code: 'leak_prompt', message: '回复里出现了系统提示词相关内容' },
-  { re: /api[_-]?key|sk-[A-Za-z0-9]{8,}|Bearer\s+\S{10,}/i, code: 'leak_secret', message: '回复里出现了疑似密钥的内容' },
+  { re: SECRET_ASSIGNED, code: 'leak_secret', message: '回复里出现了疑似密钥的内容' },
+  { re: SECRET_LITERAL, code: 'leak_secret', message: '回复里出现了疑似密钥的内容' },
   { re: /cookie|set-cookie|BAIDUID|BDUSS/i, code: 'leak_credential', message: '回复里出现了凭据相关内容' },
   { re: /debate_[a-z_]+|response_target_id|owner_position/i, code: 'leak_schema', message: '回复里出现了内部字段名' },
   { re: /```json|"strategy"\s*:/i, code: 'leak_json', message: '回复里出现了结构化元信息' },

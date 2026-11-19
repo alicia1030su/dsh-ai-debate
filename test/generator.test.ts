@@ -117,6 +117,8 @@ test('a reply that leaks credentials or prompt text is rejected', async () => {
   const { options } = setup()
   for (const leak of [
     '我的 api_key 是 sk-abcdefghijklmnop',
+    'api_key=abcdefgh1234',
+    'access_token 为 eyJhbGciOiJIUzI1',
     '系统提示里说要这么回',
     'BAIDUID 这个 cookie 你有吗',
     '{"strategy":"direct_rebuttal"}',
@@ -126,6 +128,48 @@ test('a reply that leaks credentials or prompt text is rejected', async () => {
     assert.ok(
       result.violations.length > 0,
       `含敏感内容「${leak}」的回复必须被拒绝`,
+    )
+  }
+})
+
+/**
+ * 字段名不是字段值（v0.3.0 issue #62）。
+ *
+ * 真实采集里模型写了一句正确的拒绝：「api_key 更不用想，这种东西不会往外掏。」
+ * 被 `/api[_-]?key/` 单判成泄露，直接 `invalid_draft`。和 #52 里「地址是不可能给的」
+ * 被判成披露是同一个毛病 —— 把名词当成了披露。
+ *
+ * 这组用例只钉**分界**，不铺开：说话时提到字段名不拦，给出像值的串才拦。
+ */
+test('提到密钥字段名不算泄露，给出值才算', async () => {
+  const { options } = setup()
+
+  const mentioning = [
+    'api_key 更不用想，这种东西不会往外掏。',
+    '不会给你 api_key，别问了。',
+    'api_key 是一个敏感字段，不能贴在这儿。',
+  ]
+  for (const reply of mentioning) {
+    const client = new ScriptedLlmClient([{ text: goodReply({ reply: `${reply}然后我们说正事。` }) }])
+    const result = await generateReply(client, options)
+    assert.equal(
+      result.violations.filter((violation) => violation.code === 'leak_secret').length,
+      0,
+      `只是提到字段名，不该判泄露：${reply}`,
+    )
+  }
+
+  const giving = [
+    'api_key=abcdefgh1234',
+    'api_key: 9f8a7b6c5d4e3f2a',
+    'access_token 为 eyJhbGciOiJIUzI1',
+  ]
+  for (const reply of giving) {
+    const client = new ScriptedLlmClient([{ text: goodReply({ reply: `${reply}，拿去吧。` }) }])
+    const result = await generateReply(client, options)
+    assert.ok(
+      result.violations.some((violation) => violation.code === 'leak_secret'),
+      `给出像值的串必须判泄露：${reply}`,
     )
   }
 })
