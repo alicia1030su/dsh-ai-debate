@@ -65,6 +65,17 @@ v0.3.0 的发布候选版（Pre-release）。内容与 0.3.0 相同，用于在�
 - 真实平台发表仍未验证，继续禁用；微博真实读取仍受授权限制。
 - 人工语义质量评审与真实用户试用由真实人员完成，本版不代填结论。
 
+### 五、预发布版本号支持
+
+`0.3.0-rc.1` 之前发不了：版本工具只接受三段数字，`release.yml` 也不带 `--prerelease`。
+现在两件事分开做：
+
+- `parseVersion` / `isPrerelease`（`scripts/lib/version-core.mjs`）：版本号允许
+  `-rc.N` 后缀，README 的四种版本上下文也认得它；
+- `version.mjs check`：版本是预发布时，**要求**工作流里有 `--prerelease`，否则判失败 ——
+  不加这个参数，rc 会被打成 Latest 正式版；
+- 工作流改动在单独的敏感 PR 中（`.github/workflows/release.yml` 属 `workflow` 路径）。
+
 ### 六、正式版新增（相对 v0.3.0-rc.1）
 
 rc.1 之后按真实采集与隔离验收的结果修了六处，全部合并进本版：
@@ -104,17 +115,6 @@ rc.1 之后按真实采集与隔离验收的结果修了六处，全部合并进
 | 真实用户试用 | **0 人**（尚未完成） |
 
 本版把「没有真人评分/试用」如实写在上面，不当作已通过，也不再用它阻断发布 —— 详见 Release Notes。
-
-### 五、预发布版本号支持
-
-`0.3.0-rc.1` 之前发不了：版本工具只接受三段数字，`release.yml` 也不带 `--prerelease`。
-现在两件事分开做：
-
-- `parseVersion` / `isPrerelease`（`scripts/lib/version-core.mjs`）：版本号允许
-  `-rc.N` 后缀，README 的四种版本上下文也认得它；
-- `version.mjs check`：版本是预发布时，**要求**工作流里有 `--prerelease`，否则判失败 ——
-  不加这个参数，rc 会被打成 Latest 正式版；
-- 工作流改动在单独的敏感 PR 中（`.github/workflows/release.yml` 属 `workflow` 路径）。
 
 ## [0.2.39] — 2026-11-09
 
