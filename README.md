@@ -329,48 +329,50 @@ POST https://open.weibo.com/cli/api/oauth/token
 
 ## 安装
 
-> **先确认要装哪一条渠道。** 本项目的稳定版与候选版是两条线：
+> **先确认要装哪一条渠道。** 本项目的正式版与预发布版是两条线：
 >
 > | 渠道 | 版本 | GitHub 标记 | 给谁 |
 > | --- | --- | --- | --- |
-> | **稳定版** | `v0.2.39` | Latest 正式版 | 普通用户、日常使用 |
-> | 候选版 | `v0.3.0-rc.1` | **Pre-release**（不是 Latest） | 只给参与本轮验收的测试者 |
+> | **正式版（推荐）** | `v0.3.0` | **Latest 正式版** | 普通用户、日常使用 |
+> | 上一个正式版 | `v0.2.39` | 普通 Release（已不是 Latest） | 想留在旧版的人 |
+> | 预发布版 | `v0.3.0-rc.1` | Pre-release（保留作对照） | 一般不装 |
 >
-> 候选版包含归档完整性、预发布工作流、授权绑定等改动，但**人工语义评分与真实用户试用
-> 仍是 0 人**。除非你就是这一轮的测试者，否则请装稳定版。
+> `v0.3.0` 的**功能**已经过真实宿主模型采集与隔离桌面验收；但**人工语义评分与真实用户
+> 试用仍是 0 人**，这一项写在 Release Notes 的「真实验证状态」里，没有算作通过。
 
-### 方式一：GitHub 直接安装稳定版（推荐）
+### 方式一：GitHub 直接安装正式版（推荐）
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.39
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.3.0
 ```
 
 仓库里已包含构建好的 `lib/`，安装后**不需要再编译**。
 
-稳定版发布页：<https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.39>
+正式版发布页：<https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.3.0>
 
-### 方式二：稳定版 .tgz
+### 方式二：正式版 .tgz
 
-从[稳定版发布页](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.2.39)下载
-`dsh-ai-debate-0.2.39.tgz`：
-
-```bash
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.2.39.tgz
-```
-
-### 方式三：候选版 `v0.3.0-rc.1`（仅测试者）
-
-**这不是稳定版。** 它被标记为 GitHub Pre-release，不会取代 Latest，也没有经过人工质量验收。
+从[正式版发布页](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.3.0)下载
+`dsh-ai-debate-0.3.0.tgz`：
 
 ```bash
-dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.3.0-rc.1
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.3.0.tgz
 ```
 
-也可以从[候选版发布页](https://github.com/alicia1030su/dsh-ai-debate/releases/tag/v0.3.0-rc.1)
-下载 `dsh-ai-debate-0.3.0-rc.1.tgz`。
+发布页同时附上 `dsh-ai-debate-source-0.3.0.zip`（含 `pnpm-lock.yaml` 与编译好的
+`lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
+文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
+Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
+头里仍带时间戳字段，这一点本版没有处理。核对时请比内容，不要只比哈希。
 
-试用反馈请按 `docs/v0.3.0-tester-package/` 里的反馈表填写；那里也写清了这一批
-**还没有**任何人工评分。
+### 方式三：上一个正式版 `v0.2.39`
+
+功能上没有 `v0.3.0` 那六处修复（住址判定、统计口径、发布链路、密钥字段名、人工确认时序、
+README 分渠道）。除非你有理由留在旧版，否则装 `v0.3.0`。
+
+```bash
+dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#v0.2.39
+```
 
 ### 方式四：从源码自行构建
 
@@ -378,19 +380,8 @@ dsh plugin --profile <你的 profile 名> add github:alicia1030su/dsh-ai-debate#
 
 ```bash
 node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-<版本>.tgz
+dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.3.0.tgz
 ```
-
-```bash
-node scripts/pack.mjs
-dsh plugin --profile <你的 profile 名> add ./dsh-ai-debate-0.3.0-rc.1.tgz
-```
-
-候选版发布页同时附上 `dsh-ai-debate-source-0.3.0-rc.1.zip`（含 `pnpm-lock.yaml` 与编译好的
-`lib/`）。把它解压后跑 `pnpm install --frozen-lockfile && node scripts/pack.mjs`，
-文件的**内容**应当与发布产物一致：v0.2.24 起打包会统一文本行尾，所以 Windows 与
-Linux 打出来的包不再因为 CRLF/LF 而不同。但 `.tgz` 的字节不保证完全相同——gzip
-头里仍带时间戳字段，这一点本版没有处理。核对时请比内容，不要只比哈希。
 
 ### 方式五：本地目录安装（开发者）
 
